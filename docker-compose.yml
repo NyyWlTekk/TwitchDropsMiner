@@ -1,0 +1,15 @@
+services:
+  twitch-drops-miner:
+    build: .
+    container_name: twitch-drops-miner
+    image: twitch-drops-miner:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount data directory for persistent storage
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      # Set timezone (optional, defaults to UTC)
+      - TZ=Australia/Sydney
+    restart: unless-stopped

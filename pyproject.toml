@@ -1,0 +1,92 @@
+[project]
+name = "twitch-drops-miner"
+version = "1.2.4"  # Update from src/version.py as needed
+description = "Automatically mine Twitch drops without downloading stream data"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.9",
+    "truststore",
+    "python-dateutil",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-socketio>=5.10.0",
+    "yarl>=1.9.2",
+    "pydantic>=2.7.0",
+    "coverage>=7.3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "coverage",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+# Set the maximum line length to 100 (more reasonable than 88)
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Enable specific rule sets
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+]
+
+# Ignore specific rules
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "UP036", # outdated version block (we want to keep Python version check)
+]
+
+[tool.ruff.lint.isort]
+force-single-line = false
+lines-after-imports = 2
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false  # Too noisy with JSON responses
+warn_unused_configs = true
+disallow_untyped_defs = false  # Start lenient, can tighten later
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = false  # We use many type: ignore comments
+no_implicit_reexport = true
+strict_equality = true
+show_error_codes = true
+
+# Per-module options
+[[tool.mypy.overrides]]
+module = [
+    "aiohttp.*",
+    "socketio.*",
+    "truststore.*",
+    "dateutil.*",
+    "yarl.*",
+    "PIL.*",
+]
+ignore_missing_imports = true
+
+# GraphQL responses are dynamically typed - allow more flexibility
+[[tool.mypy.overrides]]
+module = [
+    "src.api.gql_client",
+    "src.models.*",
+    "src.services.*",
+]
+warn_return_any = false
+disable_error_code = ["call-overload", "assignment"]

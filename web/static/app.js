@@ -1,8 +1,6 @@
 // Twitch Drops Miner Web Client
 // Socket.IO and API communication
 
-let isSaving = false;
-
 // Global state
 const state = {
     connected: false,
@@ -155,6 +153,13 @@ socket.on('initial_state', (data) => {
     if (data.wanted_items) {
         renderWantedItems(data.wanted_items);
     }
+    const autosortEl = document.getElementById('auto-sort-by-end');
+    if (autosortEl) {
+        autosortEl.checked = data.settings.auto_sort_by_end || false;
+        if (autosortEl.checked) {
+            sortGamesByEnding();
+        }
+    }
 });
 
 socket.on('status_update', (data) => {
@@ -247,6 +252,12 @@ socket.on('login_clear', (data) => {
 
 socket.on('settings_updated', (data) => {
     updateSettingsUI(data);
+    
+    // Pokud server potvrdil, že auto-sort je zapnutý, okamžitě seřadíme
+    if (data.auto_sort_by_end) {
+        console.log('Nastavení aktualizováno: Spouštím auto-sort...');
+        sortGamesByEnding(); 
+    }
 });
 
 socket.on('games_available', (data) => {
@@ -1050,6 +1061,7 @@ function updateLoginStatus(data) {
 function updateSettingsUI(settings) {
     state.settings = settings;
     document.getElementById('dark-mode').checked = settings.dark_mode || false;
+    document.getElementById('auto-sort-by-end').checked = settings.auto_sort_by_end || false;
     document.getElementById('connection-quality').value = settings.connection_quality || 1;
     document.getElementById('minimum-refresh-interval').value = settings.minimum_refresh_interval_minutes || 30;
 
@@ -1076,6 +1088,11 @@ function updateSettingsUI(settings) {
         document.body.classList.add('dark-mode');
     } else {
         document.body.classList.remove('dark-mode');
+    }
+    
+	const autoSortEl = document.getElementById('auto-sort-by-end');
+    if (autoSortEl) {
+        autoSortEl.checked = settings.auto_sort_by_end || false;
     }
 
     // Update available games if provided in settings
@@ -1111,12 +1128,6 @@ function updateSettingsUI(settings) {
         if (document.getElementById('mining-benefit-emote')) document.getElementById('mining-benefit-emote').checked = settings.mining_benefits.EMOTE;
         if (document.getElementById('mining-benefit-unknown')) document.getElementById('mining-benefit-unknown').checked = settings.mining_benefits.UNKNOWN;
     }
-    
-	// Restore auto-sort setting (bezpečně)
-	const autoSortCb = document.getElementById('auto-sort-by-end');
-	if (autoSortCb && !isSaving) { // <-- Tady je ta důležitá změna
-		autoSortCb.checked = settings.auto_sort_by_end || false;
-	}
 
     // Update games to watch lists
     renderGamesToWatch();
@@ -1531,7 +1542,6 @@ async function verifyProxy() {
 }
 
 async function saveSettings() {
-    isSaving = true;
 	console.log("saveSettings triggered!");
     const settings = {
         dark_mode: document.getElementById('dark-mode').checked,
@@ -1559,8 +1569,6 @@ async function saveSettings() {
         console.log('Settings saved automatically');
     } catch (error) {
         console.error('Failed to save settings:', error);
-	} finally {
-        isSaving = false; // Odemknout po dokončení
     }
 }
 
@@ -1981,6 +1989,24 @@ document.addEventListener('DOMContentLoaded', () => {
         // Then save settings
         saveSettings();
     });
+    
+    // Auto-sort checkbox management
+	const autoSortEl = document.getElementById('auto-sort-by-end');
+    if (autoSortEl) {
+        autoSortEl.addEventListener('change', (e) => {
+            // Kontrola, zda to udělal uživatel (isTrusted = true)
+            // Pokud to nastavil kód přes updateSettingsUI, isTrusted bude false a nic se nepošle
+            if (e.isTrusted) {
+                saveSettings(); // Uloží stav do API
+                
+                // Pokud uživatel zapnul sort, spustíme funkci
+                if (e.target.checked) {
+                    sortGamesByEnding();
+                }
+            }
+        });
+    }
+    
     document.getElementById('language').addEventListener('change', saveSettings);
     document.getElementById('connection-quality').addEventListener('change', saveSettings);
     document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);
@@ -2024,16 +2050,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('mining-benefit-badge').addEventListener('change', saveSettings);
     document.getElementById('mining-benefit-emote').addEventListener('change', saveSettings);
     document.getElementById('mining-benefit-unknown').addEventListener('change', saveSettings);
-    
-    // Auto-sort checkbox management
-	document.getElementById('auto-sort-by-end').addEventListener('change', (e) => {
-		saveSettings(); // Uloží stav do API
-		
-		// Pokud uživatel zaškrtnul "zapnout", hned seřadíme
-		if (e.target.checked) {
-			sortGamesByEnding();
-		}
-	});
 
     // Inventory game search dropdown
     const gameSearchInput = document.getElementById('inventory-game-search');
@@ -2278,7 +2294,7 @@ function applyAutoSortIfNeeded() {
     const autoSortCb = document.getElementById('auto-sort-by-end');
     
     // Check if the checkbox exists, is checked, and no saving is in progress
-    if (autoSortCb && autoSortCb.checked && !isSaving) {
+    if (autoSortCb && autoSortCb.checked) {
         console.log('Auto-sort enabled: Sorting games by end time');
         sortGamesByEnding();
     }

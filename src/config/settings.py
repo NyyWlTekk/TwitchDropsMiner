@@ -23,6 +23,7 @@ class InventoryFilters(TypedDict):
 
 
 default_settings = {
+	"auto_sort_by_end": False,
     "connection_quality": 1,
     "dark_mode": False,
     "games_to_watch": [],
@@ -52,6 +53,7 @@ default_settings = {
 
 @dataclass
 class Settings:
+    auto_sort_by_end: bool
     connection_quality: int
     dark_mode: bool
     games_to_watch: list[str]

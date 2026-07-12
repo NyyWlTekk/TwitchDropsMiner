@@ -41,11 +41,8 @@ class SettingsManager:
         self._available_games: list[str] = []
 
     def get_settings(self) -> dict[str, Any]:
-        """Get current settings for display.
+        """Get current settings for display."""
 
-        Returns:
-            Dictionary containing all user-configurable settings
-        """
         settings = vars(self._settings).copy()
         return settings
 
@@ -78,6 +75,9 @@ class SettingsManager:
             "dark_mode", settings_data.get("dark_mode")
         )
         should_trigger_update |= self.check_and_update_setting(
+            "auto_sort_by_end", settings_data.get("auto_sort_by_end")
+        )
+        should_trigger_update |= self.check_and_update_setting(
             "language", settings_data.get("language"), False, self._set_language
         )
         should_trigger_update |= self.check_and_update_setting(
@@ -100,9 +100,6 @@ class SettingsManager:
         )
         should_trigger_update |= self.check_and_update_setting(
             "mining_benefits", settings_data.get("mining_benefits"), True
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "auto_sort_by_end", settings_data.get("auto_sort_by_end")
         )
 
         self._settings.save()

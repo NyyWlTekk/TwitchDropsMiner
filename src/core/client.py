@@ -245,6 +245,41 @@ class Twitch:
                                 await drop.claim()
                 # figure out which games we want based on games_to_watch whitelist
                 self.wanted_games.clear()
+
+                # --- AUTONOMOUS BACKEND AUTO-SORT START ---
+                if getattr(self.settings, "auto_sort_by_end", False) and self.inventory:
+                    now_utc = datetime.now(timezone.utc)
+
+                    def get_game_sort_key(game_name: str):
+                        # Filter campaigns belonging to this specific game safely
+                        game_campaigns = []
+                        for c in self.inventory:
+                            c_game = getattr(c, "game", "")
+                            c_game_name = c_game.name if hasattr(c_game, "name") else str(c_game)
+                            if c_game_name == game_name:
+                                game_campaigns.append(c)
+
+                        active_c = [c for c in game_campaigns if c.active]
+                        upcoming_c = [c for c in game_campaigns if c.upcoming]
+                        expired_c = [c for c in game_campaigns if c.expired]
+
+                        if active_c:
+                            # Active campaigns: ending soonest comes first
+                            return (0, min(c.ends_at for c in active_c))
+                        elif upcoming_c:
+                            # Upcoming campaigns: starting soonest comes next
+                            return (1, min(c.starts_at for c in upcoming_c))
+                        elif expired_c:
+                            # Expired campaigns: push to the bottom, sorted by latest end time
+                            return (2, max(c.ends_at for c in expired_c))
+                        else:
+                            # No campaigns found for this game at all
+                            return (3, now_utc)
+
+                    # Sort the main settings list in-place
+                    self.settings.games_to_watch.sort(key=get_game_sort_key)
+                # --- AUTONOMOUS BACKEND AUTO-SORT END ---
+
                 games_to_watch: list[str] = self.settings.games_to_watch
                 next_hour: datetime = datetime.now(timezone.utc) + timedelta(hours=1)
                 logger.info("games_to_watch: %s", games_to_watch)

@@ -143,6 +143,7 @@ socket.on('initial_state', (data) => {
     if (data.settings) updateSettingsUI(data.settings);
     if (data.login) updateLoginStatus(data.login);
     if (data.manual_mode) updateManualModeUI(data.manual_mode);
+    
     // Restore current drop progress if it exists
     if (data.current_drop) {
         updateDropProgress(data.current_drop);
@@ -153,13 +154,13 @@ socket.on('initial_state', (data) => {
     if (data.wanted_items) {
         renderWantedItems(data.wanted_items);
     }
-    const autosortEl = document.getElementById('auto-sort-by-end');
-    if (autosortEl) {
-        autosortEl.checked = data.settings.auto_sort_by_end || false;
-        if (autosortEl.checked) {
-            sortGamesByEnding();
-        }
-    }
+
+	// Update the checkbox UI from server settings and apply auto-sort if active
+	const autosortEl = document.getElementById('auto-sort-by-end');
+	if (autosortEl && data.settings) {
+		autosortEl.checked = data.settings.auto_sort_by_end || false;
+		applyAutoSortIfNeeded();
+	}
 });
 
 socket.on('status_update', (data) => {
@@ -226,6 +227,9 @@ socket.on('inventory_batch_update', (data) => {
         state.campaigns[camp.id] = camp;
     });
     renderInventory();
+    
+    // Apply auto-sort after new campaigns are loaded
+    applyAutoSortIfNeeded(); 
 });
 
 socket.on('drop_update', (data) => {
@@ -253,7 +257,7 @@ socket.on('login_clear', (data) => {
 socket.on('settings_updated', (data) => {
     updateSettingsUI(data);
     
-    // Pokud server potvrdil, že auto-sort je zapnutý, okamžitě seřadíme
+    // If the server confirmed auto-sort is enabled, trigger sorting immediately
     if (data.auto_sort_by_end) {
         console.log('Nastavení aktualizováno: Spouštím auto-sort...');
         sortGamesByEnding(); 
@@ -1089,11 +1093,6 @@ function updateSettingsUI(settings) {
     } else {
         document.body.classList.remove('dark-mode');
     }
-    
-	const autoSortEl = document.getElementById('auto-sort-by-end');
-    if (autoSortEl) {
-        autoSortEl.checked = settings.auto_sort_by_end || false;
-    }
 
     // Update available games if provided in settings
     if (settings.games_available) {
@@ -1128,6 +1127,7 @@ function updateSettingsUI(settings) {
         if (document.getElementById('mining-benefit-emote')) document.getElementById('mining-benefit-emote').checked = settings.mining_benefits.EMOTE;
         if (document.getElementById('mining-benefit-unknown')) document.getElementById('mining-benefit-unknown').checked = settings.mining_benefits.UNKNOWN;
     }
+
 
     // Update games to watch lists
     renderGamesToWatch();
@@ -1181,38 +1181,21 @@ socket.on('games_available', (data) => {
     renderGamesToWatch();
 });
 
-function renderAvailableGames(games, filterText) {
-    const container = document.getElementById('available-games-list');
-    if (!container) return;
+function renderGamesToWatch() {
+    // Only get data, do not mutate state here!
+    let selectedGames = state.settings.games_to_watch || [];
+    const filterText = document.getElementById('games-filter')?.value.toLowerCase() || '';
 
-    const t = state.translations;
-    container.innerHTML = '';
+    // Render left side
+    renderSelectedGames(selectedGames);
 
-    if (games.length === 0) {
-        if (filterText) {
-            const emptyMsg = t.gui?.settings?.no_games_match || 'No games match your search.';
-            const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
-            container.replaceChildren(makeElement('p', { class: 'empty-message' }, `${emptyMsg}${addHint}`));
-        } else {
-            const emptyMsg = t.gui?.settings?.all_games_selected || 'All games are selected or no games available.';
-            container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
-        }
-        return;
-    }
+    // Render right side
+    const unselectedGames = Array.from(availableGames)
+        .filter(game => !selectedGames.includes(game))
+        .filter(game => game.toLowerCase().includes(filterText))
+        .sort();
 
-    games.forEach(game => {
-        const label = document.createElement('label');
-        label.className = 'game-checkbox';
-        label.replaceChildren(
-            makeElement('input', { type: 'checkbox', value: game }),
-            makeElement('span', {}, game),
-        );
-
-        const checkbox = label.querySelector('input[type="checkbox"]');
-        checkbox.addEventListener('change', (e) => toggleGameWatch(game, e.target.checked));
-
-        container.appendChild(label);
-    });
+    renderAvailableGames(unselectedGames, filterText);
 }
 
 function renderSelectedGames(games) {
@@ -1254,35 +1237,38 @@ function renderSelectedGames(games) {
     });
 }
 
-function renderGamesToWatch() {
-    let selectedGames = state.settings.games_to_watch || [];
-    const filterText = document.getElementById('games-filter')?.value.toLowerCase() || '';
+function renderAvailableGames(games, filterText) {
+    const container = document.getElementById('available-games-list');
+    if (!container) return;
 
-    // Check if auto-sort is enabled
-    const autoSortCb = document.getElementById('auto-sort-by-end');
-    if (autoSortCb && autoSortCb.checked) {
-        const sorted = getSortedGamesArray(selectedGames);
-        
-        // If the order actually changed, update the global state and save
-        if (JSON.stringify(selectedGames) !== JSON.stringify(sorted)) {
-            state.settings.games_to_watch = sorted;
-            saveSettings();
-            console.log("Auto-sort applied and settings saved.");
+    const t = state.translations;
+    container.innerHTML = '';
+
+    if (games.length === 0) {
+        if (filterText) {
+            const emptyMsg = t.gui?.settings?.no_games_match || 'No games match your search.';
+            const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
+            container.replaceChildren(makeElement('p', { class: 'empty-message' }, `${emptyMsg}${addHint}`));
+        } else {
+            const emptyMsg = t.gui?.settings?.all_games_selected || 'All games are selected or no games available.';
+            container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
         }
-        
-        selectedGames = sorted;
+        return;
     }
 
-    // Render left side
-    renderSelectedGames(selectedGames);
+    games.forEach(game => {
+        const label = document.createElement('label');
+        label.className = 'game-checkbox';
+        label.replaceChildren(
+            makeElement('input', { type: 'checkbox', value: game }),
+            makeElement('span', {}, game),
+        );
 
-    // Render right side
-    const unselectedGames = Array.from(availableGames)
-        .filter(game => !selectedGames.includes(game))
-        .filter(game => game.toLowerCase().includes(filterText))
-        .sort();
+        const checkbox = label.querySelector('input[type="checkbox"]');
+        checkbox.addEventListener('change', (e) => toggleGameWatch(game, e.target.checked));
 
-    renderAvailableGames(unselectedGames, filterText);
+        container.appendChild(label);
+    });
 }
 
 // Drag and drop handlers
@@ -1430,6 +1416,66 @@ function flashTitle() {
     }, 1000);
 }
 
+// ==================== Sorting & Auto-sort ====================
+
+function sortGamesByEnding() {
+    if (!state.settings || !Array.isArray(state.settings.games_to_watch)) return;
+
+    const originalOrder = JSON.stringify(state.settings.games_to_watch);
+    
+    // Apply smart sorting function
+    state.settings.games_to_watch = getSortedGamesArray(state.settings.games_to_watch);
+    const newOrder = JSON.stringify(state.settings.games_to_watch);
+
+    // If order changed, force render and save
+    if (originalOrder !== newOrder) {
+        renderGamesToWatch();
+        renderChannels(); // Channels rely on watch priority, they must update too
+        saveSettings();
+        console.log("Game list sorted by ending date and changes saved.");
+    }
+}
+
+// Pure function - only calculates, does not mutate DOM or Trigger APIs
+function getSortedGamesArray(games) {
+    // FALLBACK: If campaign data is missing, return original array
+    if (!state.campaigns || Object.keys(state.campaigns).length === 0) {
+        console.warn("Sorting skipped: Campaign data not available yet.");
+        return games; 
+    }
+
+    const campaignsArray = Object.values(state.campaigns)
+        .filter(campaign => campaign.expired === false);
+
+    const gameEndDates = {};
+    campaignsArray.forEach(campaign => {
+        if (campaign.ends_at) {
+            const endDate = new Date(campaign.ends_at).getTime();
+            if (!gameEndDates[campaign.game_name] || endDate < gameEndDates[campaign.game_name]) {
+                gameEndDates[campaign.game_name] = endDate;
+            }
+        }
+    });
+
+    // Sort array
+    return [...games].sort((a, b) => {
+        const dateA = gameEndDates[a] || Infinity;
+        const dateB = gameEndDates[b] || Infinity;
+        
+        if (dateA === Infinity && dateB === Infinity) return 0;
+        return dateA - dateB;
+    });
+}
+
+function applyAutoSortIfNeeded() {
+    const autoSortCb = document.getElementById('auto-sort-by-end');
+    // Check if the checkbox exists and is checked
+    if (autoSortCb && autoSortCb.checked) {
+        console.log('Auto-sort enabled: Triggering sort automatically.');
+        sortGamesByEnding();
+    }
+}
+
 // ==================== API Functions ====================
 
 async function selectChannel(channelId) {
@@ -1542,7 +1588,6 @@ async function verifyProxy() {
 }
 
 async function saveSettings() {
-	console.log("saveSettings triggered!");
     const settings = {
         dark_mode: document.getElementById('dark-mode').checked,
         language: document.getElementById('language').value,
@@ -1550,7 +1595,7 @@ async function saveSettings() {
         minimum_refresh_interval_minutes: parseInt(document.getElementById('minimum-refresh-interval').value),
         proxy: state.settings.proxy || '',
         games_to_watch: state.settings.games_to_watch || [],
-        inventory_filters: getInventoryFilters(),        
+        inventory_filters: getInventoryFilters(),
         auto_sort_by_end: document.getElementById('auto-sort-by-end')?.checked || false, // autosort by end checker
         mining_benefits: {
             "DIRECT_ENTITLEMENT": document.getElementById('mining-benefit-item')?.checked,
@@ -1990,22 +2035,19 @@ document.addEventListener('DOMContentLoaded', () => {
         saveSettings();
     });
     
-    // Auto-sort checkbox management
+	// Auto-sort checkbox management
 	const autoSortEl = document.getElementById('auto-sort-by-end');
-    if (autoSortEl) {
-        autoSortEl.addEventListener('change', (e) => {
-            // Kontrola, zda to udělal uživatel (isTrusted = true)
-            // Pokud to nastavil kód přes updateSettingsUI, isTrusted bude false a nic se nepošle
-            if (e.isTrusted) {
-                saveSettings(); // Uloží stav do API
-                
-                // Pokud uživatel zapnul sort, spustíme funkci
-                if (e.target.checked) {
-                    sortGamesByEnding();
-                }
-            }
-        });
-    }
+	if (autoSortEl) {
+		autoSortEl.addEventListener('change', (e) => {
+			// Save the updated auto-sort state to the API
+			saveSettings();
+			
+			// If the user enabled auto-sort, trigger the sorting function immediately
+			if (e.target.checked) {
+				sortGamesByEnding();
+			}
+		});
+	}
     
     document.getElementById('language').addEventListener('change', saveSettings);
     document.getElementById('connection-quality').addEventListener('change', saveSettings);
@@ -2050,6 +2092,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('mining-benefit-badge').addEventListener('change', saveSettings);
     document.getElementById('mining-benefit-emote').addEventListener('change', saveSettings);
     document.getElementById('mining-benefit-unknown').addEventListener('change', saveSettings);
+
 
     // Inventory game search dropdown
     const gameSearchInput = document.getElementById('inventory-game-search');
@@ -2237,65 +2280,5 @@ function appendTrustedHelpContent(parent, text) {
 
     if (lastIndex < source.length) {
         parent.appendChild(document.createTextNode(source.slice(lastIndex)));
-    }
-}
-
-// Sort by ending (filters out expired campaigns)
-function sortGamesByEnding() {
-    if (!state.settings || !Array.isArray(state.settings.games_to_watch)) return;
-
-    const originalOrder = JSON.stringify(state.settings.games_to_watch);
-    
-    // Použijeme naši novou chytrou funkci
-    state.settings.games_to_watch = getSortedGamesArray(state.settings.games_to_watch);
-
-    const newOrder = JSON.stringify(state.settings.games_to_watch);
-
-    // Pokud se pořadí změnilo, vynutíme render a save
-    if (originalOrder !== newOrder) {
-        renderGamesToWatch();
-        saveSettings();
-        console.log("Game list sorted by ending date and changes saved.");
-    }
-}
-
-// Tato funkce je "čistá" - pouze počítá, nic nemění v DOMu
-function getSortedGamesArray(games) {
-    // POJISTKA: Pokud nemáme data o kampaních, prostě vrať seznam tak, jak je
-    if (!state.campaigns || Object.keys(state.campaigns).length === 0) {
-        console.warn("sortData: Data kampaní nejsou k dispozici, vracím původní pořadí.");
-        return games; 
-    }
-
-    const campaignsArray = Object.values(state.campaigns)
-        .filter(campaign => campaign.expired === false);
-
-    const gameEndDates = {};
-    campaignsArray.forEach(campaign => {
-        if (campaign.ends_at) {
-            const endDate = new Date(campaign.ends_at).getTime();
-            if (!gameEndDates[campaign.game_name] || endDate < gameEndDates[campaign.game_name]) {
-                gameEndDates[campaign.game_name] = endDate;
-            }
-        }
-    });
-
-    // Seřadíme
-    return [...games].sort((a, b) => {
-        const dateA = gameEndDates[a] || Infinity;
-        const dateB = gameEndDates[b] || Infinity;
-        
-        if (dateA === Infinity && dateB === Infinity) return 0;
-        return dateA - dateB;
-    });
-}
-
-function applyAutoSortIfNeeded() {
-    const autoSortCb = document.getElementById('auto-sort-by-end');
-    
-    // Check if the checkbox exists, is checked, and no saving is in progress
-    if (autoSortCb && autoSortCb.checked) {
-        console.log('Auto-sort enabled: Sorting games by end time');
-        sortGamesByEnding();
     }
 }

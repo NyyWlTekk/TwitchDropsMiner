@@ -236,6 +236,7 @@
                     </div>
                 </section>
 
+				<!-- Games to Watch Section -->
                 <section class="settings-section">
                     <h2 id="settings-games-header">Games to Watch</h2>
                     <p id="settings-games-help" class="help-text">Select games to watch. Order matters - drag to
@@ -254,7 +255,7 @@
                     </div>
 
                     <div class="games-container">
-						<div class="available-games">
+                        <div class="available-games">
                             <h3>Available Games</h3>
                             <div id="available-games-list" class="checkbox-list"></div>
                         </div>
@@ -263,14 +264,11 @@
                             <h3>Selected Games (drag to reorder)</h3>
                             <div id="selected-games-list" class="sortable-list"></div>
                         </div>
-                        
                     </div>
-                </section>
 
-                <section class="settings-section">
-                    <h2 id="settings-actions-header">Actions</h2>
-                    <div class="settings-actions">
-                        <button id="reload-btn" class="action-button">Reload</button>
+                    <!-- Integrated reload action directly inside the games panel -->
+                    <div class="games-integrated-actions" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color, #333);">
+                        <button id="reload-btn" class="action-button full-width">⟳ Reload</button>
                     </div>
                 </section>
             </div>

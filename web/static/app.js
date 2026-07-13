@@ -1876,7 +1876,7 @@ function applyTranslations(t) {
 				setTimeout(() => { 
 					reloadBtn.disabled = false; 
 					reloadBtn.textContent = originalText;
-				}, 10000);
+				}, 30000);
 			});
 		}
         // Re-render games to watch with translated empty messages

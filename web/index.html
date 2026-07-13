@@ -189,6 +189,9 @@
                         <input type="checkbox" id="auto-sort-by-end"> Auto-sort by event ending time
                     </label>
                     <label>
+                        <input type="checkbox" id="auto-add-all-games"> Auto-add all new events
+                    </label>
+                    <label>
                         Connection Quality:
                         <input type="number" id="connection-quality" min="1" max="6" value="1">
                     </label>
@@ -246,20 +249,21 @@
                             <button id="select-all-btn" class="small-btn">Select All</button>
                             <button id="deselect-all-btn" class="small-btn">Deselect All</button>
                             <button id="add-game-btn" class="small-btn">Add Game</button>
-                            <button id="sort-by-end-btn" class="small-btn">Sort by end time</button> <!-- Sort by ending -->
+                            <button id="sort-by-end-btn" class="small-btn">Sort by end time</button>
                         </div>
                     </div>
 
                     <div class="games-container">
+						<div class="available-games">
+                            <h3>Available Games</h3>
+                            <div id="available-games-list" class="checkbox-list"></div>
+                        </div>
+                        
                         <div class="selected-games">
                             <h3>Selected Games (drag to reorder)</h3>
                             <div id="selected-games-list" class="sortable-list"></div>
                         </div>
-
-                        <div class="available-games">
-                            <h3>Available Games</h3>
-                            <div id="available-games-list" class="checkbox-list"></div>
-                        </div>
+                        
                     </div>
                 </section>
 

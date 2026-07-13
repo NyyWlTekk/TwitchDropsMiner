@@ -1086,24 +1086,30 @@ header h1 {
 }
 
 .action-button {
-    padding: 12px 24px;
-    margin-right: 10px;
-    background: var(--bg-secondary);
+    padding: 10px 20px;
+    background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 14px;
+    font-weight: 500;
     color: var(--text-primary);
+    transition: all 0.2s ease;
 }
 
-.action-button.primary {
-    background: var(--accent-color);
-    color: white;
+.action-button:hover:not(:disabled) {
+    background: var(--bg-secondary);
     border-color: var(--accent-color);
+    color: var(--accent-color);
 }
 
-.action-button:hover {
-    opacity: 0.9;
+.action-button:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.action-button:disabled {
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
 }
 
 /* Help */
@@ -1567,4 +1573,14 @@ header h1 {
 .footer-links a:hover {
     color: var(--text-primary);
     text-decoration: underline;
+}
+
+:disabled {
+    cursor: not-allowed !important;
+    filter: grayscale(1);
+    opacity: 0.5;
+}
+
+.game-checkbox input[type="checkbox"]:disabled + span {
+    color: var(--text-secondary);
 }

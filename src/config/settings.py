@@ -24,9 +24,11 @@ class InventoryFilters(TypedDict):
 
 default_settings = {
     "auto_sort_by_end": False,
+    "auto_add_all_games": False,
     "connection_quality": 1,
     "dark_mode": False,
     "games_to_watch": [],
+    "games_available": [],
     "language": DEFAULT_LANG,
     "inventory_filters": {
         "game_name_search": [],
@@ -54,9 +56,11 @@ default_settings = {
 @dataclass
 class Settings:
     auto_sort_by_end: bool
+    auto_add_all_games: bool
     connection_quality: int
     dark_mode: bool
     games_to_watch: list[str]
+    games_available: list[str]
     language: str
     inventory_filters: InventoryFilters
     minimum_refresh_interval_minutes: int

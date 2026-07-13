@@ -81,6 +81,9 @@ class SettingsManager:
             "auto_sort_by_end", settings_data.get("auto_sort_by_end")
         )
         should_trigger_update |= self.check_and_update_setting(
+            "auto_add_all_games", settings_data.get("auto_add_all_games")
+        )
+        should_trigger_update |= self.check_and_update_setting(
             "language", settings_data.get("language"), False, self._set_language
         )
         should_trigger_update |= self.check_and_update_setting(
@@ -131,12 +134,9 @@ class SettingsManager:
         asyncio.create_task(self._broadcaster.emit("language_changed", {"language": language}))
 
     def set_games(self, games: set[Game]):
-        """Update the list of available games for settings panel.
-
-        Args:
-            games: Set of Game objects discovered from campaigns
-        """
-        # Store and broadcast available games for settings panel
+        """Update the list of available games for settings panel."""
         game_names = sorted([g.name for g in games])
         self._available_games = game_names
+        self._settings.games_available = game_names
+        self._settings.save()
         asyncio.create_task(self._broadcaster.emit("games_available", {"games": game_names}))

@@ -245,9 +245,29 @@ class Twitch:
                                 await drop.claim()
                 # figure out which games we want based on games_to_watch whitelist
                 self.wanted_games.clear()
+                
+                # --- AUTONOMOUS BACKEND AUTO-ADD START ---
+                if getattr(self.settings, "auto_add_all_games", False) and self.inventory:
+                    added_count = 0  # Inicializace počítadla
+                    
+                    for c in self.inventory:
+                        c_game = getattr(c, "game", "")
+                        c_game_name = c_game.name if hasattr(c_game, "name") else str(c_game)
+                        
+                        if c_game_name and c_game_name not in self.settings.games_to_watch:
+                            self.settings.games_to_watch.append(c_game_name)
+                            added_count += 1
+                    
+                    if added_count > 0:
+                        logger.info("Automatically added %d new game(s) to watch list.", added_count)
+                        self.settings.save()
+                        if hasattr(self, "socketio"):
+                            self.socketio.emit("settings_updated", self.settings.__dict__)
+                # --- AUTONOMOUS BACKEND AUTO-ADD END ---
 
                 # --- AUTONOMOUS BACKEND AUTO-SORT START ---
                 if getattr(self.settings, "auto_sort_by_end", False) and self.inventory:
+                    logger.info("Auto-sort by event ending time")
                     now_utc = datetime.now(timezone.utc)
 
                     def get_game_sort_key(game_name: str):
@@ -282,7 +302,6 @@ class Twitch:
 
                 games_to_watch: list[str] = self.settings.games_to_watch
                 next_hour: datetime = datetime.now(timezone.utc) + timedelta(hours=1)
-                logger.info("games_to_watch: %s", games_to_watch)
                 logger.info(
                     "inventory has %d eligible campaigns",
                     sum(1 for c in self.inventory if c.eligible),

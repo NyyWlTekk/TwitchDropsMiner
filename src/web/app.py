@@ -71,6 +71,7 @@ class SettingsUpdate(BaseModel):
     games_to_watch: list[str] | None = None
     dark_mode: bool | None = None
     auto_sort_by_end: bool | None = None
+    auto_add_all_games: bool | None = None 
     language: str | None = None
     proxy: str | None = None
     connection_quality: int | None = None

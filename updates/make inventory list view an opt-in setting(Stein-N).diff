@@ -1,0 +1,205 @@
+diff --git a/src/config/settings.py b/src/config/settings.py
+index 91dbf0e..818ee9d 100644
+--- a/src/config/settings.py
++++ b/src/config/settings.py
+@@ -39,6 +39,7 @@ class InventoryFilters(TypedDict):
+         "show_not_linked": True,
+         "show_upcoming": True,
+     },
++    "inventory_list_view": False,
+     "minimum_refresh_interval_minutes": 30,
+     "mining_benefits": {
+         "BADGE": True,
+@@ -57,6 +58,7 @@ class Settings:
+     games_to_watch: list[str]
+     language: str
+     inventory_filters: InventoryFilters
++    inventory_list_view: bool
+     minimum_refresh_interval_minutes: int
+     mining_benefits: dict[str, bool]
+     proxy: str
+diff --git a/src/web/app.py b/src/web/app.py
+index 70608d1..86b433b 100644
+--- a/src/web/app.py
++++ b/src/web/app.py
+@@ -75,6 +75,7 @@ class SettingsUpdate(BaseModel):
+     connection_quality: int | None = None
+     minimum_refresh_interval_minutes: int | None = None
+     inventory_filters: dict | None = None
++    inventory_list_view: bool | None = None
+     mining_benefits: dict[str, bool] | None = None
+ 
+ 
+diff --git a/src/web/managers/settings.py b/src/web/managers/settings.py
+index 43ee521..903f566 100644
+--- a/src/web/managers/settings.py
++++ b/src/web/managers/settings.py
+@@ -98,6 +98,9 @@ def update_settings(self, settings_data: dict[str, Any]):
+         should_trigger_update |= self.check_and_update_setting(
+             "inventory_filters", settings_data.get("inventory_filters")
+         )
++        should_trigger_update |= self.check_and_update_setting(
++            "inventory_list_view", settings_data.get("inventory_list_view")
++        )
+         should_trigger_update |= self.check_and_update_setting(
+             "mining_benefits", settings_data.get("mining_benefits"), True
+         )
+diff --git a/web/index.html b/web/index.html
+index f2446b9..14c1f3c 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -185,6 +185,10 @@ <h2 id="settings-general-header">General</h2>
+                     <label>
+                         <input type="checkbox" id="dark-mode"> Dark Mode
+                     </label>
++                    <label>
++                        <input type="checkbox" id="inventory-list-view"> Inventory List View (horizontal rows
++                        instead of cards)
++                    </label>
+                     <label>
+                         Connection Quality:
+                         <input type="number" id="connection-quality" min="1" max="6" value="1">
+diff --git a/web/static/app.js b/web/static/app.js
+index 836ca6c..fe87808 100644
+--- a/web/static/app.js
++++ b/web/static/app.js
+@@ -877,6 +877,10 @@ function handleGameSearchKeydown(event) {
+     }
+ }
+ 
++function applyInventoryViewMode(listView) {
++    document.getElementById('inventory-grid').classList.toggle('list-view', listView);
++}
++
+ function renderInventory() {
+     const container = document.getElementById('inventory-grid');
+     container.innerHTML = '';
+@@ -1050,6 +1054,8 @@ function updateLoginStatus(data) {
+ function updateSettingsUI(settings) {
+     state.settings = settings;
+     document.getElementById('dark-mode').checked = settings.dark_mode || false;
++    document.getElementById('inventory-list-view').checked = settings.inventory_list_view || false;
++    applyInventoryViewMode(settings.inventory_list_view || false);
+     document.getElementById('connection-quality').value = settings.connection_quality || 1;
+     document.getElementById('minimum-refresh-interval').value = settings.minimum_refresh_interval_minutes || 30;
+ 
+@@ -1513,6 +1519,7 @@ async function verifyProxy() {
+ async function saveSettings() {
+     const settings = {
+         dark_mode: document.getElementById('dark-mode').checked,
++        inventory_list_view: document.getElementById('inventory-list-view').checked,
+         language: document.getElementById('language').value,
+         connection_quality: parseInt(document.getElementById('connection-quality').value),
+         minimum_refresh_interval_minutes: parseInt(document.getElementById('minimum-refresh-interval').value),
+@@ -1956,6 +1963,12 @@ document.addEventListener('DOMContentLoaded', () => {
+         // Then save settings
+         saveSettings();
+     });
++
++    document.getElementById('inventory-list-view').addEventListener('change', (e) => {
++        // Apply the view mode immediately for instant feedback
++        applyInventoryViewMode(e.target.checked);
++        saveSettings();
++    });
+     document.getElementById('language').addEventListener('change', saveSettings);
+     document.getElementById('connection-quality').addEventListener('change', saveSettings);
+     document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);
+diff --git a/web/static/styles.css b/web/static/styles.css
+index 5f10af6..e7e3d42 100644
+--- a/web/static/styles.css
++++ b/web/static/styles.css
+@@ -669,11 +669,10 @@ header h1 {
+     background: none;
+ }
+ 
+-/* Inventory List */
++/* Inventory - card view (default) */
+ .inventory-grid {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 15px;
++    column-width: 350px;
++    column-gap: 20px;
+ }
+ 
+ .campaign-card {
+@@ -682,18 +681,34 @@ header h1 {
+     border-radius: 8px;
+     overflow: hidden;
+     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
++    break-inside: avoid;
++    margin-bottom: 20px;
++}
++
++.campaign-info {
++    position: relative;
++    display: flex;
++    flex-direction: column;
++}
++
++/* Inventory - list view (each campaign as a horizontal row) */
++.inventory-grid.list-view {
++    display: flex;
++    flex-direction: column;
++    gap: 15px;
++}
++
++.inventory-grid.list-view .campaign-card {
+     display: flex;
+     align-items: stretch;
++    margin-bottom: 0;
+ }
+ 
+-.campaign-info {
++.inventory-grid.list-view .campaign-info {
+     flex: 0 0 320px;
+     min-width: 0;
+     background: var(--bg-secondary);
+     border-right: 1px solid var(--border-color);
+-    position: relative;
+-    display: flex;
+-    flex-direction: column;
+ }
+ 
+ .campaign-header {
+@@ -814,6 +829,9 @@ header h1 {
+ 
+ .campaign-drops {
+     padding: 15px;
++}
++
++.inventory-grid.list-view .campaign-drops {
+     flex: 1;
+     min-width: 0;
+     display: grid;
+@@ -954,11 +972,16 @@ header h1 {
+ 
+ .drop-item {
+     padding: 10px;
++    margin-bottom: 8px;
+     background: var(--bg-secondary);
+     border-radius: 4px;
+     border-left: 3px solid var(--border-color);
+ }
+ 
++.inventory-grid.list-view .drop-item {
++    margin-bottom: 0;
++}
++
+ .drop-item.claimed {
+     border-left-color: var(--success-color);
+     opacity: 0.7;
+@@ -1498,11 +1521,11 @@ header h1 {
+         grid-row: auto;
+     }
+ 
+-    .campaign-card {
++    .inventory-grid.list-view .campaign-card {
+         flex-direction: column;
+     }
+ 
+-    .campaign-info {
++    .inventory-grid.list-view .campaign-info {
+         flex: none;
+         border-right: none;
+         border-bottom: 1px solid var(--border-color);

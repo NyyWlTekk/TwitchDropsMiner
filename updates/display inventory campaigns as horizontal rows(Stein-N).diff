@@ -1,0 +1,111 @@
+diff --git a/web/static/app.js b/web/static/app.js
+index 722ead8..836ca6c 100644
+--- a/web/static/app.js
++++ b/web/static/app.js
+@@ -991,21 +991,23 @@ function renderInventory() {
+             el.appendChild(makeElement('span', {}, `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
+         });
+ 
+-        card.replaceChildren(campaignHeader, campaignStatus);
++        const campaignInfo = makeElement('div', { class: 'campaign-info' });
++        campaignInfo.appendChild(campaignHeader);
++        campaignInfo.appendChild(campaignStatus);
+ 
+         // Campaign timing
+         if (campaign.active && campaign.ends_at) {
+             const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
+-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
++            campaignInfo.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
+         } else if (campaign.upcoming && campaign.starts_at) {
+             const startsLabel = t.gui?.inventory?.starts || 'Starts: {time}';
+-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())));
++            campaignInfo.appendChild(makeElement('div', { class: 'campaign-timing' }, startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())));
+         } else if (campaign.expired && campaign.ends_at) {
+             const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
+-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
++            campaignInfo.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
+         }
+ 
+-        card.appendChild(dropsEl);
++        card.replaceChildren(campaignInfo, dropsEl);
+ 
+         container.appendChild(card);
+     });
+diff --git a/web/static/styles.css b/web/static/styles.css
+index 02e2995..5f10af6 100644
+--- a/web/static/styles.css
++++ b/web/static/styles.css
+@@ -669,10 +669,11 @@ header h1 {
+     background: none;
+ }
+ 
+-/* Inventory Grid */
++/* Inventory List */
+ .inventory-grid {
+-    column-width: 350px;
+-    column-gap: 20px;
++    display: flex;
++    flex-direction: column;
++    gap: 15px;
+ }
+ 
+ .campaign-card {
+@@ -681,9 +682,18 @@ header h1 {
+     border-radius: 8px;
+     overflow: hidden;
+     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
++    display: flex;
++    align-items: stretch;
++}
++
++.campaign-info {
++    flex: 0 0 320px;
++    min-width: 0;
++    background: var(--bg-secondary);
++    border-right: 1px solid var(--border-color);
+     position: relative;
+-    break-inside: avoid;
+-    margin-bottom: 20px;
++    display: flex;
++    flex-direction: column;
+ }
+ 
+ .campaign-header {
+@@ -804,6 +814,12 @@ header h1 {
+ 
+ .campaign-drops {
+     padding: 15px;
++    flex: 1;
++    min-width: 0;
++    display: grid;
++    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
++    gap: 10px;
++    align-content: start;
+ }
+ 
+ 
+@@ -938,7 +954,6 @@ header h1 {
+ 
+ .drop-item {
+     padding: 10px;
+-    margin-bottom: 8px;
+     background: var(--bg-secondary);
+     border-radius: 4px;
+     border-left: 3px solid var(--border-color);
+@@ -1483,8 +1498,14 @@ header h1 {
+         grid-row: auto;
+     }
+ 
+-    .inventory-grid {
+-        grid-template-columns: 1fr;
++    .campaign-card {
++        flex-direction: column;
++    }
++
++    .campaign-info {
++        flex: none;
++        border-right: none;
++        border-bottom: 1px solid var(--border-color);
+     }
+ }
+ 

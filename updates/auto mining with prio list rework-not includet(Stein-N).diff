@@ -1,0 +1,1757 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index e59d75d..9434f10 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -145,8 +145,8 @@ lang/                # Translation JSON files (19 languages)
+ 
+ **src/config/settings.py** - Application settings:
+ 
+-- Games to watch list (auto-populated from available campaigns if empty)
+-- Games can also be added manually from the web settings search box
++- Priority games list (`priority_games`) — all games with available campaigns are mined; the list only controls mining order (legacy `games_to_watch` values are migrated on load)
++- Priority games can also be added manually from the web settings search box
+ - Connection quality multiplier
+ - Language selection
+ - Proxy support (including verification)
+@@ -158,7 +158,7 @@ lang/                # Translation JSON files (19 languages)
+ 
+ 1. **IDLE** - Waiting for campaigns or user action
+ 2. **INVENTORY_FETCH** - Fetch campaigns from GraphQL, claim completed drops
+-3. **GAMES_UPDATE** - Determine wanted games based on priority/exclude lists
++3. **GAMES_UPDATE** - Build wanted games list: every game with an earnable campaign, priority games first, remainder ordered by soonest-ending campaign
+ 4. **CHANNELS_CLEANUP** - Remove channels not streaming wanted games
+ 5. **CHANNELS_FETCH** - Discover channels via ACL lists or game directories
+ 6. **CHANNEL_SWITCH** - Select best channel to watch based on priority/ACL
+@@ -200,7 +200,7 @@ Persisted operations are defined in `src/config/operations.py` as `GQL_OPERATION
+ 
+ 1. Selected channel (if user clicked one)
+ 2. ACL-based channels over directory channels
+-3. Game priority order (from settings)
++3. Game order in wanted_games (priority games first, then remaining games by soonest-ending campaign)
+ 4. Viewer count (descending)
+ 5. Maximum 199 channels tracked simultaneously
+ 
+@@ -334,6 +334,8 @@ source env/bin/activate && python -m pytest tests/
+ 
+ - `tests/test_proxy_settings.py` - Tests for proxy settings configuration
+ - `tests/test_verify_proxy.py` - Tests for proxy verification functionality
++- `tests/test_stream_selector.py` - Tests for wanted games selection and priority ordering
++- `tests/test_settings_migration.py` - Tests for the games_to_watch → priority_games migration
+ 
+ 
+ ### Manual Testing
+diff --git a/README.md b/README.md
+index d790406..293ea06 100644
+--- a/README.md
++++ b/README.md
+@@ -20,6 +20,7 @@ No more tab juggling, channel switching, or missing rewards — just set it, for
+ 
+ - 🚀 **Streamless Mining** — Earn drops without streaming video by sending Twitch GraphQL watch events
+ - 🔍 **Automatic Campaign Discovery** — Detects new drop events automatically
++- 🥇 **Priority Mining** — Mines every available campaign; an optional priority list decides which games are mined first
+ - ⚙️ **Auto Channel Switching** — Always mines the best available stream
+ - 💾 **Persistent Login** — OAuth login saved via cookies
+ - 🕹️ **Simple Web UI** — Manage everything from your browser
+@@ -70,8 +71,8 @@ Visit 👉 **<http://localhost:8080>**
+ 
+ 1. Open `http://localhost:8080`
+ 2. Login with your Twitch account (OAuth device flow)
+-3. The miner auto-fetches available campaigns
+-4. Select games you want to farm, or type a custom game and click **Add Game** → click **Reload**
++3. The miner auto-fetches available campaigns and mines all of them automatically
++4. Optionally, add games to the **Priority Games** list in Settings (or type a custom game and click **Add Game**) to control which games are mined first — drag to reorder
+ 5. TDM starts mining drops automatically 🎉
+ 
+ 📝 **Tip:**  
+diff --git a/lang/Dansk.json b/lang/Dansk.json
+index 8a08114..8bae77f 100644
+--- a/lang/Dansk.json
++++ b/lang/Dansk.json
+@@ -127,16 +127,16 @@
+                 "dark_mode": "Mørk tilstand: "
+             },
+             "reload": "Genindlæs",
+-            "games_to_watch": "Spil at se",
+-            "games_help": "Vælg spil at se. Rækkefølgen er vigtig - træk for at ændre prioritet (top = højeste prioritet).",
++            "priority_games": "Prioriterede spil",
++            "games_help": "Alle spil med tilgængelige kampagner mines automatisk. Tilføj spil her for at prioritere dem - træk for at ændre rækkefølgen (øverst = højeste prioritet).",
+             "search_games": "Søg spil...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Vælg alle",
+-            "deselect_all": "Fravælg alle",
+-            "selected_games": "Valgte spil (træk for at ændre rækkefølge)",
++            "select_all": "Prioriter alle",
++            "deselect_all": "Ryd alle",
++            "selected_games": "Prioriterede spil (træk for at ændre rækkefølge)",
+             "available_games": "Tilgængelige spil",
+-            "no_games_selected": "Ingen spil valgt. Marker spil nedenfor for at tilføje dem.",
++            "no_games_selected": "Ingen prioriterede spil valgt. Alle tilgængelige kampagner mines i standardrækkefølge.",
+             "no_games_match": "Ingen spil matcher din søgning.",
+             "all_games_selected": "Alle spil er valgt eller ingen tilgængelige spil.",
+             "actions": "Handlinger",
+@@ -203,4 +203,4 @@
+             "none": "Ingen ønskede drops i køen..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/lang/Deutsch.json b/lang/Deutsch.json
+index 5346ec1..73d205d 100644
+--- a/lang/Deutsch.json
++++ b/lang/Deutsch.json
+@@ -128,16 +128,16 @@
+             },
+             "reload": "Neu laden",
+             "reload_campaigns": "Kampagnen neu laden",
+-            "games_to_watch": "Spiele zum Ansehen",
+-            "games_help": "Wählen Sie Spiele zum Ansehen aus. Die Reihenfolge ist wichtig - ziehen Sie, um die Priorität zu ändern (oben = höchste Priorität).",
++            "priority_games": "Prioritätsspiele",
++            "games_help": "Alle Spiele mit verfügbaren Kampagnen werden automatisch gefarmt. Füge hier Spiele hinzu, um sie zu priorisieren - zum Umsortieren ziehen (oben = höchste Priorität).",
+             "search_games": "Spiele suchen...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Alle auswählen",
+-            "deselect_all": "Alle abwählen",
+-            "selected_games": "Ausgewählte Spiele (ziehen zum Neuordnen)",
++            "select_all": "Alle priorisieren",
++            "deselect_all": "Alle entfernen",
++            "selected_games": "Prioritätsspiele (zum Sortieren ziehen)",
+             "available_games": "Verfügbare Spiele",
+-            "no_games_selected": "Keine Spiele ausgewählt. Markieren Sie unten Spiele, um sie hinzuzufügen.",
++            "no_games_selected": "Keine Prioritätsspiele festgelegt. Alle verfügbaren Kampagnen werden in Standardreihenfolge gefarmt.",
+             "no_games_match": "Keine Spiele entsprechen Ihrer Suche.",
+             "all_games_selected": "Alle Spiele sind ausgewählt oder keine Spiele verfügbar.",
+             "actions": "Aktionen",
+@@ -203,4 +203,4 @@
+             "none": "Keine Wunsch-Drops in der Warteschlange..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/lang/English.json b/lang/English.json
+index 26d6339..4da98d6 100644
+--- a/lang/English.json
++++ b/lang/English.json
+@@ -106,16 +106,16 @@
+             "mining_benefits_help": "Select which types of drops you want to mine.",
+             "reload": "Reload Campaigns",
+             "reload_campaigns": "Reload Campaigns",
+-            "games_to_watch": "Games to Watch",
+-            "games_help": "Select games to watch. Order matters - drag to reorder priority (top = highest priority).",
++            "priority_games": "Priority Games",
++            "games_help": "All games with available campaigns are mined automatically. Add games here to prioritize them - drag to reorder (top = highest priority).",
+             "search_games": "Search games...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Select All",
+-            "deselect_all": "Deselect All",
+-            "selected_games": "Selected Games (drag to reorder)",
++            "select_all": "Prioritize All",
++            "deselect_all": "Clear All",
++            "selected_games": "Priority Games (drag to reorder)",
+             "available_games": "Available Games",
+-            "no_games_selected": "No games selected. Check games below to add them.",
++            "no_games_selected": "No priority games set. All available campaigns are mined in default order.",
+             "no_games_match": "No games match your search.",
+             "all_games_selected": "All games are selected or no games available.",
+             "actions": "Actions",
+@@ -204,4 +204,4 @@
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/Espa\303\261ol.json" "b/lang/Espa\303\261ol.json"
+index 437d4d7..31cea4d 100644
+--- "a/lang/Espa\303\261ol.json"
++++ "b/lang/Espa\303\261ol.json"
+@@ -128,16 +128,16 @@
+             },
+             "reload": "Recargar",
+             "reload_campaigns": "Recargar campañas",
+-            "games_to_watch": "Juegos para ver",
+-            "games_help": "Selecciona los juegos a ver. El orden importa - arrastra para reordenar la prioridad (arriba = mayor prioridad).",
++            "priority_games": "Juegos prioritarios",
++            "games_help": "Todos los juegos con campañas disponibles se minan automáticamente. Añade juegos aquí para priorizarlos - arrastra para reordenar (arriba = mayor prioridad).",
+             "search_games": "Buscar juegos...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Seleccionar todo",
+-            "deselect_all": "Deseleccionar todo",
+-            "selected_games": "Juegos seleccionados (arrastra para reordenar)",
++            "select_all": "Priorizar todos",
++            "deselect_all": "Quitar todos",
++            "selected_games": "Juegos prioritarios (arrastra para reordenar)",
+             "available_games": "Juegos disponibles",
+-            "no_games_selected": "No hay juegos seleccionados. Marca los juegos de abajo para agregarlos.",
++            "no_games_selected": "No hay juegos prioritarios. Todas las campañas disponibles se minan en el orden predeterminado.",
+             "no_games_match": "No hay juegos que coincidan con tu búsqueda.",
+             "all_games_selected": "Todos los juegos están seleccionados o no hay juegos disponibles.",
+             "actions": "Acciones",
+@@ -203,4 +203,4 @@
+             "none": "No hay drops deseados en cola..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/Fran\303\247ais.json" "b/lang/Fran\303\247ais.json"
+index 12d32fc..cd1cfd6 100644
+--- "a/lang/Fran\303\247ais.json"
++++ "b/lang/Fran\303\247ais.json"
+@@ -128,16 +128,16 @@
+             },
+             "reload": "Recharger",
+             "reload_campaigns": "Recharger les campagnes",
+-            "games_to_watch": "Jeux à regarder",
+-            "games_help": "Sélectionnez les jeux à regarder. L'ordre est important - faites glisser pour réorganiser la priorité (haut = priorité la plus élevée).",
++            "priority_games": "Jeux prioritaires",
++            "games_help": "Tous les jeux avec des campagnes disponibles sont minés automatiquement. Ajoutez des jeux ici pour les prioriser - glissez pour réorganiser (haut = priorité la plus élevée).",
+             "search_games": "Rechercher des jeux...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Tout sélectionner",
+-            "deselect_all": "Tout désélectionner",
+-            "selected_games": "Jeux sélectionnés (glisser pour réorganiser)",
++            "select_all": "Tout prioriser",
++            "deselect_all": "Tout effacer",
++            "selected_games": "Jeux prioritaires (glisser pour réorganiser)",
+             "available_games": "Jeux disponibles",
+-            "no_games_selected": "Aucun jeu sélectionné. Cochez les jeux ci-dessous pour les ajouter.",
++            "no_games_selected": "Aucun jeu prioritaire défini. Toutes les campagnes disponibles sont minées dans l'ordre par défaut.",
+             "no_games_match": "Aucun jeu ne correspond à votre recherche.",
+             "all_games_selected": "Tous les jeux sont sélectionnés ou aucun jeu disponible.",
+             "actions": "Actions",
+@@ -203,4 +203,4 @@
+             "none": "Aucun drop souhaité en file d'attente..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/lang/Indonesian.json b/lang/Indonesian.json
+index 83be84d..def5cb5 100644
+--- a/lang/Indonesian.json
++++ b/lang/Indonesian.json
+@@ -130,16 +130,16 @@
+                 "dark_mode": "Mode Gelap"
+             },
+             "reload": "Muat Ulang",
+-            "games_to_watch": "Game untuk Ditonton",
+-            "games_help": "Pilih game untuk ditonton. Urutan penting - seret untuk mengatur ulang prioritas (atas = prioritas tertinggi).",
++            "priority_games": "Game Prioritas",
++            "games_help": "Semua game dengan kampanye yang tersedia ditambang secara otomatis. Tambahkan game di sini untuk memprioritaskannya - seret untuk mengubah urutan (atas = prioritas tertinggi).",
+             "search_games": "Cari game...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Pilih Semua",
+-            "deselect_all": "Batalkan Semua",
+-            "selected_games": "Game yang Dipilih (seret untuk mengatur ulang)",
++            "select_all": "Prioritaskan Semua",
++            "deselect_all": "Hapus Semua",
++            "selected_games": "Game Prioritas (seret untuk mengubah urutan)",
+             "available_games": "Game Tersedia",
+-            "no_games_selected": "Tidak ada game yang dipilih. Centang game di bawah untuk menambahkannya.",
++            "no_games_selected": "Tidak ada game prioritas. Semua kampanye yang tersedia ditambang dalam urutan default.",
+             "no_games_match": "Tidak ada game yang cocok dengan pencarian Anda.",
+             "all_games_selected": "Semua game telah dipilih atau tidak ada game tersedia.",
+             "actions": "Tindakan",
+@@ -206,4 +206,4 @@
+             "none": "Tidak ada drops yang diinginkan dalam antrean..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/lang/Italiano.json b/lang/Italiano.json
+index 5594bd7..8263666 100644
+--- a/lang/Italiano.json
++++ b/lang/Italiano.json
+@@ -130,16 +130,16 @@
+                 "dark_mode": "Modalità scura"
+             },
+             "reload": "Ricarica",
+-            "games_to_watch": "Giochi da guardare",
+-            "games_help": "Seleziona i giochi da guardare. L'ordine è importante - trascina per riordinare la priorità (in alto = priorità massima).",
++            "priority_games": "Giochi prioritari",
++            "games_help": "Tutti i giochi con campagne disponibili vengono minati automaticamente. Aggiungi qui i giochi per dar loro priorità - trascina per riordinare (in alto = priorità più alta).",
+             "search_games": "Cerca giochi...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Seleziona tutto",
+-            "deselect_all": "Deseleziona tutto",
+-            "selected_games": "Giochi selezionati (trascina per riordinare)",
++            "select_all": "Priorità a tutti",
++            "deselect_all": "Rimuovi tutti",
++            "selected_games": "Giochi prioritari (trascina per riordinare)",
+             "available_games": "Giochi disponibili",
+-            "no_games_selected": "Nessun gioco selezionato. Seleziona i giochi qui sotto per aggiungerli.",
++            "no_games_selected": "Nessun gioco prioritario impostato. Tutte le campagne disponibili vengono minate nell'ordine predefinito.",
+             "no_games_match": "Nessun gioco corrisponde alla tua ricerca.",
+             "all_games_selected": "Tutti i giochi sono selezionati o non ci sono giochi disponibili.",
+             "actions": "Azioni",
+@@ -206,4 +206,4 @@
+             "none": "Nessun drop desiderato in coda..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/lang/Nederlandse.json b/lang/Nederlandse.json
+index 84751aa..9cf9882 100644
+--- a/lang/Nederlandse.json
++++ b/lang/Nederlandse.json
+@@ -130,16 +130,16 @@
+                 "dark_mode": "Donkere Modus"
+             },
+             "reload": "Herladen",
+-            "games_to_watch": "Games om te kijken",
+-            "games_help": "Selecteer games om te kijken. Volgorde is belangrijk - sleep om prioriteit te wijzigen (bovenaan = hoogste prioriteit).",
++            "priority_games": "Prioriteitsgames",
++            "games_help": "Alle games met beschikbare campagnes worden automatisch gemined. Voeg hier games toe om ze prioriteit te geven - sleep om te herordenen (boven = hoogste prioriteit).",
+             "search_games": "Zoek games...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Alles selecteren",
+-            "deselect_all": "Alles deselecteren",
+-            "selected_games": "Geselecteerde games (sleep om te herschikken)",
++            "select_all": "Alles prioriteren",
++            "deselect_all": "Alles wissen",
++            "selected_games": "Prioriteitsgames (sleep om te herordenen)",
+             "available_games": "Beschikbare games",
+-            "no_games_selected": "Geen games geselecteerd. Vink games hieronder aan om ze toe te voegen.",
++            "no_games_selected": "Geen prioriteitsgames ingesteld. Alle beschikbare campagnes worden in standaardvolgorde gemined.",
+             "no_games_match": "Geen games komen overeen met uw zoekopdracht.",
+             "all_games_selected": "Alle games zijn geselecteerd of er zijn geen games beschikbaar.",
+             "actions": "Acties",
+@@ -206,4 +206,4 @@
+             "none": "Geen gewenste drops in de wachtrij..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/lang/Polski.json b/lang/Polski.json
+index 5f22e47..a51cae4 100644
+--- a/lang/Polski.json
++++ b/lang/Polski.json
+@@ -131,16 +131,16 @@
+             },
+             "exclude": "Wykluczone",
+             "reload": "Przeładuj",
+-            "games_to_watch": "Gry do oglądania",
+-            "games_help": "Wybierz gry do oglądania. Kolejność ma znaczenie - przeciągnij, aby zmienić priorytet (góra = najwyższy priorytet).",
++            "priority_games": "Gry priorytetowe",
++            "games_help": "Wszystkie gry z dostępnymi kampaniami są kopane automatycznie. Dodaj tutaj gry, aby nadać im priorytet - przeciągnij, aby zmienić kolejność (góra = najwyższy priorytet).",
+             "search_games": "Szukaj gier...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Zaznacz wszystko",
+-            "deselect_all": "Odznacz wszystko",
+-            "selected_games": "Wybrane gry (przeciągnij, aby zmienić kolejność)",
++            "select_all": "Priorytet dla wszystkich",
++            "deselect_all": "Wyczyść wszystko",
++            "selected_games": "Gry priorytetowe (przeciągnij, aby zmienić kolejność)",
+             "available_games": "Dostępne gry",
+-            "no_games_selected": "Nie wybrano gier. Zaznacz gry poniżej, aby je dodać.",
++            "no_games_selected": "Brak gier priorytetowych. Wszystkie dostępne kampanie są kopane w domyślnej kolejności.",
+             "no_games_match": "Żadna gra nie pasuje do wyszukiwania.",
+             "all_games_selected": "Wszystkie gry są wybrane lub brak dostępnych gier.",
+             "actions": "Akcje",
+@@ -207,4 +207,4 @@
+             "none": "Brak pożądanych dropów w kolejce..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/Portugu\303\252s.json" "b/lang/Portugu\303\252s.json"
+index 735dd3b..4a88b83 100644
+--- "a/lang/Portugu\303\252s.json"
++++ "b/lang/Portugu\303\252s.json"
+@@ -130,16 +130,16 @@
+                 "dark_mode": "Modo Escuro"
+             },
+             "reload": "Recarregar",
+-            "games_to_watch": "Jogos para assistir",
+-            "games_help": "Selecione os jogos para assistir. A ordem importa - arraste para reordenar a prioridade (topo = maior prioridade).",
++            "priority_games": "Jogos prioritários",
++            "games_help": "Todos os jogos com campanhas disponíveis são minerados automaticamente. Adicione jogos aqui para priorizá-los - arraste para reordenar (topo = maior prioridade).",
+             "search_games": "Procurar jogos...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Selecionar tudo",
+-            "deselect_all": "Desmarcar tudo",
+-            "selected_games": "Jogos selecionados (arraste para reordenar)",
++            "select_all": "Priorizar todos",
++            "deselect_all": "Limpar todos",
++            "selected_games": "Jogos prioritários (arraste para reordenar)",
+             "available_games": "Jogos disponíveis",
+-            "no_games_selected": "Nenhum jogo selecionado. Marque os jogos abaixo para adicioná-los.",
++            "no_games_selected": "Nenhum jogo prioritário definido. Todas as campanhas disponíveis são mineradas na ordem padrão.",
+             "no_games_match": "Nenhum jogo corresponde à sua pesquisa.",
+             "all_games_selected": "Todos os jogos estão selecionados ou não há jogos disponíveis.",
+             "actions": "Ações",
+@@ -206,4 +206,4 @@
+             "none": "Nenhum drop desejado na fila..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/Rom\303\242n\304\203.json" "b/lang/Rom\303\242n\304\203.json"
+index 1448129..82749fa 100644
+--- "a/lang/Rom\303\242n\304\203.json"
++++ "b/lang/Rom\303\242n\304\203.json"
+@@ -130,16 +130,16 @@
+                 "dark_mode": "Mod întunecat"
+             },
+             "reload": "Reîncarcă",
+-            "games_to_watch": "Jocuri de urmărit",
+-            "games_help": "Selectați jocurile de urmărit. Ordinea contează - trageți pentru a reordona prioritatea (sus = prioritate maximă).",
++            "priority_games": "Jocuri prioritare",
++            "games_help": "Toate jocurile cu campanii disponibile sunt minate automat. Adaugă jocuri aici pentru a le prioritiza - trage pentru a reordona (sus = prioritate maximă).",
+             "search_games": "Căutați jocuri...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Selectați tot",
+-            "deselect_all": "Deselectați tot",
+-            "selected_games": "Jocuri selectate (trageți pentru a reordona)",
++            "select_all": "Prioritizează toate",
++            "deselect_all": "Șterge toate",
++            "selected_games": "Jocuri prioritare (trage pentru a reordona)",
+             "available_games": "Jocuri disponibile",
+-            "no_games_selected": "Niciun joc selectat. Bifați jocurile de mai jos pentru a le adăuga.",
++            "no_games_selected": "Niciun joc prioritar setat. Toate campaniile disponibile sunt minate în ordinea implicită.",
+             "no_games_match": "Niciun joc nu corespunde căutării dvs.",
+             "all_games_selected": "Toate jocurile sunt selectate sau nu sunt jocuri disponibile.",
+             "actions": "Acțiuni",
+@@ -206,4 +206,4 @@
+             "none": "Niciun drop dorit în coadă..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/T\303\274rk\303\247e.json" "b/lang/T\303\274rk\303\247e.json"
+index 8da9834..b3d0918 100644
+--- "a/lang/T\303\274rk\303\247e.json"
++++ "b/lang/T\303\274rk\303\247e.json"
+@@ -130,16 +130,16 @@
+                 "dark_mode": "Karanlık Mod"
+             },
+             "reload": "Tekrar yükle",
+-            "games_to_watch": "İzlenecek Oyunlar",
+-            "games_help": "İzlenecek oyunları seçin. Sıralama önemlidir - önceliği yeniden sıralamak için sürükleyin (üst = en yüksek öncelik).",
++            "priority_games": "Öncelikli Oyunlar",
++            "games_help": "Mevcut kampanyaları olan tüm oyunlar otomatik olarak kazılır. Önceliklendirmek için oyunları buraya ekleyin - yeniden sıralamak için sürükleyin (üst = en yüksek öncelik).",
+             "search_games": "Oyun ara...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Tümünü seç",
+-            "deselect_all": "Tümünü kaldır",
+-            "selected_games": "Seçilen oyunlar (yeniden sıralamak için sürükleyin)",
++            "select_all": "Tümüne Öncelik Ver",
++            "deselect_all": "Tümünü Temizle",
++            "selected_games": "Öncelikli Oyunlar (sıralamak için sürükleyin)",
+             "available_games": "Mevcut oyunlar",
+-            "no_games_selected": "Oyun seçilmedi. Eklemek için aşağıdaki oyunları işaretleyin.",
++            "no_games_selected": "Öncelikli oyun ayarlanmadı. Mevcut tüm kampanyalar varsayılan sırayla kazılır.",
+             "no_games_match": "Aramanızla eşleşen oyun yok.",
+             "all_games_selected": "Tüm oyunlar seçildi veya mevcut oyun yok.",
+             "actions": "İşlemler",
+@@ -206,4 +206,4 @@
+             "none": "Kuyrukta istenen drop yok..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/\304\214e\305\241tina.json" "b/lang/\304\214e\305\241tina.json"
+index 43d0d43..83d3fae 100644
+--- "a/lang/\304\214e\305\241tina.json"
++++ "b/lang/\304\214e\305\241tina.json"
+@@ -130,16 +130,16 @@
+             },
+             "exclude": "Vynechat",
+             "reload": "Obnovit",
+-            "games_to_watch": "Hry ke sledování",
+-            "games_help": "Vyberte hry ke sledování. Záleží na pořadí - přetáhněte pro změnu priority (nahoře = nejvyšší priorita).",
++            "priority_games": "Prioritní hry",
++            "games_help": "Všechny hry s dostupnými kampaněmi se těží automaticky. Přidejte sem hry, které chcete upřednostnit - přetažením změníte pořadí (nahoře = nejvyšší priorita).",
+             "search_games": "Hledat hry...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Vybrat vše",
+-            "deselect_all": "Zrušit výběr",
+-            "selected_games": "Vybrané hry (přetáhněte pro změnu pořadí)",
++            "select_all": "Upřednostnit vše",
++            "deselect_all": "Vymazat vše",
++            "selected_games": "Prioritní hry (přetažením změníte pořadí)",
+             "available_games": "Dostupné hry",
+-            "no_games_selected": "Nejsou vybrány žádné hry. Zaškrtněte hry níže a přidejte je.",
++            "no_games_selected": "Žádné prioritní hry. Všechny dostupné kampaně se těží ve výchozím pořadí.",
+             "no_games_match": "Žádné hry neodpovídají vašemu hledání.",
+             "all_games_selected": "Všechny hry jsou vybrány nebo nejsou k dispozici žádné hry.",
+             "actions": "Akce",
+@@ -206,4 +206,4 @@
+             "none": "Žádné chtěné dropy ve frontě..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/\320\240\321\203\321\201\321\201\320\272\320\270\320\271.json" "b/lang/\320\240\321\203\321\201\321\201\320\272\320\270\320\271.json"
+index 5c9defe..15f5cd0 100644
+--- "a/lang/\320\240\321\203\321\201\321\201\320\272\320\270\320\271.json"
++++ "b/lang/\320\240\321\203\321\201\321\201\320\272\320\270\320\271.json"
+@@ -131,16 +131,16 @@
+             },
+             "exclude": "Исключения",
+             "reload": "Перезагрузить",
+-            "games_to_watch": "Игры для просмотра",
+-            "games_help": "Выберите игры для просмотра. Порядок имеет значение - перетащите для изменения приоритета (вверху = наивысший приоритет).",
++            "priority_games": "Приоритетные игры",
++            "games_help": "Все игры с доступными кампаниями фармятся автоматически. Добавьте сюда игры, чтобы установить их приоритет - перетащите для изменения порядка (вверху = наивысший приоритет).",
+             "search_games": "Поиск игр...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Выбрать все",
+-            "deselect_all": "Снять выбор",
+-            "selected_games": "Выбранные игры (перетащите для изменения порядка)",
++            "select_all": "Приоритет всем",
++            "deselect_all": "Очистить всё",
++            "selected_games": "Приоритетные игры (перетащите для изменения порядка)",
+             "available_games": "Доступные игры",
+-            "no_games_selected": "Игры не выбраны. Отметьте игры ниже, чтобы добавить их.",
++            "no_games_selected": "Приоритетные игры не заданы. Все доступные кампании фармятся в порядке по умолчанию.",
+             "no_games_match": "Нет игр, соответствующих вашему запросу.",
+             "all_games_selected": "Все игры выбраны или нет доступных игр.",
+             "actions": "Действия",
+@@ -207,4 +207,4 @@
+             "none": "Нет желаемых дропов в очереди..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/\320\243\320\272\321\200\320\260\321\227\320\275\321\201\321\214\320\272\320\260.json" "b/lang/\320\243\320\272\321\200\320\260\321\227\320\275\321\201\321\214\320\272\320\260.json"
+index c39159a..1c01f5c 100644
+--- "a/lang/\320\243\320\272\321\200\320\260\321\227\320\275\321\201\321\214\320\272\320\260.json"
++++ "b/lang/\320\243\320\272\321\200\320\260\321\227\320\275\321\201\321\214\320\272\320\260.json"
+@@ -130,16 +130,16 @@
+                 "dark_mode": "Темний режим"
+             },
+             "reload": "Перезавантажити",
+-            "games_to_watch": "Ігри для перегляду",
+-            "games_help": "Виберіть ігри для перегляду. Порядок має значення - перетягніть для зміни пріоритету (вгорі = найвищий пріоритет).",
++            "priority_games": "Пріоритетні ігри",
++            "games_help": "Усі ігри з доступними кампаніями фармляться автоматично. Додайте сюди ігри, щоб надати їм пріоритет - перетягніть, щоб змінити порядок (вгорі = найвищий пріоритет).",
+             "search_games": "Пошук ігор...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "Вибрати все",
+-            "deselect_all": "Зняти вибір",
+-            "selected_games": "Вибрані ігри (перетягніть для зміни порядку)",
++            "select_all": "Пріоритет усім",
++            "deselect_all": "Очистити все",
++            "selected_games": "Пріоритетні ігри (перетягніть, щоб змінити порядок)",
+             "available_games": "Доступні ігри",
+-            "no_games_selected": "Ігри не вибрано. Позначте ігри нижче, щоб додати їх.",
++            "no_games_selected": "Пріоритетні ігри не задано. Усі доступні кампанії фармляться у порядку за замовчуванням.",
+             "no_games_match": "Немає ігор, що відповідають вашому запиту.",
+             "all_games_selected": "Всі ігри вибрано або немає доступних ігор.",
+             "actions": "Дії",
+@@ -206,4 +206,4 @@
+             "none": "Немає бажаних дропів у черзі..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/\330\247\331\204\330\271\330\261\330\250\331\212\330\251.json" "b/lang/\330\247\331\204\330\271\330\261\330\250\331\212\330\251.json"
+index 71049e3..c1ffc57 100644
+--- "a/lang/\330\247\331\204\330\271\330\261\330\250\331\212\330\251.json"
++++ "b/lang/\330\247\331\204\330\271\330\261\330\250\331\212\330\251.json"
+@@ -130,16 +130,16 @@
+                 "dark_mode": "الوضع الداكن"
+             },
+             "reload": "إعادة تحميل",
+-            "games_to_watch": "ألعاب للمشاهدة",
+-            "games_help": "حدد الألعاب للمشاهدة. الترتيب مهم - اسحب لإعادة ترتيب الأولوية (الأعلى = أعلى أولوية).",
++            "priority_games": "الألعاب ذات الأولوية",
++            "games_help": "يتم تعدين جميع الألعاب ذات الحملات المتاحة تلقائيًا. أضف الألعاب هنا لمنحها الأولوية - اسحب لإعادة الترتيب (الأعلى = الأولوية القصوى).",
+             "search_games": "البحث عن الألعاب...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "تحديد الكل",
+-            "deselect_all": "إلغاء تحديد الكل",
+-            "selected_games": "الألعاب المحددة (اسحب لإعادة الترتيب)",
++            "select_all": "إعطاء الأولوية للكل",
++            "deselect_all": "مسح الكل",
++            "selected_games": "الألعاب ذات الأولوية (اسحب لإعادة الترتيب)",
+             "available_games": "الألعاب المتاحة",
+-            "no_games_selected": "لم يتم تحديد ألعاب. حدد الألعاب أدناه لإضافتها.",
++            "no_games_selected": "لم يتم تعيين ألعاب ذات أولوية. يتم تعدين جميع الحملات المتاحة بالترتيب الافتراضي.",
+             "no_games_match": "لا توجد ألعاب تطابق بحثك.",
+             "all_games_selected": "تم تحديد جميع الألعاب أو لا توجد ألعاب متاحة.",
+             "actions": "الإجراءات",
+@@ -206,4 +206,4 @@
+             "none": "لا توجد drops مطلوبة في قائمة الانتظار..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/\346\227\245\346\234\254\350\252\236.json" "b/lang/\346\227\245\346\234\254\350\252\236.json"
+index 471970d..437b916 100644
+--- "a/lang/\346\227\245\346\234\254\350\252\236.json"
++++ "b/lang/\346\227\245\346\234\254\350\252\236.json"
+@@ -130,16 +130,16 @@
+                 "dark_mode": "ダークモード"
+             },
+             "reload": "再読み込み",
+-            "games_to_watch": "視聴するゲーム",
+-            "games_help": "視聴するゲームを選択してください。順序が重要です - ドラッグして優先順位を並べ替えます（上 = 最高優先度）。",
++            "priority_games": "優先ゲーム",
++            "games_help": "利用可能なキャンペーンのあるすべてのゲームが自動的にマイニングされます。ここにゲームを追加して優先順位を設定できます - ドラッグで並べ替え(上=最優先)。",
+             "search_games": "ゲームを検索...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "すべて選択",
+-            "deselect_all": "すべて選択解除",
+-            "selected_games": "選択されたゲーム（ドラッグして並べ替え）",
++            "select_all": "すべて優先",
++            "deselect_all": "すべてクリア",
++            "selected_games": "優先ゲーム(ドラッグで並べ替え)",
+             "available_games": "利用可能なゲーム",
+-            "no_games_selected": "ゲームが選択されていません。下のゲームにチェックを入れて追加してください。",
++            "no_games_selected": "優先ゲームが設定されていません。利用可能なすべてのキャンペーンがデフォルトの順序でマイニングされます。",
+             "no_games_match": "検索に一致するゲームはありません。",
+             "all_games_selected": "すべてのゲームが選択されているか、利用可能なゲームがありません。",
+             "actions": "アクション",
+@@ -206,4 +206,4 @@
+             "none": "キューに欲しいDropsはありません..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/\347\256\200\344\275\223\344\270\255\346\226\207.json" "b/lang/\347\256\200\344\275\223\344\270\255\346\226\207.json"
+index 88b33d0..7a582e7 100644
+--- "a/lang/\347\256\200\344\275\223\344\270\255\346\226\207.json"
++++ "b/lang/\347\256\200\344\275\223\344\270\255\346\226\207.json"
+@@ -127,16 +127,16 @@
+                 "dark_mode": "深色模式"
+             },
+             "reload": "刷新",
+-            "games_to_watch": "观看游戏",
+-            "games_help": "选择要观看的游戏。顺序很重要 - 拖动以重新排序优先级（顶部 = 最高优先级）。",
++            "priority_games": "优先游戏",
++            "games_help": "所有有可用活动的游戏都会自动挖掘。在此添加游戏以设置优先级 - 拖动以重新排序(顶部 = 最高优先级)。",
+             "search_games": "搜索游戏...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "全选",
+-            "deselect_all": "取消全选",
+-            "selected_games": "已选游戏（拖动以重新排序）",
++            "select_all": "全部优先",
++            "deselect_all": "全部清除",
++            "selected_games": "优先游戏(拖动以重新排序)",
+             "available_games": "可用游戏",
+-            "no_games_selected": "未选择游戏。勾选下方游戏以添加。",
++            "no_games_selected": "未设置优先游戏。所有可用活动将按默认顺序挖掘。",
+             "no_games_match": "没有游戏符合您的搜索。",
+             "all_games_selected": "所有游戏都已选择或没有可用游戏。",
+             "actions": "操作",
+@@ -203,4 +203,4 @@
+             "none": "队列中没有期望的掉落..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git "a/lang/\347\271\201\351\253\224\344\270\255\346\226\207.json" "b/lang/\347\271\201\351\253\224\344\270\255\346\226\207.json"
+index c744273..f8aedb5 100644
+--- "a/lang/\347\271\201\351\253\224\344\270\255\346\226\207.json"
++++ "b/lang/\347\271\201\351\253\224\344\270\255\346\226\207.json"
+@@ -130,16 +130,16 @@
+                 "dark_mode": "深色模式"
+             },
+             "reload": "重新載入",
+-            "games_to_watch": "觀看遊戲",
+-            "games_help": "選擇要觀看的遊戲。順序很重要 - 拖曳以重新排序優先級（頂部 = 最高優先級）。",
++            "priority_games": "優先遊戲",
++            "games_help": "所有有可用活動的遊戲都會自動挖掘。在此新增遊戲以設定優先順序 - 拖曳以重新排序(頂部 = 最高優先)。",
+             "search_games": "搜尋遊戲...",
+             "add_game": "Add Game",
+             "add_game_hint": " Click \"Add Game\" to add it manually.",
+-            "select_all": "全選",
+-            "deselect_all": "取消全選",
+-            "selected_games": "已選遊戲（拖曳以重新排序）",
++            "select_all": "全部優先",
++            "deselect_all": "全部清除",
++            "selected_games": "優先遊戲(拖曳以重新排序)",
+             "available_games": "可用遊戲",
+-            "no_games_selected": "未選擇遊戲。勾選下方遊戲以新增。",
++            "no_games_selected": "未設定優先遊戲。所有可用活動將按預設順序挖掘。",
+             "no_games_match": "沒有遊戲符合您的搜尋。",
+             "all_games_selected": "所有遊戲都已選擇或沒有可用遊戲。",
+             "actions": "操作",
+@@ -206,4 +206,4 @@
+             "none": "隊列中沒有期望的掉落..."
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/config/settings.py b/src/config/settings.py
+index 91dbf0e..9250d43 100644
+--- a/src/config/settings.py
++++ b/src/config/settings.py
+@@ -25,7 +25,7 @@ class InventoryFilters(TypedDict):
+ default_settings = {
+     "connection_quality": 1,
+     "dark_mode": False,
+-    "games_to_watch": [],
++    "priority_games": [],
+     "language": DEFAULT_LANG,
+     "inventory_filters": {
+         "game_name_search": [],
+@@ -54,7 +54,7 @@ class InventoryFilters(TypedDict):
+ class Settings:
+     connection_quality: int
+     dark_mode: bool
+-    games_to_watch: list[str]
++    priority_games: list[str]
+     language: str
+     inventory_filters: InventoryFilters
+     minimum_refresh_interval_minutes: int
+@@ -67,6 +67,11 @@ def __init__(self):
+     def load(self):
+         # TODO: remvoe customized serde in the future
+         settings = json_load(SETTINGS_PATH, default_settings, merge=True)
++        # Migrate the legacy "games_to_watch" whitelist to the "priority_games" list.
++        # All available campaigns are mined now; the list only controls mining order.
++        legacy_games = settings.pop("games_to_watch", None)
++        if legacy_games and not settings.get("priority_games"):
++            settings["priority_games"] = legacy_games
+         for key, value in settings.items():
+             if value is URL:
+                 setattr(self, key, str(value))
+diff --git a/src/core/client.py b/src/core/client.py
+index beb85ec..2231825 100644
+--- a/src/core/client.py
++++ b/src/core/client.py
+@@ -243,11 +243,12 @@ async def _run(self) -> None:
+                         for drop in campaign.drops:
+                             if drop.can_claim:
+                                 await drop.claim()
+-                # figure out which games we want based on games_to_watch whitelist
++                # figure out which games we want: every game with an earnable campaign,
++                # with games from the priority_games list mined first
+                 self.wanted_games.clear()
+-                games_to_watch: list[str] = self.settings.games_to_watch
++                priority_games: list[str] = self.settings.priority_games
+                 next_hour: datetime = datetime.now(timezone.utc) + timedelta(hours=1)
+-                logger.info("games_to_watch: %s", games_to_watch)
++                logger.info("priority_games: %s", priority_games)
+                 logger.info(
+                     "inventory has %d eligible campaigns",
+                     sum(1 for c in self.inventory if c.eligible),
+@@ -259,7 +260,7 @@ async def _run(self) -> None:
+                     self._output_campaign_mapping(next_hour)
+ 
+                 logger.info("Building wanted games list")
+-                # Build wanted_games list preserving the order from games_to_watch
++                # Build wanted_games list: priority_games first, then all remaining games
+                 self.wanted_games = self._stream_selector.get_wanted_games(
+                     self.settings, self.inventory
+                 )
+@@ -271,8 +272,8 @@ async def _run(self) -> None:
+                     )
+                 else:
+                     logger.warning(
+-                        "No wanted games found! games_to_watch=%s, eligible_campaigns=%d",
+-                        games_to_watch,
++                        "No wanted games found! priority_games=%s, eligible_campaigns=%d",
++                        priority_games,
+                         sum(
+                             1 for c in self.inventory if c.eligible and c.can_earn_within(next_hour)
+                         ),
+@@ -633,28 +634,6 @@ async def bulk_check_online(self, channels: abc.Iterable[Channel]):
+         """Delegate to ChannelService."""
+         await self._channel_service.bulk_check_online(channels)
+ 
+-    def _filter_wanted_campaigns(self, next_hour: datetime) -> list[Game]:
+-        """
+-        Filter campaigns to find wanted games based on settings and benefits.
+-        """
+-        wanted_games: list[Game] = []
+-        games_to_watch: list[str] = self.settings.games_to_watch
+-        mining_benefits: dict[str, bool] = self.settings.mining_benefits
+-
+-        for game_name in games_to_watch:
+-            game_name_lower: str = game_name.lower()
+-            for campaign in self.inventory:
+-                game: Game = campaign.game
+-                if (
+-                    game.name.lower() == game_name_lower
+-                    and game not in wanted_games
+-                    and campaign.can_earn_within(next_hour)
+-                    and campaign.has_wanted_unclaimed_benefits(mining_benefits)
+-                ):
+-                    wanted_games.append(game)
+-                    break
+-        return wanted_games
+-
+     def _output_campaign_mapping(self, next_hour: datetime) -> None:
+         logger.info("=== Active Campaigns Mapping ===")
+         from collections import defaultdict
+diff --git a/src/i18n/translator.py b/src/i18n/translator.py
+index a0c6a6a..096330a 100644
+--- a/src/i18n/translator.py
++++ b/src/i18n/translator.py
+@@ -174,7 +174,7 @@ class GUISettings(TypedDict):
+     mining_benefits_help: str
+     reload: str
+     reload_campaigns: str
+-    games_to_watch: str
++    priority_games: str
+     games_help: str
+     search_games: str
+     add_game: str
+diff --git a/src/services/channel_service.py b/src/services/channel_service.py
+index d0d7b97..c542c5a 100644
+--- a/src/services/channel_service.py
++++ b/src/services/channel_service.py
+@@ -49,17 +49,18 @@ def __init__(self, twitch: Twitch) -> None:
+ 
+     def get_priority(self, channel: Channel) -> int:
+         """
+-        Return a priority number for a given channel based on games_to_watch order.
++        Return a priority number for a given channel based on the wanted_games order.
+ 
+         Priority is determined by the position of the channel's game in the
+-        wanted_games list. Lower numbers indicate higher priority.
++        wanted_games list (priority_games first, then all remaining games).
++        Lower numbers indicate higher priority.
+ 
+         Args:
+             channel: The channel to evaluate
+ 
+         Returns:
+             Priority number where:
+-            - 0 has the highest priority (first in games_to_watch list)
++            - 0 has the highest priority (first in the wanted_games list)
+             - Higher numbers indicate lower priority
+             - MAX_INT signifies the lowest possible priority (unwanted game or offline)
+         """
+diff --git a/src/services/stream_selector.py b/src/services/stream_selector.py
+index d2f877d..c51f83d 100644
+--- a/src/services/stream_selector.py
++++ b/src/services/stream_selector.py
+@@ -6,6 +6,42 @@
+ 
+ 
+ class StreamSelector:
++    """
++    Builds the list of games (and their campaigns/drops/benefits) that should be mined.
++
++    Every game with at least one earnable campaign is included. Games present in the
++    ``priority_games`` settings list come first, in list order; all remaining games
++    follow, ordered by their soonest-ending campaign so that drops about to expire
++    are mined before ones with more time left.
++    """
++
++    def _get_campaign_entry(
++        self, campaign: DropsCampaign, mining_benefits: dict[str, bool]
++    ) -> dict | None:
++        """
++        Build the campaign tree entry (Campaign -> Drops -> Benefits) for a campaign,
++        or return None if it has no unclaimed drops with wanted benefits.
++        """
++        wanted_drops = []
++        for drop in campaign.drops:
++            if drop.is_claimed:
++                continue
++
++            filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
++
++            if len(filtered_benefits) > 0:
++                wanted_drops.append({"name": drop.name, "benefits": filtered_benefits})
++
++        if len(wanted_drops) == 0:
++            return None
++
++        return {
++            "id": campaign.id,
++            "name": campaign.name,
++            "url": campaign.campaign_url,
++            "drops": wanted_drops,
++        }
++
+     def _get_wanted_game_tree(
+         self, settings: Settings, campaigns: list[DropsCampaign]
+     ) -> list[dict]:
+@@ -13,57 +49,54 @@ def _get_wanted_game_tree(
+         Get the hierarchical tree of wanted items (Games -> Campaigns -> Drops -> Benefits).
+         Ignoring 'can earn within' time constraint.
+         """
+-        wanted_games = []
+-        games_to_watch = settings.games_to_watch
+         mining_benefits = settings.mining_benefits
+         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
+ 
+-        for game_name in games_to_watch:
+-            wanted_campaigns = []
+-            game_obj = None
+-            game_name_lower = game_name.lower()
+-
+-            # Find all campaigns for this game
+-            for campaign in campaigns:
+-                if campaign.game.name.lower() != game_name_lower:
+-                    continue
+-
+-                if game_obj is None:
+-                    game_obj = campaign.game
+-
+-                if not campaign.can_earn_within(next_hour):
+-                    continue
+-
+-                wanted_drops = []
+-                for drop in campaign.drops:
+-                    if drop.is_claimed:
+-                        continue
+-
+-                    filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
+-
+-                    if len(filtered_benefits) > 0:
+-                        wanted_drops.append({"name": drop.name, "benefits": filtered_benefits})
+-
+-                if len(wanted_drops) > 0:
+-                    wanted_campaigns.append(
+-                        {
+-                            "id": campaign.id,
+-                            "name": campaign.name,
+-                            "url": campaign.campaign_url,
+-                            "drops": wanted_drops,
+-                        }
+-                    )
+-
+-            if len(wanted_campaigns) > 0:
+-                wanted_games.append(
+-                    {
+-                        "game_id": game_obj.id if game_obj else None,
+-                        "game_name": game_name,
+-                        "game_icon": game_obj.box_art_url if game_obj else None,
+-                        "game_obj": game_obj,
+-                        "campaigns": wanted_campaigns,
+-                    }
+-                )
++        # group earnable campaigns by game
++        game_groups: dict[str, dict] = {}
++        for campaign in campaigns:
++            if not campaign.can_earn_within(next_hour):
++                continue
++
++            campaign_entry = self._get_campaign_entry(campaign, mining_benefits)
++            if campaign_entry is None:
++                continue
++
++            group_key = campaign.game.name.lower()
++            group = game_groups.setdefault(
++                group_key,
++                {"game_obj": campaign.game, "campaigns": [], "ends_soonest": campaign.ends_at},
++            )
++            group["campaigns"].append(campaign_entry)
++            group["ends_soonest"] = min(group["ends_soonest"], campaign.ends_at)
++
++        # games from the priority list come first, in list order
++        ordered_keys: list[str] = []
++        for game_name in settings.priority_games:
++            group_key = game_name.lower()
++            if group_key in game_groups and group_key not in ordered_keys:
++                ordered_keys.append(group_key)
++        # all remaining games follow, ones with campaigns ending soonest first
++        ordered_keys.extend(
++            sorted(
++                (key for key in game_groups if key not in ordered_keys),
++                key=lambda key: game_groups[key]["ends_soonest"],
++            )
++        )
++
++        wanted_games = []
++        for group_key in ordered_keys:
++            group = game_groups[group_key]
++            game_obj: Game = group["game_obj"]
++            wanted_games.append(
++                {
++                    "game_id": game_obj.id,
++                    "game_name": game_obj.name,
++                    "game_icon": game_obj.box_art_url,
++                    "game_obj": game_obj,
++                    "campaigns": group["campaigns"],
++                }
++            )
+ 
+         return wanted_games
+ 
+diff --git a/src/web/app.py b/src/web/app.py
+index 70608d1..afeffda 100644
+--- a/src/web/app.py
++++ b/src/web/app.py
+@@ -68,7 +68,7 @@ class ChannelSelectRequest(BaseModel):
+ 
+ 
+ class SettingsUpdate(BaseModel):
+-    games_to_watch: list[str] | None = None
++    priority_games: list[str] | None = None
+     dark_mode: bool | None = None
+     language: str | None = None
+     proxy: str | None = None
+diff --git a/src/web/managers/settings.py b/src/web/managers/settings.py
+index 43ee521..152fa78 100644
+--- a/src/web/managers/settings.py
++++ b/src/web/managers/settings.py
+@@ -72,7 +72,7 @@ def update_settings(self, settings_data: dict[str, Any]):
+         """
+         should_trigger_update = False
+         should_trigger_update |= self.check_and_update_setting(
+-            "games_to_watch", settings_data.get("games_to_watch"), True
++            "priority_games", settings_data.get("priority_games"), True
+         )
+         should_trigger_update |= self.check_and_update_setting(
+             "dark_mode", settings_data.get("dark_mode")
+diff --git a/tests/test_settings_api.py b/tests/test_settings_api.py
+index 24308f6..4e8a353 100644
+--- a/tests/test_settings_api.py
++++ b/tests/test_settings_api.py
+@@ -24,7 +24,7 @@ async def test_settings_manager_networking(self):
+         # Initialize mock attributes with default values for comparison
+         mock_settings.inventory_filters = {}
+         mock_settings.mining_benefits = {}
+-        mock_settings.games_to_watch = []
++        mock_settings.priority_games = []
+ 
+         mock_console = MagicMock()
+         mock_callback = MagicMock()
+@@ -50,9 +50,9 @@ async def test_settings_manager_networking(self):
+         mock_console.print.assert_called_with("Setting changed: mining_benefits = {'BADGE': False}")
+         mock_callback.reset_mock()
+ 
+-        # 3. Update Games to Watch (SHOULD trigger callback)
++        # 3. Update Priority Games (SHOULD trigger callback)
+         games = ["Game 1"]
+-        manager.update_settings({"games_to_watch": games})
++        manager.update_settings({"priority_games": games})
+         mock_callback.assert_called_once()
+ 
+ 
+diff --git a/tests/test_settings_migration.py b/tests/test_settings_migration.py
+new file mode 100644
+index 0000000..1c3b6e0
+--- /dev/null
++++ b/tests/test_settings_migration.py
+@@ -0,0 +1,36 @@
++import unittest
++from unittest.mock import patch
++
++from src.config.settings import Settings
++
++
++class TestPriorityGamesMigration(unittest.TestCase):
++    """The legacy "games_to_watch" whitelist must migrate to "priority_games"."""
++
++    def _load_settings(self, stored: dict) -> Settings:
++        with patch("src.config.settings.json_load", return_value=dict(stored)):
++            return Settings()
++
++    def test_legacy_games_to_watch_becomes_priority_games(self):
++        settings = self._load_settings({"games_to_watch": ["Rust", "Fortnite"]})
++        self.assertEqual(settings.priority_games, ["Rust", "Fortnite"])
++        self.assertFalse(hasattr(settings, "games_to_watch"))
++
++    def test_existing_priority_games_wins_over_legacy_list(self):
++        settings = self._load_settings(
++            {"games_to_watch": ["Rust"], "priority_games": ["Warframe"]}
++        )
++        self.assertEqual(settings.priority_games, ["Warframe"])
++
++    def test_no_legacy_key_keeps_priority_games(self):
++        settings = self._load_settings({"priority_games": ["Warframe"]})
++        self.assertEqual(settings.priority_games, ["Warframe"])
++
++    def test_empty_legacy_list_is_ignored(self):
++        settings = self._load_settings({"games_to_watch": [], "priority_games": []})
++        self.assertEqual(settings.priority_games, [])
++        self.assertFalse(hasattr(settings, "games_to_watch"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_stream_selector.py b/tests/test_stream_selector.py
+new file mode 100644
+index 0000000..93e71d8
+--- /dev/null
++++ b/tests/test_stream_selector.py
+@@ -0,0 +1,137 @@
++import unittest
++from datetime import datetime, timedelta, timezone
++from types import SimpleNamespace
++
++from src.services.stream_selector import StreamSelector
++
++
++def make_game(name: str):
++    return SimpleNamespace(id=abs(hash(name)) % 10_000, name=name, box_art_url=f"{name}.png")
++
++
++class FakeDrop:
++    def __init__(self, claimed: bool = False, benefits: list | None = None):
++        self.name = "drop"
++        self.is_claimed = claimed
++        self._benefits = benefits if benefits is not None else [{"name": "benefit"}]
++
++    def get_wanted_unclaimed_benefits(self, mining_benefits):
++        return self._benefits
++
++
++class FakeCampaign:
++    _counter = 0
++
++    def __init__(
++        self,
++        game_name: str,
++        ends_in_hours: float = 24.0,
++        earnable: bool = True,
++        drops: list | None = None,
++    ):
++        FakeCampaign._counter += 1
++        self.id = f"campaign-{FakeCampaign._counter}"
++        self.name = f"{game_name} campaign"
++        self.campaign_url = f"https://example.com/{self.id}"
++        self.game = make_game(game_name)
++        self.ends_at = datetime.now(timezone.utc) + timedelta(hours=ends_in_hours)
++        self._earnable = earnable
++        self.drops = drops if drops is not None else [FakeDrop()]
++
++    def can_earn_within(self, stamp):
++        return self._earnable
++
++
++def make_settings(priority_games: list[str] | None = None):
++    return SimpleNamespace(priority_games=priority_games or [], mining_benefits={})
++
++
++class TestStreamSelector(unittest.TestCase):
++    def setUp(self):
++        self.selector = StreamSelector()
++
++    def test_all_games_mined_without_priority_list(self):
++        """Every game with an earnable campaign is included, even with no priority set."""
++        campaigns = [FakeCampaign("Rust"), FakeCampaign("Fortnite"), FakeCampaign("Warframe")]
++        games = self.selector.get_wanted_games(make_settings(), campaigns)
++        self.assertEqual({g.name for g in games}, {"Rust", "Fortnite", "Warframe"})
++
++    def test_priority_games_come_first_in_order(self):
++        campaigns = [
++            FakeCampaign("Rust", ends_in_hours=1),
++            FakeCampaign("Fortnite", ends_in_hours=2),
++            FakeCampaign("Warframe", ends_in_hours=3),
++        ]
++        settings = make_settings(priority_games=["Warframe", "Fortnite"])
++        games = self.selector.get_wanted_games(settings, campaigns)
++        self.assertEqual([g.name for g in games], ["Warframe", "Fortnite", "Rust"])
++
++    def test_non_priority_games_ordered_by_soonest_ending_campaign(self):
++        campaigns = [
++            FakeCampaign("Rust", ends_in_hours=100),
++            FakeCampaign("Fortnite", ends_in_hours=5),
++            FakeCampaign("Warframe", ends_in_hours=50),
++        ]
++        games = self.selector.get_wanted_games(make_settings(), campaigns)
++        self.assertEqual([g.name for g in games], ["Fortnite", "Warframe", "Rust"])
++
++    def test_priority_matching_is_case_insensitive(self):
++        campaigns = [FakeCampaign("Rust"), FakeCampaign("Fortnite")]
++        settings = make_settings(priority_games=["fortnite"])
++        games = self.selector.get_wanted_games(settings, campaigns)
++        self.assertEqual(games[0].name, "Fortnite")
++
++    def test_priority_games_without_campaigns_are_skipped(self):
++        campaigns = [FakeCampaign("Rust")]
++        settings = make_settings(priority_games=["Fortnite", "Rust"])
++        games = self.selector.get_wanted_games(settings, campaigns)
++        self.assertEqual([g.name for g in games], ["Rust"])
++
++    def test_non_earnable_campaigns_are_excluded(self):
++        campaigns = [FakeCampaign("Rust"), FakeCampaign("Fortnite", earnable=False)]
++        games = self.selector.get_wanted_games(make_settings(), campaigns)
++        self.assertEqual([g.name for g in games], ["Rust"])
++
++    def test_campaigns_with_only_claimed_drops_are_excluded(self):
++        campaigns = [
++            FakeCampaign("Rust", drops=[FakeDrop(claimed=True)]),
++            FakeCampaign("Fortnite"),
++        ]
++        games = self.selector.get_wanted_games(make_settings(), campaigns)
++        self.assertEqual([g.name for g in games], ["Fortnite"])
++
++    def test_campaigns_without_wanted_benefits_are_excluded(self):
++        campaigns = [
++            FakeCampaign("Rust", drops=[FakeDrop(benefits=[])]),
++            FakeCampaign("Fortnite"),
++        ]
++        games = self.selector.get_wanted_games(make_settings(), campaigns)
++        self.assertEqual([g.name for g in games], ["Fortnite"])
++
++    def test_multiple_campaigns_grouped_under_one_game(self):
++        campaigns = [
++            FakeCampaign("Rust", ends_in_hours=10),
++            FakeCampaign("Rust", ends_in_hours=1),
++            FakeCampaign("Fortnite", ends_in_hours=5),
++        ]
++        tree = self.selector.get_wanted_game_tree(make_settings(), campaigns)
++        self.assertEqual(len(tree), 2)
++        # Rust's soonest-ending campaign (1h) sorts it before Fortnite (5h)
++        self.assertEqual(tree[0]["game_name"], "Rust")
++        self.assertEqual(len(tree[0]["campaigns"]), 2)
++
++    def test_tree_entries_carry_campaign_details(self):
++        campaign = FakeCampaign("Rust")
++        tree = self.selector.get_wanted_game_tree(make_settings(), [campaign])
++        self.assertEqual(len(tree), 1)
++        entry = tree[0]["campaigns"][0]
++        self.assertEqual(entry["id"], campaign.id)
++        self.assertEqual(entry["name"], campaign.name)
++        self.assertEqual(entry["url"], campaign.campaign_url)
++        self.assertEqual(len(entry["drops"]), 1)
++        # the public tree omits the game object
++        self.assertIsNone(tree[0]["game_obj"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_wanted_games_filter.py b/tests/test_wanted_games_filter.py
+index 099864f..b173e05 100644
+--- a/tests/test_wanted_games_filter.py
++++ b/tests/test_wanted_games_filter.py
+@@ -1,4 +1,5 @@
+ import unittest
++from datetime import datetime, timedelta, timezone
+ from unittest.mock import MagicMock
+ 
+ from src.models.campaign import DropsCampaign
+@@ -6,97 +7,70 @@
+ from src.services.stream_selector import StreamSelector
+ 
+ 
++def make_campaign(
++    game_id: int,
++    game_name: str,
++    *,
++    can_earn: bool = True,
++    claimed: bool = False,
++    benefits: list | None = None,
++    ends_in_hours: float = 24.0,
++) -> MagicMock:
++    campaign = MagicMock(spec=DropsCampaign)
++    campaign.id = f"{game_name}-campaign"
++    campaign.name = f"{game_name} Campaign"
++    campaign.campaign_url = "http://test.url"
++    campaign.game = Game({"id": game_id, "name": game_name})
++    campaign.can_earn_within.return_value = can_earn
++    campaign.ends_at = datetime.now(timezone.utc) + timedelta(hours=ends_in_hours)
++    drop = MagicMock()
++    drop.name = "Test Drop"
++    drop.is_claimed = claimed
++    drop.get_wanted_unclaimed_benefits.return_value = (
++        benefits if benefits is not None else ["Benefit"]
++    )
++    campaign.drops = [drop]
++    return campaign
++
++
+ class TestWantedGamesFilter(unittest.TestCase):
+     def setUp(self):
+         # Mock Settings
+         self.settings = MagicMock()
+-        self.settings.games_to_watch = ["Game1", "Game2"]
++        self.settings.priority_games = ["Game1", "Game2"]
+         self.settings.mining_benefits = {
+             "BADGE": True,
+             "DIRECT_ENTITLEMENT": True,
+         }  # both allowed by default
+ 
+     def test_filter_wanted_campaigns(self):
+-        # Setup Campaigns
+-
+-        # Campaign 1: Game1, Can Earn, Has Wanted Benefits -> Should be selected
+-        c1 = MagicMock(spec=DropsCampaign)
+-        c1.game = Game({"id": 1, "name": "Game1"})
+-        c1.can_earn_within.return_value = True
+-        c1.id = "123"
+-        c1.name = "Test Campaign"
+-        c1.campaign_url = "http://test.url"
+-        d1 = MagicMock()
+-        d1.name = "Test Drop"
+-        d1.is_claimed = False
+-        d1.get_wanted_unclaimed_benefits.return_value = ["Benefit1"]
+-        c1.drops = [d1]
+-        c1.has_wanted_unclaimed_benefits.side_effect = (
+-            DropsCampaign.has_wanted_unclaimed_benefits.__get__(c1, DropsCampaign)
+-        )
++        # Campaign 1: Game1 (priority), Can Earn, Has Wanted Benefits -> selected first
++        c1 = make_campaign(1, "Game1")
++        # Campaign 2: Game2 (priority), Can Earn, NO Wanted Benefits -> NOT selected
++        c2 = make_campaign(2, "Game2", benefits=[])
++        # Campaign 3: Game3 (not in priority list), Can Earn, Has Benefits
++        # -> still selected, but after the priority games
++        c3 = make_campaign(3, "Game3")
++        # Campaign 4: Game4, Can Earn, only claimed drops -> NOT selected
++        c4 = make_campaign(4, "Game4", claimed=True)
++        # Campaign 5: Game5, Can Not Earn, Has Wanted Benefits -> NOT selected
++        c5 = make_campaign(5, "Game5", can_earn=False)
+ 
+-        # Campaign 2: Game2, Can Earn, NO Wanted Benefits -> Should NOT be selected
+-        c2 = MagicMock(spec=DropsCampaign)
+-        c2.game = Game({"id": 2, "name": "Game2"})
+-        c2.can_earn_within.return_value = True
+-        d2 = MagicMock()
+-        d2.is_claimed = False
+-        d2.get_wanted_unclaimed_benefits.return_value = []
+-        c2.drops = [d2]
+-        c2.has_wanted_unclaimed_benefits.side_effect = (
+-            DropsCampaign.has_wanted_unclaimed_benefits.__get__(c2, DropsCampaign)
+-        )
+-
+-        # Campaign 3: Game3 (Not in games_to_watch), Can Earn, Has Benefits -> Should NOT be selected
+-        c3 = MagicMock(spec=DropsCampaign)
+-        c3.game = Game({"id": 3, "name": "Game3"})
+-        c3.can_earn_within.return_value = True
+-        d3 = MagicMock()
+-        d3.is_claimed = False
+-        d3.get_wanted_unclaimed_benefits.return_value = ["Benefit3"]
+-        c3.drops = [d3]
+-        c3.has_wanted_unclaimed_benefits.side_effect = (
+-            DropsCampaign.has_wanted_unclaimed_benefits.__get__(c3, DropsCampaign)
+-        )
++        inventory = [c1, c2, c3, c4, c5]
++        stream_selector = StreamSelector()
++        wanted_games = stream_selector.get_wanted_games(self.settings, inventory)
+ 
+-        # Campaign 4: Game1, Can Earn, Has Claimed Wanted Benefits -> Should NOT be selected
+-        c4 = MagicMock(spec=DropsCampaign)
+-        c4.game = Game({"id": 1, "name": "Game1"})
+-        c4.can_earn_within.return_value = True
+-        c4.id = "123"
+-        c4.name = "Test Campaign"
+-        c4.campaign_url = "http://test.url"
+-        d4 = MagicMock()
+-        d4.name = "Test Drop"
+-        d4.is_claimed = True
+-        d4.get_wanted_unclaimed_benefits.return_value = ["Benefit4"]
+-        c4.drops = [d4]
+-        c4.has_wanted_unclaimed_benefits.side_effect = (
+-            DropsCampaign.has_wanted_unclaimed_benefits.__get__(c4, DropsCampaign)
+-        )
++        self.assertEqual([game.name for game in wanted_games], ["Game1", "Game3"])
+ 
+-        # Campaign 5: Game1, Can Not Earn, Has Wanted Benefits -> Should NOT be selected
+-        c5 = MagicMock(spec=DropsCampaign)
+-        c5.game = Game({"id": 1, "name": "Game1"})
+-        c5.can_earn_within.return_value = False
+-        c5.id = "123"
+-        c5.name = "Test Campaign"
+-        c5.campaign_url = "http://test.url"
+-        d5 = MagicMock()
+-        d5.name = "Test Drop"
+-        d5.is_claimed = False
+-        d5.get_wanted_unclaimed_benefits.return_value = ["Benefit5"]
+-        c5.drops = [d5]
+-        c5.has_wanted_unclaimed_benefits.side_effect = (
+-            DropsCampaign.has_wanted_unclaimed_benefits.__get__(c5, DropsCampaign)
+-        )
++    def test_priority_game_outranks_sooner_ending_campaign(self):
++        # Game9 ends sooner, but Game1 is in the priority list and must come first
++        c1 = make_campaign(1, "Game1", ends_in_hours=100)
++        c9 = make_campaign(9, "Game9", ends_in_hours=1)
+ 
+-        inventory = [c1, c2, c3, c4, c5]
+         stream_selector = StreamSelector()
+-        wanted_games = stream_selector.get_wanted_games(self.settings, inventory)
++        wanted_games = stream_selector.get_wanted_games(self.settings, [c9, c1])
+ 
+-        self.assertEqual(len(wanted_games), 1)
+-        self.assertEqual(wanted_games[0].name, "Game1")
++        self.assertEqual([game.name for game in wanted_games], ["Game1", "Game9"])
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/tests/test_wanted_items.py b/tests/test_wanted_items.py
+index 0f49a73..063ee7f 100644
+--- a/tests/test_wanted_items.py
++++ b/tests/test_wanted_items.py
+@@ -1,4 +1,5 @@
+ import unittest
++from datetime import datetime, timedelta, timezone
+ from unittest.mock import MagicMock
+ 
+ from src.core.client import Twitch
+@@ -28,8 +29,9 @@ def setUp(self):
+ 
+     def test_get_wanted_tree(self):
+         # Setup Settings
+-        self.twitch.settings.games_to_watch = ["Game1", "Game2"]
++        self.twitch.settings.priority_games = ["Game1", "Game2"]
+         self.twitch.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": False}
++        ends_at = datetime.now(timezone.utc) + timedelta(hours=24)
+ 
+         # Setup Inventory
+ 
+@@ -40,6 +42,7 @@ def test_get_wanted_tree(self):
+         c1.campaign_url = "http://url1"
+         c1.game = Game({"id": 1, "name": "Game1", "boxArtURL": "http://img1"})
+         c1.can_earn_within.return_value = True
++        c1.ends_at = ends_at
+ 
+         d1 = MagicMock(spec=TimedDrop)
+         d1.name = "Drop1"
+@@ -61,6 +64,7 @@ def test_get_wanted_tree(self):
+         c2.campaign_url = "http://url2"
+         c2.game = Game({"id": 2, "name": "Game2", "boxArtURL": "http://img2"})
+         c2.can_earn_within.return_value = True
++        c2.ends_at = ends_at
+ 
+         d2 = MagicMock(spec=TimedDrop)
+         d2.name = "Drop2"
+@@ -75,13 +79,15 @@ def test_get_wanted_tree(self):
+         d2.benefits = [b2]
+         c2.drops = [d2]
+ 
+-        # Campaign 3: Game3 (Not in watch list), Drop with BADGE (Wanted but wrong game)
++        # Campaign 3: Game3 (not in priority list), Drop with BADGE
++        # -> now mined too, listed after the priority games
+         c3 = MagicMock(spec=DropsCampaign)
+         c3.id = "c3_id"
+         c3.name = "Campaign3"
+         c3.campaign_url = "http://url3"
+         c3.game = Game({"id": 3, "name": "Game3", "boxArtURL": "http://img3"})
+         c3.can_earn_within.return_value = True
++        c3.ends_at = ends_at
+ 
+         d3 = MagicMock(spec=TimedDrop)
+         d3.name = "Drop3"
+@@ -103,6 +109,7 @@ def test_get_wanted_tree(self):
+         c4.campaign_url = "http://url4"
+         c4.game = Game({"id": 1, "name": "Game1", "boxArtURL": "http://img1"})
+         c4.can_earn_within.return_value = False
++        c4.ends_at = ends_at
+ 
+         d4 = MagicMock(spec=TimedDrop)
+         d4.name = "Drop4"
+@@ -124,10 +131,12 @@ def test_get_wanted_tree(self):
+         print(result)
+ 
+         # Verify
+-        # Expected: Game1 only
+-        self.assertEqual(len(result), 1)
++        # Expected: Game1 (priority) first, then Game3 (not in the list, still mined).
++        # Game2's only campaign has no wanted benefits, so it's excluded.
++        self.assertEqual(len(result), 2)
+         self.assertEqual(result[0]["game_name"], "Game1")
+         self.assertEqual(result[0]["game_icon"], "http://img1")
++        self.assertEqual(result[1]["game_name"], "Game3")
+ 
+         campaigns = result[0]["campaigns"]
+         self.assertEqual(len(campaigns), 1)
+@@ -138,7 +147,7 @@ def test_get_wanted_tree(self):
+ 
+     def test_get_wanted_tree_claimed_filtering(self):
+         # Setup Settings
+-        self.twitch.settings.games_to_watch = ["Game1"]
++        self.twitch.settings.priority_games = ["Game1"]
+         self.twitch.settings.mining_benefits = {"BADGE": True}
+ 
+         # Setup Inventory
+diff --git a/web/index.html b/web/index.html
+index f2446b9..d368c75 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -231,24 +231,24 @@ <h2 id="settings-benefits-header">Mining Benefits</h2>
+                 </section>
+ 
+                 <section class="settings-section">
+-                    <h2 id="settings-games-header">Games to Watch</h2>
+-                    <p id="settings-games-help" class="help-text">Select games to watch. Order matters - drag to
+-                        reorder
+-                        priority (top = highest
++                    <h2 id="settings-games-header">Priority Games</h2>
++                    <p id="settings-games-help" class="help-text">All games with available campaigns are mined
++                        automatically. Add games here to
++                        prioritize them - drag to reorder (top = highest
+                         priority).</p>
+ 
+                     <div class="games-filter">
+                         <input type="text" id="games-filter" placeholder="Search games..." />
+                         <div class="filter-actions">
+-                            <button id="select-all-btn" class="small-btn">Select All</button>
+-                            <button id="deselect-all-btn" class="small-btn">Deselect All</button>
++                            <button id="select-all-btn" class="small-btn">Prioritize All</button>
++                            <button id="deselect-all-btn" class="small-btn">Clear All</button>
+                             <button id="add-game-btn" class="small-btn">Add Game</button>
+                         </div>
+                     </div>
+ 
+                     <div class="games-container">
+                         <div class="selected-games">
+-                            <h3>Selected Games (drag to reorder)</h3>
++                            <h3>Priority Games (drag to reorder)</h3>
+                             <div id="selected-games-list" class="sortable-list"></div>
+                         </div>
+ 
+@@ -279,15 +279,15 @@ <h3 id="help-howto-header">How to Use</h3>
+                     <li>Login using your Twitch account (OAuth device code flow)</li>
+                     <li>Link your accounts at <a href="https://www.twitch.tv/drops/campaigns"
+                             target="_blank">twitch.tv/drops/campaigns</a></li>
+-                    <li>The miner will automatically discover campaigns and start mining</li>
+-                    <li>Configure priority games in Settings to focus on what you want</li>
++                    <li>The miner will automatically discover campaigns and mine all of them</li>
++                    <li>Configure priority games in Settings to decide what gets mined first</li>
+                     <li>Monitor progress in the Main and Inventory tabs</li>
+                 </ol>
+ 
+                 <h3 id="help-features-header">Features</h3>
+                 <ul>
+                     <li>Stream-less drop mining - saves bandwidth</li>
+-                    <li>Game priority and exclusion lists</li>
++                    <li>Mines all available campaigns, with a game priority list</li>
+                     <li>Tracks up to 199 channels simultaneously</li>
+                     <li>Automatic channel switching</li>
+                     <li>Real-time progress tracking</li>
+diff --git a/web/static/app.js b/web/static/app.js
+index 722ead8..0ecdbe8 100644
+--- a/web/static/app.js
++++ b/web/static/app.js
+@@ -359,29 +359,10 @@ function renderChannels() {
+         return;
+     }
+ 
+-    // Get the games to watch list from settings
+-    const gamesToWatch = state.settings.games_to_watch || [];
+-    const gamesToWatchSet = new Set(gamesToWatch);
+-
+-    // Filter channels to only include those playing games in the watch list
+-    const filteredChannels = channels.filter(channel => {
+-        const gameName = channel.game;
+-        // Include channels if: they have a game AND it's in the watch list
+-        // OR if the watch list is empty (show all)
+-        return gamesToWatch.length === 0 || (gameName && gamesToWatchSet.has(gameName));
+-    });
+-
+-    if (filteredChannels.length === 0) {
+-        const emptyMsg = t.gui?.channels?.no_channels_for_games || 'No channels found for selected games...';
+-        container.replaceChildren(
+-            makeElement('p', { class: 'empty-message' }, emptyMsg),
+-        );
+-        return;
+-    }
+-
++    // All games with available campaigns are mined, so every tracked channel is shown.
+     // Group channels by game
+     const gameGroups = {};
+-    filteredChannels.forEach(channel => {
++    channels.forEach(channel => {
+         const gameName = channel.game || 'No Game';
+         const gameId = channel.game_id || 'no-game';
+         const gameIcon = channel.game_icon;
+@@ -1112,7 +1093,7 @@ function updateSettingsUI(settings) {
+ 
+ 
+     // Update games to watch lists
+-    renderGamesToWatch();
++    renderPriorityGames();
+ 
+     // Re-render channels list to apply filter based on updated games to watch
+     renderChannels();
+@@ -1160,11 +1141,11 @@ let draggedElement = null;
+ 
+ socket.on('games_available', (data) => {
+     availableGames = new Set(data.games || []);
+-    renderGamesToWatch();
++    renderPriorityGames();
+ });
+ 
+-function renderGamesToWatch() {
+-    const selectedGames = state.settings.games_to_watch || [];
++function renderPriorityGames() {
++    const selectedGames = state.settings.priority_games || [];
+     const filterText = document.getElementById('games-filter')?.value.toLowerCase() || '';
+ 
+     // Render selected games (sortable)
+@@ -1206,7 +1187,7 @@ function renderSelectedGames(games) {
+ 
+         // Event listener for the delete button
+         const removeBtn = div.querySelector('.remove-btn');
+-        removeBtn.addEventListener('click', () => removeGameFromWatch(game));
++        removeBtn.addEventListener('click', () => removePriorityGame(game));
+ 
+         // Drag event handlers
+         div.addEventListener('dragstart', handleDragStart);
+@@ -1246,7 +1227,7 @@ function renderAvailableGames(games, filterText) {
+         );
+ 
+         const checkbox = label.querySelector('input[type="checkbox"]');
+-        checkbox.addEventListener('change', (e) => toggleGameWatch(game, e.target.checked));
++        checkbox.addEventListener('change', (e) => togglePriorityGame(game, e.target.checked));
+ 
+         container.appendChild(label);
+     });
+@@ -1297,20 +1278,20 @@ function handleDragEnd(e) {
+     const items = container.querySelectorAll('.sortable-item');
+     const newOrder = Array.from(items).map(item => item.dataset.game);
+ 
+-    state.settings.games_to_watch = newOrder;
++    state.settings.priority_games = newOrder;
+ 
+     // Re-render to update priority numbers
+     renderSelectedGames(newOrder);
+ 
+-    // Re-render channels list to apply updated filter
++    // Re-render channels list (grouping order follows priority)
+     renderChannels();
+ 
+     // Save settings
+     saveSettings();
+ }
+ 
+-function toggleGameWatch(gameName, checked) {
+-    const games = state.settings.games_to_watch || [];
++function togglePriorityGame(gameName, checked) {
++    const games = state.settings.priority_games || [];
+ 
+     if (checked && !games.includes(gameName)) {
+         games.push(gameName);
+@@ -1321,34 +1302,34 @@ function toggleGameWatch(gameName, checked) {
+         }
+     }
+ 
+-    state.settings.games_to_watch = games;
+-    renderGamesToWatch();
++    state.settings.priority_games = games;
++    renderPriorityGames();
+     renderChannels();
+     saveSettings();
+ }
+ 
+-function removeGameFromWatch(gameName) {
+-    const games = state.settings.games_to_watch || [];
++function removePriorityGame(gameName) {
++    const games = state.settings.priority_games || [];
+     const index = games.indexOf(gameName);
+     if (index > -1) {
+         games.splice(index, 1);
+-        state.settings.games_to_watch = games;
+-        renderGamesToWatch();
++        state.settings.priority_games = games;
++        renderPriorityGames();
+         renderChannels();
+         saveSettings();
+     }
+ }
+ 
+-function selectAllGames() {
+-    state.settings.games_to_watch = Array.from(availableGames).sort();
+-    renderGamesToWatch();
++function prioritizeAllGames() {
++    state.settings.priority_games = Array.from(availableGames).sort();
++    renderPriorityGames();
+     renderChannels();
+     saveSettings();
+ }
+ 
+-function deselectAllGames() {
+-    state.settings.games_to_watch = [];
+-    renderGamesToWatch();
++function deprioritizeAllGames() {
++    state.settings.priority_games = [];
++    renderPriorityGames();
+     renderChannels();
+     saveSettings();
+ }
+@@ -1361,25 +1342,25 @@ function addGameFromSearch() {
+         return;
+     }
+ 
+-    const games = state.settings.games_to_watch || [];
++    const games = state.settings.priority_games || [];
+     
+     // Check if already selected
+     if (games.includes(gameName)) {
+         searchInput.value = ''; // Clear input if already added
+-        renderGamesToWatch(); // Just re-render to clear any filtering state if needed
++        renderPriorityGames(); // Just re-render to clear any filtering state if needed
+         return;
+     }
+ 
+     // Add to selected games
+     games.push(gameName);
+-    state.settings.games_to_watch = games;
++    state.settings.priority_games = games;
+ 
+     // Add to available games set so it shows up in lists
+     availableGames.add(gameName);
+ 
+     // Clear search and update UI
+     searchInput.value = '';
+-    renderGamesToWatch();
++    renderPriorityGames();
+     renderChannels();
+     saveSettings();
+ }
+@@ -1515,7 +1496,7 @@ async function saveSettings() {
+         connection_quality: parseInt(document.getElementById('connection-quality').value),
+         minimum_refresh_interval_minutes: parseInt(document.getElementById('minimum-refresh-interval').value),
+         proxy: state.settings.proxy || '',
+-        games_to_watch: state.settings.games_to_watch || [],
++        priority_games: state.settings.priority_games || [],
+         inventory_filters: getInventoryFilters(),
+         mining_benefits: {
+             "DIRECT_ENTITLEMENT": document.getElementById('mining-benefit-item')?.checked,
+@@ -1687,7 +1668,7 @@ function applyTranslations(t) {
+         if (benefitsHeader && t.gui.settings.mining_benefits) benefitsHeader.textContent = t.gui.settings.mining_benefits;
+ 
+         const gamesHeader = document.getElementById('settings-games-header');
+-        if (gamesHeader) gamesHeader.textContent = t.gui.settings.games_to_watch;
++        if (gamesHeader) gamesHeader.textContent = t.gui.settings.priority_games;
+ 
+         const actionsHeader = document.getElementById('settings-actions-header');
+         if (actionsHeader) actionsHeader.textContent = t.gui.settings.actions;
+@@ -1742,7 +1723,7 @@ function applyTranslations(t) {
+         if (reloadBtn) reloadBtn.textContent = t.gui.settings.reload_campaigns;
+ 
+         // Re-render games to watch with translated empty messages
+-        renderGamesToWatch();
++        renderPriorityGames();
+     }
+ 
+     // Update Help tab
+@@ -1973,10 +1954,10 @@ document.addEventListener('DOMContentLoaded', () => {
+ 
+ 
+     // Games to watch management
+-    document.getElementById('select-all-btn').addEventListener('click', selectAllGames);
+-    document.getElementById('deselect-all-btn').addEventListener('click', deselectAllGames);
++    document.getElementById('select-all-btn').addEventListener('click', prioritizeAllGames);
++    document.getElementById('deselect-all-btn').addEventListener('click', deprioritizeAllGames);
+     document.getElementById('add-game-btn').addEventListener('click', addGameFromSearch);
+-    document.getElementById('games-filter').addEventListener('input', renderGamesToWatch);
++    document.getElementById('games-filter').addEventListener('input', renderPriorityGames);
+ 
+     // Inventory filters
+     document.getElementById('filter-active').addEventListener('change', onInventoryFilterChange);

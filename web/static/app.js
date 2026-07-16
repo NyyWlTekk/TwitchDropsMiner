@@ -309,6 +309,7 @@ socket.on('wanted_items_update', (data) => {
 });
 
 // ==================== UI Update Functions ====================
+//================================================================
 
 function updateStatus(status) {
     document.getElementById('status-text').textContent = status;
@@ -592,6 +593,41 @@ function updateDrop(campaignId, dropData) {
 
 // ==================== Inventory Filtering ====================
 
+function sortCampaigns(campaigns) {
+
+    const now = Date.now();
+    return [...campaigns].sort((a, b) => {
+        if (a.active !== b.active) return a.active ? -1 : 1;
+        
+        // Active: Sort by ending soonest
+        if (a.active) {
+            const dateA = a.ends_at ? new Date(a.ends_at).getTime() : Infinity;
+            const dateB = b.ends_at ? new Date(b.ends_at).getTime() : Infinity;
+            return dateA - dateB;
+        }
+        
+        const statusA = getCampaignStatus(a, now);
+        const statusB = getCampaignStatus(b, now);
+        
+        // Upcoming: Prioritize over expired/finished
+        if (statusA.isUpcoming !== statusB.isUpcoming) {
+            return statusA.isUpcoming ? -1 : 1;
+        }
+        
+        // Both upcoming: Sort by starting soonest
+        if (statusA.isUpcoming) {
+            const startsA = a.starts_at ? new Date(a.starts_at).getTime() : Infinity;
+            const startsB = b.starts_at ? new Date(b.starts_at).getTime() : Infinity;
+            return startsA - startsB;
+        }
+        
+        // Both expired/finished: Sort by recently ended
+        const endsAtA = a.ends_at ? new Date(a.ends_at).getTime() : 0;
+        const endsAtB = b.ends_at ? new Date(b.ends_at).getTime() : 0;
+        return endsAtB - endsAtA;
+    });
+}
+
 function getInventoryFilters() {
     // Get filter state from UI checkboxes and selected games array
     return {
@@ -605,81 +641,113 @@ function getInventoryFilters() {
         show_benefit_item: document.getElementById('filter-benefit-item')?.checked !== false,
         show_benefit_badge: document.getElementById('filter-benefit-badge')?.checked !== false,
         show_benefit_emote: document.getElementById('filter-benefit-emote')?.checked !== false,
-        show_benefit_other: document.getElementById('filter-benefit-other')?.checked !== false
+        show_benefit_other: document.getElementById('filter-benefit-other')?.checked !== false,
     };
 }
 
+// 1. Determines the precise lifecycle state of a campaign
+// Helper to determine campaign status using both time and API flags
+function getCampaignStatus(campaign, now = Date.now()) {
+    const startsAt = campaign.starts_at ? new Date(campaign.starts_at).getTime() : 0;
+    const endsAt = campaign.ends_at ? new Date(campaign.ends_at).getTime() : 0;
 
-function campaignMatchesFilters(campaign, filters) {
-    // Calculate "finished" status: all drops claimed
-    const isFinished = campaign.total_drops > 0 && campaign.claimed_drops === campaign.total_drops;
+    // Check upcoming by local time OR by Twitch API flags
+    const isUpcoming = (startsAt > now) || 
+                            (campaign.status === 'UPCOMING') || 
+                            (campaign.upcoming === true);
 
-    // Check if any filter is enabled
-    const hasGameFilter = filters.game_name_search && filters.game_name_search.length > 0;
-    const anyFilterEnabled = filters.show_active || filters.show_not_linked ||
-        filters.show_upcoming || filters.show_expired ||
-        filters.show_finished || hasGameFilter;
+    // Check active by local time OR by Twitch API flags (must not be upcoming)
+    const isActive = (((startsAt <= now && endsAt > now) || 
+                      (campaign.status === 'ACTIVE') || 
+                      (campaign.active === true)) && !isUpcoming);
 
-    // If no filters enabled, show all campaigns
-    if (!anyFilterEnabled) {
-        return true;
+    const isExpired = (endsAt > 0 && endsAt <= now) || (campaign.status === 'EXPIRED');
+    const isFinished = campaign.claimed_drops >= campaign.total_drops;
+
+    return {
+        isActive,
+        isUpcoming,
+        isExpired,
+        isFinished
+    };
+}
+
+// 2. Checks if a campaign matches status checkboxes
+function matchesStatusFilters(campaign, filters, status) {
+    const hasAnyFilter = filters.show_active || filters.show_not_linked ||
+                         filters.show_upcoming || filters.show_expired || 
+                         filters.show_finished;
+    
+    if (!hasAnyFilter) return true;
+
+    // 1. Time status check (Active, Upcoming, Expired, Finished)
+    const hasTimeFilter = filters.show_active || filters.show_upcoming || 
+                          filters.show_expired || filters.show_finished;
+    
+    let matchesTime = !hasTimeFilter; // Default to true if no time filter is selected
+    if (hasTimeFilter) {
+        if (filters.show_finished && status.isFinished) matchesTime = true;
+        if (filters.show_expired && status.isExpired && !status.isFinished) matchesTime = true;
+        
+        // TADY: Pokud je zaškrtnuté Upcoming a kampaň je podle času vyhodnocena jako nadcházející
+        if (filters.show_upcoming && status.isUpcoming && !status.isFinished) matchesTime = true;
+        
+        if (filters.show_active && status.isActive && !status.isFinished && !status.isUpcoming) matchesTime = true;
     }
 
-    // Check status filters (OR logic - campaign matches if ANY checked filter applies)
-    let statusMatch = false;
-
-    if (filters.show_active && campaign.active) statusMatch = true;
-    if (filters.show_not_linked && !campaign.linked) statusMatch = true;
-    if (filters.show_upcoming && campaign.upcoming) statusMatch = true;
-    if (filters.show_expired && campaign.expired) statusMatch = true;
-    if (filters.show_finished && isFinished) statusMatch = true;
-
-    // If status filters are enabled but campaign doesn't match any, filter it out
-    const hasStatusFilters = filters.show_active || filters.show_not_linked ||
-        filters.show_upcoming || filters.show_expired ||
-        filters.show_finished;
-    if (hasStatusFilters && !statusMatch) {
-        return false;
-    }
-
-    // Check game name filter (AND logic with status filters, OR logic among selected games)
-    if (hasGameFilter) {
-        const gameName = campaign.game_name;
-        // Campaign must match at least ONE of the selected games
-        const gameMatch = filters.game_name_search.includes(gameName);
-        if (!gameMatch) {
-            return false;
+    // 2. Connection status check (Not Linked)
+    let matchesLink = true;
+    if (!campaign.linked) {
+        matchesLink = filters.show_not_linked;
+    } else {
+        if (filters.show_not_linked && !hasTimeFilter) {
+            matchesLink = false;
         }
     }
 
-    // Check benefit type filter - campaign must have at least one drop with a matching benefit type
-    // Only filter if at least one benefit type is UNCHECKED (otherwise show all)
+    return matchesTime && matchesLink;
+}
+
+// 3. Checks if a campaign matches the search query
+function matchesGameFilter(campaign, filters) {
+    if (!filters.game_name_search || filters.game_name_search.length === 0) return true;
+    return filters.game_name_search.includes(campaign.game_name);
+}
+
+// 4. Checks if a campaign has drops matching selected reward types
+function matchesBenefitFilter(campaign, filters) {
     const allBenefitsEnabled = filters.show_benefit_item && filters.show_benefit_badge &&
-        filters.show_benefit_emote && filters.show_benefit_other;
+                               filters.show_benefit_emote && filters.show_benefit_other;
+    
+    if (allBenefitsEnabled || !campaign.drops) return true;
 
-    if (!allBenefitsEnabled && campaign.drops) {
-        let benefitMatch = false;
-        for (const drop of campaign.drops) {
-            if (drop.benefits && drop.benefits.length > 0) {
-                for (const benefit of drop.benefits) {
-                    const benefitType = (benefit.type || '').toUpperCase();
-                    // Map filter checkboxes to actual API benefit types
-                    if (filters.show_benefit_item && benefitType === 'DIRECT_ENTITLEMENT') benefitMatch = true;
-                    if (filters.show_benefit_badge && benefitType === 'BADGE') benefitMatch = true;
-                    if (filters.show_benefit_emote && benefitType === 'EMOTE') benefitMatch = true;
-                    if (filters.show_benefit_other && benefitType === 'UNKNOWN') benefitMatch = true;
-                }
-            }
-        }
-        if (!benefitMatch) {
-            return false;
+    const hasBenefitFilter = filters.show_benefit_item || filters.show_benefit_badge || 
+                             filters.show_benefit_emote || filters.show_benefit_other;
+    if (!hasBenefitFilter) return true;
+
+    for (const drop of campaign.drops) {
+        if (!drop.benefits) continue;
+        for (const benefit of drop.benefits) {
+            const benefitType = (benefit.type || '').toUpperCase();
+            if (filters.show_benefit_item && benefitType === 'DIRECT_ENTITLEMENT') return true;
+            if (filters.show_benefit_badge && benefitType === 'BADGE') return true;
+            if (filters.show_benefit_emote && benefitType === 'EMOTE') return true;
+            if (filters.show_benefit_other && benefitType === 'UNKNOWN') return true;
         }
     }
+    return false;
+}
 
+// Main filter matcher
+function campaignMatchesFilters(campaign, filters) {
+    const status = getCampaignStatus(campaign);
+
+    if (!matchesStatusFilters(campaign, filters, status)) return false;
+    if (!matchesGameFilter(campaign, filters)) return false;
+    if (!matchesBenefitFilter(campaign, filters)) return false;
 
     return true;
 }
-
 
 function onInventoryFilterChange() {
     // Save filter state to settings and re-render inventory
@@ -894,6 +962,208 @@ function handleGameSearchKeydown(event) {
     }
 }
 
+// Renders a single benefit item (icon + name + type)
+function createBenefitItem(benefit) {
+    return makeElement('div', { class: 'benefit-item' }, '', el => {
+        el.appendChild(makeImageElement(benefit.image_url, benefit.name, 'benefit-icon'));
+        el.appendChild(makeElement('div', { class: 'benefit-info' }, '', el2 => {
+            el2.appendChild(makeElement('span', { class: 'benefit-name' }, benefit.name));
+            const isDirectType = benefit.type && benefit.type.toUpperCase() === 'DIRECT_ENTITLEMENT';
+            if (!isDirectType && benefit.type) {
+                el2.appendChild(makeElement('span', { class: 'benefit-type' }, `(${benefit.type})`));
+            }
+        }));
+    });
+}
+
+// Renders a single drop with its progress and benefits
+function createDropItem(drop, t) {
+    const claimedText = t.gui?.inventory?.status?.claimed || 'Claimed';
+    const dropItem = makeElement('div', { class: `drop-item${drop.is_claimed ? ' claimed' : ''}${drop.can_claim ? ' active' : ''}` });
+    
+    // Header
+    dropItem.appendChild(
+        makeElement('div', { class: 'drop-item-header' }, '', el =>
+            el.appendChild(makeElement('div', { class: 'drop-item-info' }, '', el2 =>
+                el2.appendChild(makeElement('div', {}, '', el3 =>
+                    el3.appendChild(makeElement('strong', {}, drop.name))
+                ))
+            ))
+        )
+    );
+    
+    // Benefits list
+    const benefitsList = makeElement('div', { class: 'benefits-list' });
+    if (drop.benefits && drop.benefits.length > 0) {
+        drop.benefits.forEach(benefit => {
+            benefitsList.appendChild(createBenefitItem(benefit));
+        });
+    }
+    dropItem.appendChild(benefitsList);
+
+    // Delivery and progress
+    const isDirect = drop.delivery_method === 'DIRECT_ENTITLEMENT' || 
+                     drop.deliveryMethod === 'DIRECT_ENTITLEMENT' || 
+                     !drop.required_minutes;
+
+    if (!isDirect) {
+        const progressPercent = Math.round((drop.progress || 0) * 100);
+        dropItem.appendChild(makeElement('div', {}, `${drop.current_minutes || 0} / ${drop.required_minutes} minutes (${progressPercent}%)`));
+    } else {
+        dropItem.appendChild(makeElement('div', { class: 'drop-direct-badge' }, '✦ Instant / Direct Reward'));
+    }
+
+    if (drop.is_claimed) {
+        dropItem.appendChild(makeElement('div', {}, `✓ ${claimedText}`));
+    }
+
+    return dropItem;
+}
+
+// Renders the wrapper for all drops in a campaign
+function createDropsContainer(drops, t) {
+    const container = makeElement('div', { class: 'campaign-drops' });
+    drops.forEach(drop => {
+        container.appendChild(createDropItem(drop, t));
+    });
+    return container;
+}
+
+// Renders the top header of a campaign card (Game art, linking state, external links)
+function createCampaignHeader(campaign) {
+    const linkStatusBadge = campaign.linked
+        ? makeElement('span', { class: 'campaign-badge linked', title: 'Account is linked' }, 'LINKED')
+        : makeElement('span', { class: 'campaign-badge not-linked', title: 'Click to link your account' }, 'NOT LINKED', el => {
+            el.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
+        });
+
+    const campaignGameDiv = makeElement('div', { class: 'campaign-game' }, '', el => {
+        if (campaign.game_box_art_url) {
+            const iconUrl = campaign.game_box_art_url.replace('{width}', '52').replace('{height}', '70');
+            el.appendChild(makeImageElement(iconUrl, campaign.game_name, 'game-icon'));
+        }
+        el.appendChild(makeElement('span', { class: 'campaign-game-name' }, campaign.game_name));
+        el.appendChild(linkStatusBadge);
+    });
+
+    const campaignNameLink = makeElement('a', { 
+        href: campaign.campaign_url, 
+        target: '_blank', 
+        rel: 'noopener noreferrer', 
+        class: 'campaign-name-link' 
+    }, campaign.name, el => el.appendChild(makeElement('span', { class: 'external-link-icon' }, '🔗')));
+
+    return makeElement('div', { class: 'campaign-header' }, '', el => {
+        el.appendChild(campaignGameDiv);
+        el.appendChild(campaignNameLink);
+        if (!campaign.linked && campaign.link_url) {
+            el.appendChild(makeElement('button', { class: 'link-account-btn' }, 'Link Account', btn => {
+                btn.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
+            }));
+        }
+    });
+}
+
+// Renders a completed campaign card
+function createCampaignCard(campaign, t) {
+    const status = getCampaignStatus(campaign);
+    let statusClass = '';
+    let statusText = '';
+
+    if (status.isActive) {
+        statusClass = 'active';
+        statusText = t.gui?.inventory?.status?.active || 'Active';
+    } else if (status.isUpcoming) {
+        statusClass = 'upcoming';
+        statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
+    } else if (status.isExpired) {
+        statusClass = 'expired';
+        statusText = t.gui?.inventory?.status?.expired || 'Expired';
+    }
+
+    const card = document.createElement('div');
+    card.className = `campaign-card ${statusClass}`;
+
+    const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
+    const campaignStatus = makeElement('div', { class: 'campaign-status' }, '', el => {
+        el.appendChild(makeElement('span', {}, statusText));
+        el.appendChild(makeElement('span', {}, `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
+    });
+
+    // Create the header and dynamically append status indicators (checkmark/cross/clock) to the game name
+    const header = createCampaignHeader(campaign);
+    const gameNameEl = header.querySelector('.game-name') || header.querySelector('span');
+    
+    if (gameNameEl) {
+        const badgeContainer = document.createElement('span');
+        badgeContainer.className = 'campaign-status-indicators';
+        badgeContainer.style.marginLeft = '8px';
+        badgeContainer.style.display = 'inline-flex';
+        badgeContainer.style.gap = '6px';
+        badgeContainer.style.alignItems = 'center';
+
+        // 1. Add green SVG circle-checkmark if the campaign is fully finished/claimed
+        if (status.isFinished) {
+            const check = document.createElement('span');
+            check.style.display = 'inline-flex';
+            check.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="m9 12 2 2 4-4"/>
+                </svg>
+            `;
+            badgeContainer.appendChild(check);
+        }
+
+        // 2. Add red SVG circle-cross if the campaign has expired
+        if (status.isExpired) {
+            const cross = document.createElement('span');
+            cross.style.display = 'inline-flex';
+            cross.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e74c3c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="m15 9-6 6"/>
+                    <path d="m9 9 6 6"/>
+                </svg>
+            `;
+            badgeContainer.appendChild(cross);
+        }
+
+        // 3. Add orange SVG circle-clock if the campaign is currently active
+        if (status.isActive) {
+            const clock = document.createElement('span');
+            clock.style.display = 'inline-flex';
+            clock.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f1c40f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 2px rgba(241, 196, 15, 0.5)); vertical-align: middle;">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+            `;
+            badgeContainer.appendChild(clock);
+        }
+
+        if (badgeContainer.hasChildNodes()) {
+            gameNameEl.appendChild(badgeContainer);
+        }
+    }
+
+    card.replaceChildren(header, campaignStatus);
+
+    // Render both Start and End times if they exist in the campaign data
+    if (campaign.starts_at) {
+        const startsLabel = t.gui?.inventory?.starts || 'Starts: {time}';
+        card.appendChild(makeElement('div', { class: 'campaign-timing' }, startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())));
+    }
+    
+    if (campaign.ends_at) {
+        const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
+        card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
+    }
+
+    card.appendChild(createDropsContainer(campaign.drops, t));
+    return card;
+}
+
 function renderInventory() {
     const container = document.getElementById('inventory-grid');
     container.innerHTML = '';
@@ -901,130 +1171,34 @@ function renderInventory() {
     const t = state.translations;
     const allCampaigns = Object.values(state.campaigns);
 
-    // Apply filters
     const filters = getInventoryFilters();
-    const campaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
+    const hasStatusFilter = filters.show_active || filters.show_not_linked ||
+                            filters.show_upcoming || filters.show_expired || 
+                            filters.show_finished;
 
+    if (!hasStatusFilter) return;
+
+    // 1. Filter
+    const filteredCampaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
+    
+    // 2. Sort
+    const sortedCampaigns = sortCampaigns(filteredCampaigns);
+
+    // 3. Handle Empty States
     if (allCampaigns.length === 0) {
         const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
         container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
         return;
     }
 
-    if (campaigns.length === 0) {
+    if (sortedCampaigns.length === 0) {
         container.replaceChildren(makeElement('p', { class: 'empty-message' }, 'No campaigns match the current filters.'));
         return;
     }
 
-    campaigns.forEach(campaign => {
-        const card = document.createElement('div');
-        card.className = 'campaign-card';
-
-        let statusClass = '';
-        let statusText = '';
-        if (campaign.active) {
-            statusClass = 'active';
-            statusText = t.gui?.inventory?.status?.active || 'Active';
-        } else if (campaign.upcoming) {
-            statusClass = 'upcoming';
-            statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
-        } else if (campaign.expired) {
-            statusClass = 'expired';
-            statusText = t.gui?.inventory?.status?.expired || 'Expired';
-        }
-
-        const claimedText = t.gui?.inventory?.status?.claimed || 'Claimed';
-        const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
-
-        // Build drops elements
-        const dropsEl = makeElement('div', { class: 'campaign-drops' });
-        campaign.drops.forEach(drop => {
-            const dropItem = makeElement('div', { class: `drop-item${drop.is_claimed ? ' claimed' : ''}${drop.can_claim ? ' active' : ''}` });
-            dropItem.appendChild(
-                makeElement('div', { class: 'drop-item-header' }, '', el =>
-                    el.appendChild(makeElement('div', { class: 'drop-item-info' }, '', el2 =>
-                        el2.appendChild(makeElement('div', {}, '', el3 =>
-                            el3.appendChild(makeElement('strong', {}, drop.name))
-                        ))
-                    ))
-                )
-            );
-            const benefitsList = makeElement('div', { class: 'benefits-list' });
-            if (drop.benefits && drop.benefits.length > 0) {
-                drop.benefits.forEach(benefit => {
-                    benefitsList.appendChild(
-                        makeElement('div', { class: 'benefit-item' }, '', el => {
-                            el.appendChild(makeImageElement(benefit.image_url, benefit.name, 'benefit-icon'));
-                            el.appendChild(makeElement('div', { class: 'benefit-info' }, '', el2 => {
-                                el2.appendChild(makeElement('span', { class: 'benefit-name' }, benefit.name));
-                                el2.appendChild(makeElement('span', { class: 'benefit-type' }, `(${benefit.type})`));
-                            }));
-                        })
-                    );
-                });
-            }
-            dropItem.appendChild(benefitsList);
-            dropItem.appendChild(makeElement('div', {}, `${drop.current_minutes} / ${drop.required_minutes} minutes (${Math.round(drop.progress * 100)}%)`));
-            if (drop.is_claimed) {
-                dropItem.appendChild(makeElement('div', {}, `✓ ${claimedText}`));
-            }
-            dropsEl.appendChild(dropItem);
-        });
-
-        // Campaign name link
-        const campaignNameLink = makeElement('a', { href: campaign.campaign_url, target: '_blank', rel: 'noopener noreferrer', class: 'campaign-name-link' }, campaign.name, el =>
-            el.appendChild(makeElement('span', { class: 'external-link-icon' }, '🔗'))
-        );
-
-        // Linked/not linked badge
-        const linkStatusBadge = campaign.linked
-            ? makeElement('span', { class: 'campaign-badge linked', title: 'Account is linked' }, 'LINKED')
-            : makeElement('span', { class: 'campaign-badge not-linked', title: 'Click to link your account' }, 'NOT LINKED', el => {
-                el.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
-            });
-
-        // Link account button
-        const campaignGameDiv = makeElement('div', { class: 'campaign-game' }, '', el => {
-            if (campaign.game_box_art_url) {
-                const iconUrl = campaign.game_box_art_url.replace('{width}', '52').replace('{height}', '70');
-                el.appendChild(makeImageElement(iconUrl, campaign.game_name, 'game-icon'));
-            }
-            el.appendChild(makeElement('span', { class: 'campaign-game-name' }, campaign.game_name));
-            el.appendChild(linkStatusBadge);
-        });
-
-        const campaignHeader = makeElement('div', { class: 'campaign-header' }, '', el => {
-            el.appendChild(campaignGameDiv);
-            el.appendChild(campaignNameLink);
-            if (!campaign.linked && campaign.link_url) {
-                el.appendChild(makeElement('button', { class: 'link-account-btn' }, 'Link Account', btn => {
-                    btn.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
-                }));
-            }
-        });
-
-        const campaignStatus = makeElement('div', { class: 'campaign-status' }, '', el => {
-            el.appendChild(makeElement('span', {}, statusText));
-            el.appendChild(makeElement('span', {}, `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
-        });
-
-        card.replaceChildren(campaignHeader, campaignStatus);
-
-        // Campaign timing
-        if (campaign.active && campaign.ends_at) {
-            const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
-        } else if (campaign.upcoming && campaign.starts_at) {
-            const startsLabel = t.gui?.inventory?.starts || 'Starts: {time}';
-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())));
-        } else if (campaign.expired && campaign.ends_at) {
-            const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
-        }
-
-        card.appendChild(dropsEl);
-
-        container.appendChild(card);
+    // 4. Render and Append Cards
+    sortedCampaigns.forEach(campaign => {
+        container.appendChild(createCampaignCard(campaign, t));
     });
 }
 
@@ -2001,6 +2175,7 @@ function applyTranslations(t) {
         updateLabel('filter-benefit-badge', f.badge);
         updateLabel('filter-benefit-emote', f.emote);
         updateLabel('filter-benefit-other', f.other);
+        updateLabel('hide-complete-events', f.hide_completed_events);
 
         const clearBtn = document.getElementById('clear-filters-btn');
         if (clearBtn) clearBtn.textContent = f.clear;

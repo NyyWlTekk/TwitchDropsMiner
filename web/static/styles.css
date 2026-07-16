@@ -1704,3 +1704,10 @@ header h1 {
 .game-checkbox input[type="checkbox"]:disabled + span {
     color: var(--text-secondary);
 }
+
+.campaign-card {
+    display: flex;
+    flex-direction: column;
+    /* toto zajistí, že budou všechny karty vysoké jako ten kontejner */
+    height: 100%; 
+}

@@ -36,8 +36,14 @@ class StreamSelector:
 
                 wanted_drops = []
                 for drop in campaign.drops:
+                    # Skip if already claimed
                     if drop.is_claimed:
                         continue
+                    
+                    # Skip if fully watched but stuck/unclaimed (e.g. 30/30 minutes)
+                    if hasattr(drop, "current_minutes") and hasattr(drop, "required_minutes"):
+                        if drop.current_minutes >= drop.required_minutes:
+                            continue
 
                     filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
 

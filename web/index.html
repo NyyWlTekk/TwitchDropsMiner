@@ -148,14 +148,21 @@
                             <input type="checkbox" id="filter-benefit-badge" checked />
                             <span>Badge</span>
                         </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-benefit-emote" checked />
-                            <span>Emote</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-benefit-other" checked />
-                            <span>Other</span>
-                        </label>
+                        <div class="filter-separator"
+                            style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;">
+                        </div>
+						<label class="filter-checkbox">
+							<input type="checkbox" id="filter-benefit-emote" checked disabled />
+							<span>-</span>
+						</label>
+						<label class="filter-checkbox">
+							<input type="checkbox" id="filter-benefit-other" checked disabled />
+							<span>-</span>
+						</label>
+						<label class="filter-checkbox">
+							<input type="checkbox" id="--" checked disabled />
+							<span>-</span>
+						</label>
                     </div>
                     <div class="filter-search">
                         <div class="game-dropdown-container">
@@ -226,11 +233,11 @@
                             <span>Badge</span>
                         </label>
                         <label class="filter-checkbox">
-                            <input type="checkbox" id="mining-benefit-emote" checked />
+                            <input type="checkbox" id="mining-benefit-emote" checked disabled />
                             <span>Emote</span>
                         </label>
                         <label class="filter-checkbox">
-                            <input type="checkbox" id="mining-benefit-unknown" checked />
+                            <input type="checkbox" id="mining-benefit-unknown" checked disabled />
                             <span>Other</span>
                         </label>
                     </div>

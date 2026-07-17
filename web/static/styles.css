@@ -1814,3 +1814,12 @@ header h1 {
 
 /* Ikony v rámci status řádku (dědí od rodiče) */
 .campaign-status .campaign-header-icon { color: inherit; }
+
+.campaign-drop-title {
+    color: #a970ff; /* Fialová barva */
+    font-weight: bold;
+    font-size: 14px;
+    margin: 10px 0 5px 0;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #333; /* Volitelné: jemná linka pod nadpisem */
+}

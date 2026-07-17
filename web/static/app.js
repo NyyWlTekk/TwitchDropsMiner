@@ -1239,21 +1239,16 @@ function createCampaignCard(campaign, t) {
         ));
     }
 
-    // --- B. DROPS BLOK ---
+	// --- B. DROPS BLOK ---
     const dropsBox = makeElement('div', { class: 'campaign-drops' });
 
     if (campaign.drops && campaign.drops.length > 0) {
-        const groupedDrops = campaign.drops.reduce((acc, drop) => {
-            if (!acc[drop.name]) acc[drop.name] = [];
-            acc[drop.name].push(drop);
-            return acc;
-        }, {});
-
-        Object.entries(groupedDrops).forEach(([name, drops]) => {
-            dropsBox.appendChild(makeElement('div', { class: 'drop-group-title' }, name));
-            drops.forEach(drop => {
-                dropsBox.appendChild(createDropBlock(drop, t));
-            });
+        // Tady přidáme název kampaně jako hlavní nadpis pro tuto sekci
+        dropsBox.appendChild(makeElement('div', { class: 'campaign-drop-title' }, campaign.name));
+        
+        // A pod to vypíšeme všechny odměny bez dalšího zbytečného dělení
+        campaign.drops.forEach(drop => {
+            dropsBox.appendChild(createDropBlock(drop, t));
         });
     }
 

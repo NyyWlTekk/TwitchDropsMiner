@@ -101,6 +101,7 @@ class Twitch:
         self._stream_selector: StreamSelector = StreamSelector()
         # Counters
         self.ignored_count = 0
+        self.claimed_count = 0
 
     def _ensure_api_clients(self) -> None:
         """Ensure API clients are initialized."""
@@ -169,6 +170,7 @@ class Twitch:
         while True:
             try:
                 self.ignored_count = 0
+                self.claimed_count = 0
                 self._ensure_api_clients()
                 auth_state = await self.get_auth()
                 await self.websocket.start()

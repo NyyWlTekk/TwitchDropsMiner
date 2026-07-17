@@ -1823,3 +1823,17 @@ header h1 {
     padding-bottom: 5px;
     border-bottom: 1px solid #333; /* Volitelné: jemná linka pod nadpisem */
 }
+
+.drop-block {
+    /* Původní nastavení pro vytažení doprava */
+    margin-right: -15px; 
+    width: calc(100% + 15px); 
+    box-sizing: border-box;
+
+    /* Nové nastavení: zkusíme -15px, aby se bloky "zakously" do sebe */
+    margin-bottom: -8px !important; 
+    margin-top: 0 !important; /* Pojistka, aby to horní bloky neodtlačovaly */
+    
+    position: relative;
+    z-index: 1;
+}

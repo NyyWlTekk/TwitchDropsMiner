@@ -20,6 +20,10 @@ if TYPE_CHECKING:
     from src.web.managers.console import ConsoleOutputManager
 
 
+# ==============================================================================
+# 1. SETTINGS MANAGER CLASS (Zpětně kompatibilní API rozhraní)
+# ==============================================================================
+
 class SettingsManager:
     """Manages application settings in the web interface.
 
@@ -39,80 +43,22 @@ class SettingsManager:
         self._console = console
         self._on_change = on_change
         self._available_games: list[str] = []
+        self._last_logged_games_count: int | None = None
 
     def get_settings(self) -> dict[str, Any]:
-        """Get current settings for display.
-
-        Returns:
-            Dictionary containing all user-configurable settings
-        """
-        settings = vars(self._settings).copy()
-        return settings
+        """Get current settings for display."""
+        return vars(self._settings).copy()
 
     def get_languages(self) -> dict[str, Any]:
-        """Get available languages and current selection.
-
-        Returns:
-            Dictionary with available languages and current language
-        """
+        """Get available languages and current selection."""
         return {
             "available": _.get_languages(),
             "current": _.current_language,
         }
 
-    def _log_change(self, message: str):
-        """Log setting change to both console and system logger."""
-        self._console.print(message)
-
-    def update_settings(self, settings_data: dict[str, Any]):
-        """Update settings from user input.
-
-        Args:
-            settings_data: Dictionary of settings to update
-        """
-        should_trigger_update = False
-        should_trigger_update |= self.check_and_update_setting(
-            "games_to_watch", settings_data.get("games_to_watch"), True
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "dark_mode", settings_data.get("dark_mode")
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "auto_sort_by_end", settings_data.get("auto_sort_by_end")
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "auto_add_all_games", settings_data.get("auto_add_all_games")
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "language", settings_data.get("language"), False, self._set_language
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "connection_quality", settings_data.get("connection_quality")
-        )
-        if "proxy" in settings_data:
-            proxy_value = settings_data["proxy"]
-            should_trigger_update |= self.check_and_update_setting(
-                "proxy",
-                str(proxy_value).strip() if proxy_value else "",
-                True,
-                lambda proxy: self._log_change("Proxy cleared") if proxy == "" else None,
-            )
-        should_trigger_update |= self.check_and_update_setting(
-            "minimum_refresh_interval_minutes",
-            settings_data.get("minimum_refresh_interval_minutes"),
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "inventory_filters", settings_data.get("inventory_filters")
-        )
-        should_trigger_update |= self.check_and_update_setting(
-            "mining_benefits", settings_data.get("mining_benefits"), True
-        )
-
-        self._settings.save()
-        asyncio.create_task(self._broadcaster.emit("settings_updated", self.get_settings()))
-
-        if should_trigger_update and self._on_change:
-            self._on_change()
+    # --- Veřejné API delegované na ploché funkce ---
+    def update_settings(self, settings_data: dict[str, Any]) -> None:
+        update_settings(self, settings_data)
 
     def check_and_update_setting(
         self,
@@ -120,23 +66,136 @@ class SettingsManager:
         new_value: Any,
         should_trigger_update: bool = False,
         action: Callable[[Any], None] = lambda x: None,
-    ):
-        if new_value is None or getattr(self._settings, key, None) == new_value:
-            return False
-        setattr(self._settings, key, new_value)
-        self._log_change(f"Setting changed: {key} = {new_value}")
-        action(new_value)
-        return should_trigger_update
+    ) -> bool:
+        return check_and_update_setting(self, key, new_value, should_trigger_update, action)
 
-    def _set_language(self, language: str):
-        _.set_language(language)
-        # Notify clients that translations need to be reloaded
-        asyncio.create_task(self._broadcaster.emit("language_changed", {"language": language}))
+    def set_games(self, games: set[Game]) -> None:
+        set_games(self, games)
 
-    def set_games(self, games: set[Game]):
-        """Update the list of available games for settings panel."""
-        game_names = sorted([g.name for g in games])
-        self._available_games = game_names
-        self._settings.games_available = game_names
-        self._settings.save()
-        asyncio.create_task(self._broadcaster.emit("games_available", {"games": game_names}))
+    # --- ZPĚTNÁ KOMPATIBILITA: Metody, které aplikace vyžaduje a volá napřímo ---
+    def _log_change(self, message: str) -> None:
+        log_setting_change(self, message)
+
+    def _set_language(self, language: str) -> None:
+        set_language_handler(self, language)
+
+
+# ==============================================================================
+# 2. PLOCHÉ FUNKCE (Samotná logika na úrovni modulu)
+# ==============================================================================
+
+def log_setting_change(manager: SettingsManager, message: str) -> None:
+    """Log setting change to both console and system logger."""
+    manager._console.print(message)
+
+
+def set_language_handler(manager: SettingsManager, language: str) -> None:
+    """Apply the language change and notify the frontend."""
+    _.set_language(language)
+    asyncio.create_task(manager._broadcaster.emit("language_changed", {"language": language}))
+
+
+def set_games(manager: SettingsManager, games: set[Game]) -> None:
+    """Update the list of available games for settings panel."""
+    game_names = sorted([g.name for g in games])
+    manager._available_games = game_names
+    manager._settings.games_available = game_names
+    manager._settings.save()
+    asyncio.create_task(manager._broadcaster.emit("games_available", {"games": game_names}))
+
+
+def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) -> None:
+    """Update settings from user input."""
+    should_trigger_update = False
+    
+    should_trigger_update |= check_and_update_setting(
+        manager, "games_to_watch", settings_data.get("games_to_watch"), True
+    )
+    should_trigger_update |= check_and_update_setting(
+        manager, "dark_mode", settings_data.get("dark_mode")
+    )
+    should_trigger_update |= check_and_update_setting(
+        manager, "auto_sort_by_end", settings_data.get("auto_sort_by_end")
+    )
+    should_trigger_update |= check_and_update_setting(
+        manager, "auto_add_all_games", settings_data.get("auto_add_all_games")
+    )
+    should_trigger_update |= check_and_update_setting(
+        manager, "language", settings_data.get("language"), False, manager._set_language
+    )
+    should_trigger_update |= check_and_update_setting(
+        manager, "connection_quality", settings_data.get("connection_quality")
+    )
+    
+    if "proxy" in settings_data:
+        proxy_value = settings_data["proxy"]
+        should_trigger_update |= check_and_update_setting(
+            manager,
+            "proxy",
+            str(proxy_value).strip() if proxy_value else "",
+            True,
+            lambda proxy: manager._log_change("Proxy cleared") if proxy == "" else None,
+        )
+        
+    should_trigger_update |= check_and_update_setting(
+        manager,
+        "minimum_refresh_interval_minutes",
+        settings_data.get("minimum_refresh_interval_minutes"),
+    )
+    should_trigger_update |= check_and_update_setting(
+        manager, "inventory_filters", settings_data.get("inventory_filters")
+    )
+    should_trigger_update |= check_and_update_setting(
+        manager, "mining_benefits", settings_data.get("mining_benefits"), True
+    )
+
+    manager._settings.save()
+    asyncio.create_task(manager._broadcaster.emit("settings_updated", manager.get_settings()))
+
+    if should_trigger_update and manager._on_change:
+        manager._on_change()
+
+
+def check_and_update_setting(
+    manager: SettingsManager,
+    key: str,
+    new_value: Any,
+    should_trigger_update: bool = False,
+    action: Callable[[Any], None] = lambda x: None,
+) -> bool:
+    """Compare and commit a single settings change, then log and trigger callbacks."""
+    old_value = getattr(manager._settings, key, None)
+    
+    if new_value is None or old_value == new_value:
+        return False
+        
+    setattr(manager._settings, key, new_value)
+    
+    # 1. Logování počtu sledovaných her
+    if key == "games_to_watch" and isinstance(new_value, list):
+        current_count = len(new_value)
+        if manager._last_logged_games_count != current_count:
+            manager._log_change(f"Setting changed: games_to_watch = {current_count} games")
+            manager._last_logged_games_count = current_count
+        
+    # 2. Logování změn v filtrech inventáře
+    elif key == "inventory_filters" and isinstance(old_value, dict) and isinstance(new_value, dict):
+        changes = []
+        all_keys = sorted(set(old_value.keys()) | set(new_value.keys()))
+        for k in all_keys:
+            old_val = old_value.get(k)
+            new_val = new_value.get(k)
+            if old_val != new_val:
+                changes.append(f"{k}: {old_val} -> {new_val}")
+        
+        if changes:
+            manager._log_change(f"Setting changed: inventory_filters updated -> " + ", ".join(changes))
+        else:
+            manager._log_change(f"Setting changed: {key} = {new_value}")
+            
+    # 3. Fallback pro běžná nastavení
+    else:
+        manager._log_change(f"Setting changed: {key} = {new_value}")
+        
+    action(new_value)
+    return should_trigger_update

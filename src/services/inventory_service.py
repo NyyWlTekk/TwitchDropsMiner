@@ -103,7 +103,7 @@ class InventoryService:
         status_update(_.t["gui"]["status"]["fetching_inventory"])
 
         # fetch in-progress campaigns (inventory)
-        response = await self._twitch.gql_request(GQL_OPERATIONS["Inventory"])
+        response = await self._twitch.gql_request(GQL_OPERATIONS["Inventory"])        
         inventory: JsonType = response["data"]["currentUser"]["inventory"]
         ongoing_campaigns: list[JsonType] = inventory["dropCampaignsInProgress"] or []
 
@@ -167,6 +167,10 @@ class InventoryService:
 
         # add the campaigns to the internal inventory
         for campaign in campaigns:
+            # Force sync all drops in this campaign to API state upon inventory refresh
+            for drop in campaign.drops:
+                drop.sync_minutes(drop.current_minutes)
+
             self._twitch._drops.update({drop.id: drop for drop in campaign.drops})
             if campaign.can_earn_within(next_hour):
                 switch_triggers.update(campaign.time_triggers)

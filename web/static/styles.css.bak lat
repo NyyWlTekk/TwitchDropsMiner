@@ -217,6 +217,7 @@ header h1 {
     border-color: var(--accent-color);
 }
 
+/* Tab Content */
 .tab-content {
     display: none;
 }
@@ -250,11 +251,28 @@ header h1 {
     min-height: 70vh;
 }
 
-.login-panel { grid-column: 1; }
-.progress-panel { grid-column: 2; }
-.console-panel { grid-column: 1; grid-row: 2; }
-.channels-panel { grid-column: 2; grid-row: 2; }
-.wanted-panel { grid-column: 1 / -1; grid-row: 3; }
+.login-panel {
+    grid-column: 1;
+}
+
+.progress-panel {
+    grid-column: 2;
+}
+
+.console-panel {
+    grid-column: 1;
+    grid-row: 2;
+}
+
+.channels-panel {
+    grid-column: 2;
+    grid-row: 2;
+}
+
+.wanted-panel {
+    grid-column: 1 / -1;
+    grid-row: 3;
+}
 
 /* Login */
 #login-form input {
@@ -654,13 +672,10 @@ header h1 {
 
 /* Inventory Grid */
 .inventory-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-    gap: 20px;
-    align-items: start;
+    column-width: 350px;
+    column-gap: 20px;
 }
 
-/* Campaign Card Base */
 .campaign-card {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
@@ -668,60 +683,51 @@ header h1 {
     overflow: hidden;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     position: relative;
+    break-inside: avoid;
+    margin-bottom: 20px;
     display: flex;
     flex-direction: column;
     height: 100%; 
 }
 
-/* Campaign Status Variants */
-/* Definice barev ohraničení pro kampaně */
-.campaign-card.active { border: 1px solid var(--active-color); }
-.campaign-card.upcoming { border: 1px solid var(--warning-color); }
-.campaign-card.expired { border: 1px solid var(--error-color); }
-.campaign-card.completed { border: 1px solid var(--success-color); } /* Zelená pro hotové */
-
-/* Případně, pokud chceš mít i jiný background pro hotové: */
-.campaign-card.completed {
-    background-color: rgba(var(--success-rgb), 0.05); /* Velmi jemné zelené pozadí */
-}
-.campaign-card.ready { border: 1px solid var(--warning-color); }
-
-/* Header Layout */
+/* 1. Celá hlavička - méně paddingu, kompaktnější */
 .campaign-header {
     padding: 10px 12px; 
     background: var(--bg-secondary);
     display: flex;
-    align-items: center;
-    flex-direction: row;
+    align-items: flex-start; /* Zarovná ikonu nahoru */
     gap: 10px;
 }
 
+/* 2. Textový wrapper - flexibilní sloupec, minimální mezery */
 .campaign-text-wrapper {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-width: 0;
-    gap: 2px;
+    gap: 2px; /* Zmenšeno z 4px na 2px pro větší kompaktnost */
 }
 
+/* 3. Řádek s názvem a badge */
 .campaign-title-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: space-between; /* Název vlevo, badge vpravo */
     gap: 10px;
     min-width: 0;
 }
 
+/* FIX: Zajištění, že se název zmenší místo rozpínání */
 .campaign-game {
     display: flex;
-    align-items: flex-start;
+    align-items: flex-start; /* Zarovnání ikony a textu */
     gap: 12px;
     font-weight: bold;
     font-size: 16px;
-    flex: 1 1 70%;
+    flex: 1 1 70%; /* Povolí prvku se přizpůsobit, ale dává mu prostor */
     min-width: 200px;
-    white-space: normal;
-    overflow: visible;
+    white-space: normal; /* Povolí zalamování textu na další řádek */
+    overflow: visible;   /* Zruší skrytí přetečeného textu */
 }
 
 .campaign-game .game-icon {
@@ -730,40 +736,29 @@ header h1 {
     flex-shrink: 0;
 }
 
-/* Badges */
-.campaign-badge {
-    padding: 2px 6px;
-    font-size: 10px;
-    font-weight: bold;
-    border-radius: 4px;
+/* FIX: Badge se nikdy nesmí zmenšit */
+.campaign-status-indicators {
     flex-shrink: 0;
-    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
-.campaign-badge.linked {
-    background-color: transparent;
-    color: var(--success-color);
-    border: 1px solid var(--success-color);
-    cursor: default;
+.campaign-game {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    font-weight: bold !important; /* Přidáno !important pro vynucení */
+    font-size: 16px;
+    flex: 1 1 70%;
+    min-width: 200px;
+    white-space: normal;
+    overflow: visible;
 }
 
-.campaign-badge.not-linked {
-    background-color: #8b2323;
-    color: #ffffff;
-    cursor: pointer;
-    box-shadow: 0 2px 4px rgba(139, 35, 35, 0.3);
-}
-
-.campaign-badge.not-linked:hover {
-    background-color: #a52a2a;
-    transform: translateY(-1px);
-    box-shadow: 0 3px 6px rgba(139, 35, 35, 0.4);
-}
-
-/* Campaign Link */
 .campaign-name-link {
     font-size: 12px;
-    color: #bf94ff;
+    color: var(--accent-color);
     text-decoration: none;
     white-space: nowrap;
     overflow: hidden;
@@ -775,11 +770,42 @@ header h1 {
     text-decoration: underline;
 }
 
-/* Link Account Button */
+.external-link-icon {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.campaign-badge {
+    padding: 2px 6px;
+    font-size: 10px;
+    border-radius: 4px;
+    flex-shrink: 0; /* Badge se nesmí smrsknout */
+}
+
+.campaign-badge.linked {
+    font-weight: bold; /* Přidáno */
+    background: rgba(0, 200, 83, 0.15);
+    color: var(--success-color);
+    border: 1px solid rgba(0, 200, 83, 0.3);
+    cursor: default;
+}
+
+.campaign-badge.not-linked {
+    background: var(--warning-color);
+    color: white;
+    box-shadow: 0 2px 4px rgba(255, 167, 38, 0.3);
+}
+
+.campaign-badge.not-linked:hover {
+    background: #ff9800;
+    transform: translateY(-1px);
+    box-shadow: 0 3px 6px rgba(255, 167, 38, 0.4);
+}
+
 .link-account-btn {
     margin-top: 8px;
     padding: 8px 16px;
-    background-color: #9147ff;
+    background: var(--warning-color);
     color: white;
     border: none;
     border-radius: 6px;
@@ -787,50 +813,19 @@ header h1 {
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s;
-    box-shadow: 0 2px 4px rgba(145, 71, 255, 0.3);
+    box-shadow: 0 2px 4px rgba(255, 167, 38, 0.3);
     width: 100%;
 }
 
 .link-account-btn:hover {
-    background-color: #7d39e0;
+    background: #ff9800;
     transform: translateY(-1px);
-    box-shadow: 0 3px 6px rgba(145, 71, 255, 0.4);
+    box-shadow: 0 3px 6px rgba(255, 167, 38, 0.4);
 }
 
 .link-account-btn:active {
     transform: translateY(0);
-    box-shadow: 0 1px 2px rgba(145, 71, 255, 0.3);
-}
-
-/* SVGs inside headers */
-.campaign-header-icon svg, 
-.drop-item-header svg, 
-.benefit-status-icon svg,
-.external-link-icon svg {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
-    display: block;
-    fill: none;
-    stroke: currentColor;
-}
-
-.status-icon {
-    width: 16px;
-    height: 16px;
-    vertical-align: middle;
-}
-
-.campaign-status-indicators {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.external-link-icon {
-    font-size: 12px;
-    opacity: 0.7;
+    box-shadow: 0 1px 2px rgba(255, 167, 38, 0.3);
 }
 
 .campaign-status {
@@ -851,28 +846,29 @@ header h1 {
     padding: 15px;
 }
 
-/* Campaign Group Containers */
 .campaign-group-container {
-    background: rgba(0, 0, 0, 0.2); 
+    background: rgba(0, 0, 0, 0.2); /* Celý blok kampaně bude mít podklad */
     border-left: 4px solid var(--border-color);
     padding: 10px;
     margin-bottom: 16px;
     border-radius: 0 4px 4px 0;
 }
 
-/* Dynamic border colors */
+/* Stavy pro dynamickou změnu barvy čáry podle kampaně */
 .campaign-group-container.ready { border-left-color: var(--warning-color); }
 .campaign-group-container.active { border-left-color: var(--active-color); }
 .campaign-group-container.claimed { border-left-color: var(--success-color); }
 
+/* Toto vynutí "plochý" vzhled pro dropy uvnitř tvého nového kontejneru */
 .campaign-group-container .wanted-drop-item {
-    background: transparent !important;
-    border: none !important;
-    border-radius: 0 !important;
-    margin-bottom: 2px !important;
-    padding: 6px 4px !important;
+    background: transparent !important; /* Zruší pozadí boxu */
+    border: none !important;            /* Zruší případné okraje */
+    border-radius: 0 !important;        /* Zruší zaoblení */
+    margin-bottom: 2px !important;      /* Minimalizuje mezeru mezi nimi */
+    padding: 6px 4px !important;        /* Jen lehké odsazení */
 }
 
+/* Volitelné: Přidá jemnou čáru mezi položkami, pokud chceš oddělovač */
 .campaign-group-container .wanted-drop-item:not(:last-child) {
     border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
@@ -976,10 +972,10 @@ header h1 {
 
 .wanted-drop-item {
     font-size: 11px;
-    margin-bottom: 0px; 
-    padding: 8px; 
-    background: transparent; 
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    margin-bottom: 0px; /* Smazat mezeru */
+    padding: 8px; /* Trochu víc místa místo boxu */
+    background: transparent; /* Zrušit pozadí boxu */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05); /* Jen jemná čára mezi nimi */
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -1000,7 +996,6 @@ header h1 {
     font-weight: 500;
 }
 
-/* Base Drop Styles */
 .drop-item {
     padding: 10px;
     margin-bottom: 8px;
@@ -1009,28 +1004,26 @@ header h1 {
     border-left: 3px solid var(--border-color);
 }
 
-.drop-content-box {
-    border: 1px solid #444;
-    background: #2a2a2a;
-    border-radius: 6px;
-    padding: 10px;
-    margin-top: 5px;
-    border-left: 4px solid #444;
-    transition: border-color 0.2s, background-color 0.2s;
+/* Pokud je drop "Active/In progress" (žlutá) */
+.drop-item.in-progress {
+    border-left: 4px solid var(--active-color) !important;
 }
 
-.drop-content-box:hover {
-    border-color: #666;
-    background-color: #333;
-    cursor: pointer;
+.drop-item.drop-claimed, .drop-content-box.drop-claimed {
+    border-left: 4px solid var(--success-color) !important;
 }
 
-/* Drop States */
-.drop-item.in-progress { border-left: 4px solid var(--active-color); }
-.drop-item.drop-claimed, .drop-content-box.drop-claimed { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
-.drop-item.drop-ready, .drop-content-box.drop-ready { border-left-color: var(--warning-color); background-color: rgba(230, 126, 34, 0.05); }
-.drop-item.drop-active, .drop-content-box.drop-active { border-left-color: var(--active-color); background-color: rgba(241, 196, 15, 0.05); }
-.drop-item.drop-expired, .drop-content-box.drop-expired { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }
+.drop-item.drop-ready, .drop-content-box.drop-ready {
+    border-left: 4px solid var(--warning-color) !important;
+}
+
+.drop-item.drop-expired, .drop-content-box.drop-expired {
+    border-left: 4px solid var(--error-color) !important;
+}
+
+.drop-item.drop-active, .drop-content-box.drop-active {
+    border-left: 4px solid var(--active-color) !important;
+}
 
 .drop-item-header {
     display: flex;
@@ -1081,7 +1074,7 @@ header h1 {
 }
 
 .benefit-name {
-    font-weight: bold;
+    font-weight: 500;
     font-size: 14px;
     color: var(--text-primary);
 }
@@ -1090,10 +1083,6 @@ header h1 {
     font-size: 12px;
     color: var(--text-secondary);
     font-style: italic;
-}
-
-.benefit-status-icon svg {
-    opacity: 0.9;
 }
 
 /* Settings */
@@ -1192,16 +1181,16 @@ header h1 {
 }
 
 @keyframes pulse-loading {
-    0% { background-color: var(--bg-secondary); }
+    0% { background-color: --bg-secondary; }
     50% { background-color: var(--accent-color); }
-    100% { background-color: var(--bg-secondary); }
+    100% { background-color: --bg-secondary; }
 }
 
 .action-button:disabled {
     animation: pulse-loading 1.5s infinite ease-in-out;
     filter: none;
     color: white;
-    border-color: var(--accent-color);
+    border-color: --accent-color;
 }
 
 /* Help */
@@ -1638,6 +1627,7 @@ header h1 {
     }
 
     .inventory-grid {
+        column-width: 280px;
         column-gap: 12px;
     }
 
@@ -1676,6 +1666,10 @@ header h1 {
 
     .tab-button {
         flex: 1 1 40%;
+    }
+
+    .inventory-grid {
+        column-width: auto;
     }
 
     .filter-separator {
@@ -1769,48 +1763,31 @@ header h1 {
     color: var(--text-secondary);
 }
 
-/* --- 1. DROP ITEMS (Ikony v drops) --- */
-.drop-item.drop-claimed, .drop-content-box.drop-claimed { color: var(--success-color); }
-.drop-item.drop-ready, .drop-content-box.drop-ready { color: var(--warning-color); }
-.drop-item.drop-active, .drop-content-box.drop-active { color: var(--active-color); }
-.drop-item.drop-expired, .drop-content-box.drop-expired { color: var(--error-color); }
-
-.benefit-status-icon.ready { color: var(--warning-color); }
-.benefit-status-icon.claimed { color: var(--success-color); }
-.benefit-status-icon.active { color: var(--active-color); }
-
-/* --- 2. CAMPAIGN CARDS (Rámečky a pozadí) --- */
-.campaign-card { border: 1px solid #444; } /* Výchozí */
-
-.campaign-card.active { border: 1px solid var(--active-color) !important; }
-.campaign-card.upcoming { border: 1px solid var(--warning-color) !important; }
-.campaign-card.expired { border: 1px solid var(--error-color) !important; }
-.campaign-card.ready { border: 1px solid var(--warning-color) !important; }
-.campaign-card.completed { 
-    border: 1px solid var(--success-color) !important; 
-    background-color: rgba(var(--success-rgb), 0.05); 
+/* Základní styl pro drop box */
+.drop-content-box {
+    border: 1px solid #444;
+    background: #2a2a2a;
+    border-radius: 6px;
+    padding: 10px;
+    margin-top: 5px;
+    border-left: 4px solid #444;
+    transition: border-color 0.2s, background-color 0.2s;
 }
 
-/* --- 3. CAMPAIGN STATUS TEXT (Text dole v kartě) --- */
-.campaign-card.active .campaign-status { color: var(--active-color); }
-.campaign-card.upcoming .campaign-status { color: var(--warning-color); }
-.campaign-card.expired .campaign-status { color: var(--error-color); }
-.campaign-card.completed .campaign-status { color: var(--success-color); }
-
-/* --- 4. CAMPAIGN HEADER ICONS (Fajfka a ikony vpravo nahoře) --- */
-/* Zde cílíme přímo na ikony v hlavičce podle stavu karty */
-.campaign-card.active .campaign-header-icon { color: var(--active-color); }
-.campaign-card.upcoming .campaign-header-icon { color: var(--warning-color); }
-.campaign-card.expired .campaign-header-icon { color: var(--error-color); }
-.campaign-card.completed .campaign-header-icon { color: var(--success-color) !important; }
-
-/* Základní formátování pro ikony, aby dědily barvu (currentColor) */
-.campaign-header-icon { display: flex; align-items: center; }
-.campaign-header-icon svg { 
-    color: inherit; 
-    fill: currentColor; 
-    stroke: currentColor; 
+.drop-content-box:hover {
+    border-color: #666;
+    background-color: #333;
+    cursor: pointer;
 }
 
-/* Ikony v rámci status řádku (dědí od rodiče) */
-.campaign-status .campaign-header-icon { color: inherit; }
+/* Stavy pro dropy */
+.drop-claimed { border-left-color: var(--success-color) !important; background-color: rgba(46, 204, 113, 0.05); }
+.drop-ready { border-left-color: var(--warning-color) !important; background-color: rgba(230, 126, 34, 0.05); }
+.drop-active { border-left-color: var(--active-color) !important; background-color: rgba(241, 196, 15, 0.05); }
+.drop-expired { border-left-color: var(--error-color) !important; background-color: rgba(231, 76, 60, 0.05); }
+
+/* Stavy pro celou kampaň (karty) */
+.campaign-card.active { border: 1px solid var(--active-color); }
+.campaign-card.finished { border: 1px solid var(--success-color); }
+.campaign-card.expired { border: 1px solid var(--error-color); }
+.campaign-card.ready { border: 1px solid var(--warning-color); }

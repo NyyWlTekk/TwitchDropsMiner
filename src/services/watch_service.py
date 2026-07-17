@@ -187,8 +187,29 @@ class WatchService:
         while True:
             channel: Channel = await self._twitch.watching_channel.get()
 
+			# --- POJISTKA: Debugování stavu ---
+            channel_campaigns = [c for c in self._twitch.inventory if c.game == channel.game]
+            active_campaign = self._twitch._inventory_service.get_active_campaign(channel)
+            
+            logger.info(f"DEBUG: Checking {channel.name}. Active campaign found: {active_campaign is not None}")
+            
+            if active_campaign:
+                logger.info(f"DEBUG: Active campaign progress: {getattr(active_campaign, 'progress', 'N/A')}%")
+            
+            # Původní logika, ale přidáme kontrolu i pro případ, že kampaň už není "aktivní"
+            if active_campaign and active_campaign.progress >= 100:
+                logger.info(f"Skipping {channel.name}: Active campaign at 100%.")
+                self.stop_watching()
+                continue
+
+            channel_drops = getattr(channel, 'drops', [])
+            
+            if channel_drops and not any(drop.can_earn() for drop in channel_drops):
+                logger.info(f"Stopping watch for {channel.name}: No drops left to earn.")
+                self.stop_watching()
+                continue
+
             if not channel.online:
-                # if the channel isn't online anymore, we stop watching it
                 self.stop_watching()
                 continue
 

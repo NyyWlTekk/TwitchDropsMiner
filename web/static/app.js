@@ -978,64 +978,144 @@ function createBenefitItem(benefit) {
 
 // Renders a single drop with its progress and benefits
 function createDropItem(drop, t) {
-    const claimedText = t.gui?.inventory?.status?.claimed || 'Claimed';
-    const dropItem = makeElement('div', { class: `drop-item${drop.is_claimed ? ' claimed' : ''}${drop.can_claim ? ' active' : ''}` });
-    
+    // 1. Zjistíme stavovou třídu (stejnou pro oba boxy)
+    let statusClass = '';
+    if (drop.is_claimed) {
+        statusClass = 'drop-claimed';
+    } else if (drop.can_claim) {
+        statusClass = 'drop-ready';
+    } else if (drop.is_expired) {
+        statusClass = 'drop-expired';
+    } else if ((drop.progress || 0) > 0) {
+        statusClass = 'drop-active';
+    }
+
+    // 2. Vytvoříme vnější i vnitřní box se stejnou třídou
+    const dropItem = makeElement('div', { class: `drop-item ${statusClass}` });
+    const contentWrapper = makeElement('div', { class: `drop-content-box ${statusClass}` });
+
     // Header
-    dropItem.appendChild(
+    contentWrapper.appendChild(
         makeElement('div', { class: 'drop-item-header' }, '', el =>
             el.appendChild(makeElement('div', { class: 'drop-item-info' }, '', el2 =>
-                el2.appendChild(makeElement('div', {}, '', el3 =>
-                    el3.appendChild(makeElement('strong', {}, drop.name))
-                ))
+                el2.appendChild(makeElement('div', {}, '', el3 => {
+                    el3.appendChild(makeElement('strong', {}, drop.name));
+
+                    const badgeContainer = document.createElement('span');
+                    badgeContainer.style.marginLeft = '8px';
+                    badgeContainer.style.display = 'inline-flex';
+                    badgeContainer.style.gap = '6px';
+                    badgeContainer.style.alignItems = 'center';
+                    el3.appendChild(badgeContainer);
+                }))
             ))
         )
     );
     
-    // Benefits list
+	// Benefity
     const benefitsList = makeElement('div', { class: 'benefits-list' });
     if (drop.benefits && drop.benefits.length > 0) {
         drop.benefits.forEach(benefit => {
-            benefitsList.appendChild(createBenefitItem(benefit));
+            const benefitEl = createBenefitItem(benefit);
+            
+            // Přidání ikony do každého benefitu
+			const iconHTML = getStatusIconSVG(statusClass);
+			if (iconHTML) {
+				const iconDiv = document.createElement('div');
+				iconDiv.className = 'benefit-status-icon'; // TUTO TŘÍDU CSS ZNÁ
+				iconDiv.style.marginLeft = 'auto';
+				iconDiv.style.display = 'flex';
+				iconDiv.style.alignItems = 'center';
+				iconDiv.innerHTML = iconHTML;
+				benefitEl.appendChild(iconDiv);
+			}
+            
+            benefitsList.appendChild(benefitEl);
         });
     }
-    dropItem.appendChild(benefitsList);
+    contentWrapper.appendChild(benefitsList);
 
-    // Delivery and progress
-    const isDirect = drop.delivery_method === 'DIRECT_ENTITLEMENT' || 
-                     drop.deliveryMethod === 'DIRECT_ENTITLEMENT' || 
-                     !drop.required_minutes;
+    // Progress
+    if (!drop.is_claimed) {
+        const isDirect = drop.delivery_method === 'DIRECT_ENTITLEMENT' || 
+                         drop.deliveryMethod === 'DIRECT_ENTITLEMENT' || 
+                         !drop.required_minutes;
 
-    if (!isDirect) {
-        const progressPercent = Math.round((drop.progress || 0) * 100);
-        dropItem.appendChild(makeElement('div', {}, `${drop.current_minutes || 0} / ${drop.required_minutes} minutes (${progressPercent}%)`));
-    } else {
-        dropItem.appendChild(makeElement('div', { class: 'drop-direct-badge' }, '✦ Instant / Direct Reward'));
+        if (!isDirect) {
+            if (!drop.can_claim) {
+                const progressPercent = Math.round((drop.progress || 0) * 100);
+                contentWrapper.appendChild(makeElement('div', {}, `${drop.current_minutes || 0} / ${drop.required_minutes} minutes (${progressPercent}%)`));
+            } else if (drop.can_claim) {
+                contentWrapper.appendChild(makeElement('div', { style: 'color: var(--warning-color); font-weight: bold; margin-top: 5px;' }, 'Ready to claim!'));
+            }
+        } else {
+            contentWrapper.appendChild(makeElement('div', { class: 'drop-direct-badge' }, '✦ Instant / Direct Reward'));
+        }
     }
 
-    if (drop.is_claimed) {
-        dropItem.appendChild(makeElement('div', {}, `✓ ${claimedText}`));
-    }
-
+    dropItem.appendChild(contentWrapper);
     return dropItem;
 }
 
-// Renders the wrapper for all drops in a campaign
 function createDropsContainer(drops, t) {
-    const container = makeElement('div', { class: 'campaign-drops' });
-    drops.forEach(drop => {
-        container.appendChild(createDropItem(drop, t));
-    });
+    const container = document.createElement('div');
+    container.className = 'campaign-drops';
+
+    // Prostě projdeme všechny dropy, které k této kampani patří
+    if (drops && drops.length > 0) {
+        drops.forEach(drop => {
+            // Vykreslíme blok pro drop
+            container.appendChild(createDropBlock(drop, t));
+        });
+    }
+
     return container;
+}
+
+function createDropBlock(drop, t) {
+    // Určení stavu pro obalovací blok
+    let statusClass = '';
+    if (drop.is_claimed) statusClass = 'drop-claimed';
+    else if (drop.can_claim) statusClass = 'drop-ready';
+    else if (drop.progress > 0) statusClass = 'drop-active';
+    else statusClass = 'drop-expired';
+
+    const dropBlock = document.createElement('div');
+    dropBlock.className = `drop-block ${statusClass}`;
+
+    // Samotný item (zde si pohlídej, aby ani createDropItem nevykresloval název)
+    dropBlock.appendChild(createDropItem(drop, t));
+
+    return dropBlock;
 }
 
 // Renders the top header of a campaign card (Game art, linking state, external links)
 function createCampaignHeader(campaign) {
+    // 1. Sjednocená detekce stavu
+    const isCompleted = (campaign.claimed_drops !== undefined && campaign.total_drops !== undefined) 
+                        ? (campaign.claimed_drops >= campaign.total_drops) 
+                        : (campaign.claimed >= campaign.total);
+    
+    const statusClass = isCompleted ? 'completed' : (campaign.active ? 'active' : 'expired');
+
+    // 2. Badge pro stav propojení
     const linkStatusBadge = campaign.linked
         ? makeElement('span', { class: 'campaign-badge linked', title: 'Account is linked' }, 'LINKED')
         : makeElement('span', { class: 'campaign-badge not-linked', title: 'Click to link your account' }, 'NOT LINKED', el => {
             el.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
         });
+
+    // 4. Ikona (použijeme sjednocenou funkci)
+    const progressIcon = makeElement('div', { class: 'campaign-header-icon' }, '', el => {
+        el.innerHTML = getStatusIconSVG(statusClass);
+    });
+
+    const twitchLink = makeElement('a', { 
+        href: campaign.campaign_url, 
+        target: '_blank', 
+        rel: 'noopener noreferrer', 
+        class: 'campaign-name-link' 
+    }, campaign.name, el => el.appendChild(makeElement('span', { class: 'external-link-icon' }, ' 🔗')));
 
     const campaignGameDiv = makeElement('div', { class: 'campaign-game' }, '', el => {
         if (campaign.game_box_art_url) {
@@ -1046,121 +1126,138 @@ function createCampaignHeader(campaign) {
         el.appendChild(linkStatusBadge);
     });
 
-    const campaignNameLink = makeElement('a', { 
-        href: campaign.campaign_url, 
-        target: '_blank', 
-        rel: 'noopener noreferrer', 
-        class: 'campaign-name-link' 
-    }, campaign.name, el => el.appendChild(makeElement('span', { class: 'external-link-icon' }, '🔗')));
-
+    // Sestavení headeru
     return makeElement('div', { class: 'campaign-header' }, '', el => {
-        el.appendChild(campaignGameDiv);
-        el.appendChild(campaignNameLink);
-        if (!campaign.linked && campaign.link_url) {
-            el.appendChild(makeElement('button', { class: 'link-account-btn' }, 'Link Account', btn => {
-                btn.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
-            }));
-        }
+        el.appendChild(campaignGameDiv);        
+        el.appendChild(progressIcon);
+        el.appendChild(twitchLink);
     });
 }
 
-// Renders a completed campaign card
 function createCampaignCard(campaign, t) {
-    const status = getCampaignStatus(campaign);
+    // 1. Inicializace stavů
     let statusClass = '';
     let statusText = '';
 
-    if (status.isActive) {
+    // Priorita: Completed -> Active -> Upcoming -> Expired
+    if (campaign.claimed_drops !== undefined && campaign.total_drops !== undefined && campaign.claimed_drops >= campaign.total_drops) {
+        statusClass = 'completed';
+        statusText = 'Completed'; 
+    } else if (campaign.active) {
         statusClass = 'active';
         statusText = t.gui?.inventory?.status?.active || 'Active';
-    } else if (status.isUpcoming) {
+    } else if (campaign.upcoming) {
         statusClass = 'upcoming';
         statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
-    } else if (status.isExpired) {
+    } else if (campaign.expired) {
         statusClass = 'expired';
         statusText = t.gui?.inventory?.status?.expired || 'Expired';
     }
 
-    const card = document.createElement('div');
-    card.className = `campaign-card ${statusClass}`;
+    const card = makeElement('div', { class: `campaign-card ${statusClass}` });
+    const campaignInfo = makeElement('div', { class: 'campaign-info' });
 
+    // --- HLAVIČKA (Header) ---
+    const campaignHeader = makeElement('div', { class: 'campaign-header' });
+
+    // A. Herní ikona (vlevo)
+    if (campaign.game_box_art_url) {
+        const iconUrl = campaign.game_box_art_url.replace('{width}', '52').replace('{height}', '70');
+        campaignHeader.appendChild(makeImageElement(iconUrl, campaign.game_name, 'game-icon'));
+    }
+
+    // B. Kontejner pro text (název a link pod ním)
+    campaignHeader.appendChild(makeElement('div', { style: 'display: flex; flex-direction: column; margin-left: 10px;' }, '', textCol => {
+        textCol.appendChild(makeElement('span', { class: 'campaign-game-name' }, campaign.game_name));
+        textCol.appendChild(makeElement('a', { 
+            href: campaign.campaign_url, 
+            target: '_blank', 
+            rel: 'noopener noreferrer', 
+            class: 'campaign-name-link',
+            style: 'font-size: 11px; margin-top: 2px;'
+        }, 'View on Twitch 🔗'));
+    }));
+
+    // C. PRAVÁ STRANA: Ikona stavu + Badge
+    campaignHeader.appendChild(makeElement('div', { 
+        style: 'margin-left: auto; display: flex; align-items: center; gap: 8px;' 
+    }, '', rightGroup => {
+        
+        // 1. Ikona stavu
+        const iconHtml = getStatusIconSVG(statusClass);
+        if (iconHtml) {
+            rightGroup.appendChild(makeElement('div', { 
+                class: 'campaign-header-icon', 
+                style: 'display: flex; align-items: center;' 
+            }, '', el => {
+                el.innerHTML = iconHtml;
+            }));
+        }
+
+        // 2. Badge (Linked/Not Linked)
+        rightGroup.appendChild(makeElement('span', { 
+            class: `campaign-badge ${campaign.linked ? 'linked' : 'not-linked'}` 
+        }, campaign.linked ? 'LINKED' : 'NOT LINKED'));
+        
+        // Poznámka: Tlačítko Link Account bylo odstraněno z hlavičky, je teď dole u statusu.
+    }));
+
+    campaignInfo.appendChild(campaignHeader);
+
+	// --- Status řádek (pouze texty) ---
     const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
-    const campaignStatus = makeElement('div', { class: 'campaign-status' }, '', el => {
+    campaignInfo.appendChild(makeElement('div', { class: 'campaign-status', style: 'display: flex; justify-content: space-between;' }, '', el => {
         el.appendChild(makeElement('span', {}, statusText));
         el.appendChild(makeElement('span', {}, `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
-    });
+    }));
 
-    // Create the header and dynamically append status indicators (checkmark/cross/clock) to the game name
-    const header = createCampaignHeader(campaign);
-    const gameNameEl = header.querySelector('.game-name') || header.querySelector('span');
-    
-    if (gameNameEl) {
-        const badgeContainer = document.createElement('span');
-        badgeContainer.className = 'campaign-status-indicators';
-        badgeContainer.style.marginLeft = '8px';
-        badgeContainer.style.display = 'inline-flex';
-        badgeContainer.style.gap = '6px';
-        badgeContainer.style.alignItems = 'center';
-
-        // 1. Add green SVG circle-checkmark if the campaign is fully finished/claimed
-        if (status.isFinished) {
-            const check = document.createElement('span');
-            check.style.display = 'inline-flex';
-            check.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
-                    <circle cx="12" cy="12" r="10"/>
-                    <path d="m9 12 2 2 4-4"/>
-                </svg>
-            `;
-            badgeContainer.appendChild(check);
-        }
-
-        // 2. Add red SVG circle-cross if the campaign has expired
-        if (status.isExpired) {
-            const cross = document.createElement('span');
-            cross.style.display = 'inline-flex';
-            cross.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e74c3c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
-                    <circle cx="12" cy="12" r="10"/>
-                    <path d="m15 9-6 6"/>
-                    <path d="m9 9 6 6"/>
-                </svg>
-            `;
-            badgeContainer.appendChild(cross);
-        }
-
-        // 3. Add orange SVG circle-clock if the campaign is currently active
-        if (status.isActive) {
-            const clock = document.createElement('span');
-            clock.style.display = 'inline-flex';
-            clock.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f1c40f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 2px rgba(241, 196, 15, 0.5)); vertical-align: middle;">
-                    <circle cx="12" cy="12" r="10"/>
-                    <polyline points="12 6 12 12 16 14"/>
-                </svg>
-            `;
-            badgeContainer.appendChild(clock);
-        }
-
-        if (badgeContainer.hasChildNodes()) {
-            gameNameEl.appendChild(badgeContainer);
-        }
+    // --- Tlačítko Link (přesunuto sem - mezi status a timing) ---
+    if (!campaign.linked && campaign.link_url) {
+        campaignInfo.appendChild(makeElement('button', { 
+            class: 'link-account-btn', 
+            style: 'width: 100%; margin: 10px 0; padding: 8px; cursor: pointer;' 
+        }, 'Link Account', btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.open(campaign.link_url, '_blank');
+            });
+        }));
     }
 
-    card.replaceChildren(header, campaignStatus);
-
-    // Render both Start and End times if they exist in the campaign data
+    // --- Timing (Starts/Ends) ---
     if (campaign.starts_at) {
         const startsLabel = t.gui?.inventory?.starts || 'Starts: {time}';
-        card.appendChild(makeElement('div', { class: 'campaign-timing' }, startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())));
-    }
-    
-    if (campaign.ends_at) {
-        const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
-        card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
+        campaignInfo.appendChild(makeElement('div', { class: 'campaign-timing' }, 
+            startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())
+        ));
     }
 
-    card.appendChild(createDropsContainer(campaign.drops, t));
+    if (campaign.ends_at) {
+        const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
+        campaignInfo.appendChild(makeElement('div', { class: 'campaign-timing' }, 
+            endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())
+        ));
+    }
+
+    // --- B. DROPS BLOK ---
+    const dropsBox = makeElement('div', { class: 'campaign-drops' });
+
+    if (campaign.drops && campaign.drops.length > 0) {
+        const groupedDrops = campaign.drops.reduce((acc, drop) => {
+            if (!acc[drop.name]) acc[drop.name] = [];
+            acc[drop.name].push(drop);
+            return acc;
+        }, {});
+
+        Object.entries(groupedDrops).forEach(([name, drops]) => {
+            dropsBox.appendChild(makeElement('div', { class: 'drop-group-title' }, name));
+            drops.forEach(drop => {
+                dropsBox.appendChild(createDropBlock(drop, t));
+            });
+        });
+    }
+
+    card.replaceChildren(campaignInfo, dropsBox);
     return card;
 }
 
@@ -2538,4 +2635,25 @@ function appendTrustedHelpContent(parent, text) {
     if (lastIndex < source.length) {
         parent.appendChild(document.createTextNode(source.slice(lastIndex)));
     }
+}
+
+
+function getStatusIconSVG(statusClass) {
+    const icons = {
+        // Drops
+        'completed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
+        'ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
+        'drop-claimed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
+        // Změněno na ikonu dárku pro "Ready"
+        'drop-ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
+        // Změněno na křížek v kroužku
+        'drop-expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`,
+        'drop-active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
+        
+        // Kampaně
+        'active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
+        'upcoming': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
+        'expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`
+    };
+    return icons[statusClass] || '';
 }

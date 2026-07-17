@@ -31,6 +31,8 @@ def remove_dimensions(url: str) -> str:
 
 
 class BaseDrop:
+    _failed_claims: dict[str, datetime] = {}
+
     def __init__(
         self, campaign: DropsCampaign, data: JsonType, claimed_benefits: dict[str, datetime]
     ):
@@ -43,26 +45,24 @@ class BaseDrop:
         self.ends_at: datetime = isoparse(data["endAt"])
         self.claim_id: str | None = None
         self.is_claimed: bool = False
+        self._is_processing_claim = False
+        
         if "self" in data:
             self.claim_id = data["self"]["dropInstanceID"]
             self.is_claimed = data["self"]["isClaimed"]
-        elif (
-            # If there's no self edge available, we can use claimed_benefits to determine
-            # (with pretty good certainty) if this drop has been claimed or not.
-            # To do this, we check if the benefitEdges appear in claimed_benefits, and then
-            # deref their "lastAwardedAt" timestamps into a list to check against.
-            # If the benefits were claimed while the drop was active,
-            # the drop has been claimed too.
-            (
-                dts := [
-                    claimed_benefits[bid]
-                    for benefit in self.benefits
-                    if (bid := benefit.id) in claimed_benefits
-                ]
-            )
-            and all(self.starts_at <= dt < self.ends_at for dt in dts)
-        ):
-            self.is_claimed = True
+        else:
+            # 1. Try to find benefits in the history
+            dts = [
+                claimed_benefits[bid]
+                for benefit in self.benefits
+                if (bid := benefit.id) in claimed_benefits
+            ]
+            
+            # 2. If found and the timeframe matches, mark as claimed
+            if dts and all(self.starts_at <= dt < self.ends_at for dt in dts):
+                self.is_claimed = True
+                logger.debug(f"Drop {self.id} marked as claimed (found in claimed_benefits).")
+
         self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
 
     def __repr__(self) -> str:
@@ -83,19 +83,27 @@ class BaseDrop:
         raise NotImplementedError
 
     def _base_earn_conditions(self) -> bool:
-        # define when a drop can be earned or not
+        # Check if this drop is currently in a 1-minute cooldown due to a failed claim
+        failed_at = BaseDrop._failed_claims.get(self.id)
+        if failed_at:
+            if datetime.now(timezone.utc) - failed_at < timedelta(minutes=1):
+                return False
+            else:
+                BaseDrop._failed_claims.pop(self.id, None)
+
+        # Define when a drop can be earned or not
         return (
-            self.preconditions_met  # preconditions are met
-            and not self.is_claimed  # isn't already claimed
-            # has at least one benefit, or participates in a preconditions chain
+            self.preconditions_met  # Preconditions are met
+            and not self.is_claimed  # Isn't already claimed
+            # Has at least one benefit, or participates in a preconditions chain
             and (bool(self.benefits) or self.id in self.campaign.preconditions_chain())
         )
 
     def _base_can_earn(self) -> bool:
-        # cross-participates in can_earn and can_earn_within handling, where a timeframe is added
+        # Cross-participates in can_earn and can_earn_within handling, where a timeframe is added
         return (
             self._base_earn_conditions()
-            # is within the timeframe
+            # Is within the timeframe
             and self.starts_at <= datetime.now(timezone.utc) < self.ends_at
         )
 
@@ -114,21 +122,24 @@ class BaseDrop:
 
     @property
     def can_claim(self) -> bool:
-        # https://help.twitch.tv/s/article/mission-based-drops?language=en_US#claiming
-        # "If you are unable to claim the Drop in time, you will be able to claim it
-        # from the Drops Inventory page until 24 hours after the Drops campaign has ended."
+        # Pokud je již vyclaimováno nebo se zpracovává, neřešíme
+        if self.is_claimed or self._is_processing_claim:
+            return False
+            
+        # Kontrola, zda jsme dosáhli 100 %
+        is_completed = False
+        if hasattr(self, "current_minutes") and hasattr(self, "required_minutes"):
+            is_completed = self.current_minutes >= self.required_minutes
+
+        # STRIKTNÍ PODMÍNKA: 100 % musí být hotovo A zároveň musíme mít claim_id
         return (
-            self.claim_id is not None
-            and not self.is_claimed
+            is_completed
+            and self.claim_id is not None
             and datetime.now(timezone.utc) < self.campaign.ends_at + timedelta(hours=24)
         )
 
-    def update_claim(self, claim_id: str) -> None:
-        """Update the claim ID for this drop."""
-        self.claim_id = claim_id
-
     async def generate_claim(self) -> None:
-        # claim IDs now appear to be constructed from other IDs we have access to
+        # Claim IDs now appear to be constructed from other IDs we have access to
         # Format: UserID#CampaignID#DropID
         # NOTE: This marks a drop as a ready-to-claim, so we may want to later ensure
         # its mining progress is finished first
@@ -140,38 +151,84 @@ class BaseDrop:
 
     def has_wanted_unclaimed_benefits(self, allowed_benefits: dict[str, bool]) -> bool:
         return len(self.get_wanted_unclaimed_benefits(allowed_benefits)) > 0
-
+        
     def get_wanted_unclaimed_benefits(self, allowed_benefits: dict[str, bool]) -> list[str]:
+        campaign = getattr(self, "campaign", None)
+        # Jen vracíme prázdný seznam, pokud není linknuto
+        if campaign and not getattr(campaign, "linked", True):
+            return []
+    
         if self.is_claimed:
             return []
+        
         return [benefit.name for benefit in self.benefits if benefit.is_wanted(allowed_benefits)]
 
     async def claim(self) -> bool:
-        result = await self._claim()
-        if result:
-            self.is_claimed = result
-            claim_text = (
-                f"{self.campaign.game.name}\n"
-                f"{self.rewards_text()} "
-                f"({self.campaign.claimed_drops}/{self.campaign.total_drops})"
-            )
-            # two different claim texts, becase a new line after the game name
-            # looks ugly in the output window - replace it with a space
-            self._twitch.print(
-                _.t["status"]["claimed_drop"].format(drop=claim_text.replace("\n", " "))
-            )
-        else:
-            logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
-        return result
+        # 1. Guard: If already being processed or already claimed, do not try again
+        if self.is_claimed:
+            return False
 
-    async def _claim(self) -> bool:
+        if getattr(self, "_is_processing_claim", False):
+            logger.debug(f"Drop {self.id} is already in claiming process, skipping.")
+            return False
+        
+        # 2. Basic validation
+        if not self.can_claim:
+            logger.debug(f"Drop {self.id} is not ready for claim (can_claim=False).")
+            return False
+
+        current_min = getattr(self, "current_minutes", 0)
+        req_min = getattr(self, "required_minutes", 0)
+        if current_min < req_min:
+            logger.warning(f"Drop {self.id} claimed prematurely? Progress: {current_min}/{req_min}")
+            return False
+
+        if self.claim_id is None:
+            await self.generate_claim()
+
+        # 3. Process with locking protection
+        self._is_processing_claim = True
+        try:
+            result = await self._claim()
+            
+            # SUCCESS check strictly against string return value
+            if result == "SUCCESS":
+                # Success: Update state in memory
+                self.is_claimed = True
+                
+                claim_text = (
+                    f"{self.campaign.game.name}\n"
+                    f"{self.rewards_text()} "
+                    f"({self.campaign.claimed_drops}/{self.campaign.total_drops})"
+                )
+                self._twitch.print(
+                    _.t["status"]["claimed_drop"].format(drop=claim_text.replace("\n", " "))
+                )
+                # Clear from failed claims on successful claim
+                BaseDrop._failed_claims.pop(self.id, None)
+                return True
+            else:
+                logger.error(f"Drop claim failed with status: {result}! Drop ID: {self.id}")
+                # Record the failure timestamp to trigger the 1-minute cooldown
+                BaseDrop._failed_claims[self.id] = datetime.now(timezone.utc)
+                return False
+
+        except Exception as e:
+            logger.error(f"Critical error while claiming drop {self.id}: {e}")
+            return False
+            
+        finally:
+            # 4. Always unlock so bot can retry on next interval if it failed
+            self._is_processing_claim = False
+        
+    async def _claim(self) -> str:
         """
-        Returns True if the claim succeeded, False otherwise.
+        Returns the claim status as a string.
         """
         if self.is_claimed:
-            return True
+            return "ALREADY_CLAIMED"
         if not self.can_claim:
-            return False
+            return "CANNOT_CLAIM"
         try:
             response = await self._twitch.gql_request(
                 GQL_OPERATIONS["ClaimDrop"].with_variables(
@@ -179,21 +236,37 @@ class BaseDrop:
                 )
             )
         except GQLException:
-            # regardless of the error, we have to assume
+            # Regardless of the error, we have to assume
             # the claiming operation has potentially failed
-            return False
-        data = response["data"]
+            return "GQL_ERROR"
+            
+        data = response.get("data")
+        if not data:
+            return "NO_DATA"
+            
         if "errors" in data and data["errors"]:
-            return False
+            # Check if Twitch returned a specific error about missing connection
+            # Often contains messages like "AccountNotLinked" or "ExternalAccountNotLinked"
+            err_msg = str(data["errors"]).lower()
+            if "link" in err_msg or "connect" in err_msg:
+                return "ACCOUNT_NOT_LINKED"
+            return "TWITCH_ERROR"
+            
         elif "claimDropRewards" in data:
-            if not data["claimDropRewards"]:
-                return False
-            elif data["claimDropRewards"]["status"] in (
-                "ELIGIBLE_FOR_ALL",
-                "DROP_INSTANCE_ALREADY_CLAIMED",
-            ):
-                return True
-        return False
+            result_data = data["claimDropRewards"]
+            if not result_data:
+                return "NO_REWARDS_DATA"
+                
+            status = result_data.get("status")
+            if status in ("ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"):
+                return "SUCCESS"
+            elif status == "DROP_INSTANCE_NOT_ELIGIBLE":
+                # This is the exact error Twitch returns when account is not linked!
+                return "ACCOUNT_NOT_LINKED"
+            elif status:
+                return f"TWITCH_STATUS_{status}"
+                
+        return "UNKNOWN_FAILURE"
 
 
 class TimedDrop(BaseDrop):
@@ -207,7 +280,7 @@ class TimedDrop(BaseDrop):
         self.required_minutes: int = data["requiredMinutesWatched"]
         self.extra_current_minutes: int = 0
         if self.is_claimed:
-            # claimed drops may report inconsistent current minutes, so we need to overwrite them
+            # Claimed drops may report inconsistent current minutes, so we need to overwrite them
             self.real_current_minutes = self.required_minutes
 
     def __repr__(self) -> str:
@@ -297,14 +370,28 @@ class TimedDrop(BaseDrop):
             if self.extra_current_minutes >= MAX_EXTRA_MINUTES:
                 return True
         return False
-
+        
     async def claim(self) -> bool:
+        # Získáme výsledek (očekáváme string z tvé funkce _claim)
         result = await super().claim()
-        if result:
+        
+        # 1. Kontrola úspěchu (pouze pokud je výsledek "SUCCESS")
+        if result == "SUCCESS":
             self.real_current_minutes = self.required_minutes
             self.extra_current_minutes = 0
-        self._on_state_changed()
-        return result
+            self._on_state_changed()
+            return True
+        
+        # 2. Ošetření CANNOT_CLAIM bez spamování logů
+        elif result == "CANNOT_CLAIM":
+            # Toto je v pořádku, Twitch jen není ready, žádná chyba
+            return False
+            
+        # 3. Ostatní chyby (GQL_ERROR, TWITCH_ERROR atd.)
+        else:
+            # Zde můžeš logovat jen pokud chceš vědět o skutečných problémech
+            # logger.error(f"Claim failed with status: {result}") 
+            return False
 
     def display(self, *, countdown: bool = True, subone: bool = False) -> None:
         """Display this drop in the GUI with progress information."""
@@ -320,3 +407,26 @@ class TimedDrop(BaseDrop):
         elif self.real_current_minutes + delta > self.required_minutes:
             delta = self.required_minutes - self.real_current_minutes
         self.campaign._update_real_minutes(delta)
+        
+    def sync_minutes(self, new_minutes: int) -> None:
+        """
+        Force update of minutes from API response.
+        This ignores delta logic and sets the state to the absolute value 
+        provided by the Twitch API.
+        """
+        if self.real_current_minutes != new_minutes:
+            logger.debug(f"Syncing {self.name}: {self.real_current_minutes} -> {new_minutes}")
+            self.real_current_minutes = new_minutes
+            self.extra_current_minutes = 0  # Reset extra minutes on full sync
+            self._on_state_changed()
+            
+    def sync_state_with_history(self, claimed_benefits: dict[str, datetime]) -> None:
+        """
+        Force state to claimed if benefits are tracked in the local history.
+        This ignores conflicting reports from 'dropCampaignsInProgress'.
+        """
+        for benefit in self.benefits:
+            if benefit.id in claimed_benefits:
+                self.is_claimed = True
+                logger.debug(f"State forced to Claimed: {self.name} (found in history).")
+                return

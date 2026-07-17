@@ -97,7 +97,12 @@ class DropsCampaign:
 
     @property
     def claimed_drops(self) -> int:
-        return sum(d.is_claimed for d in self.drops)
+        count = 0
+        for d in self.drops:
+            val = d.is_claimed
+            if val is True or val == "True":
+                count += 1
+        return count
 
     @property
     def remaining_drops(self) -> int:

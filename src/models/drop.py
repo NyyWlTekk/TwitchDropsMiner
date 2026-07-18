@@ -199,6 +199,7 @@ class BaseDrop:
             success = await self._claim()
             if success:
                 self.is_claimed = True
+                self._on_state_changed() # Inv update.
                 claim_text = f"{self.campaign.game.name}\n{self.rewards_text()} ({self.campaign.claimed_drops}/{self.campaign.total_drops})"
                 self._twitch.print(_.t["status"]["claimed_drop"].format(drop=claim_text.replace("\n", " ")))
                 BaseDrop._failed_claims.pop(self.id, None)

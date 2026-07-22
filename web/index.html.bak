@@ -26,8 +26,7 @@
             </div>
             <div class="status-bar">
                 <span id="status-text">Initializing...</span>
-                <span id="manual-mode-badge" class="mode-badge hidden"
-                    title="Manual mode active - watching specific game">
+                <span id="manual-mode-badge" class="mode-badge hidden" title="Manual mode active - watching specific game">
                     🎯 MANUAL: <span id="manual-game-name"></span>
                 </span>
                 <span id="auto-mode-badge" class="mode-badge" title="Automatic mode - following game priority">
@@ -50,25 +49,23 @@
         <!-- Main Tab -->
         <div id="main-tab" class="tab-content active">
             <div class="main-grid">
-                <!-- Login Section -->
-                <section class="panel login-panel">
+                <section class="ui-box login-panel">
                     <h2>Login</h2>
                     <div id="login-status" class="login-status"></div>
                     <div id="login-form" style="display: none;">
-                        <input type="text" id="username" placeholder="Username" />
-                        <input type="password" id="password" placeholder="Password" />
-                        <input type="text" id="2fa-token" placeholder="2FA Token (optional)" />
-                        <button id="login-button">Login</button>
+                        <input type="text" id="username" class="ui-input" placeholder="Username" />
+                        <input type="password" id="password" class="ui-input" placeholder="Password" />
+                        <input type="text" id="2fa-token" class="ui-input" placeholder="2FA Token (optional)" />
+                        <button id="login-button" class="ui-btn">Login</button>
                     </div>
                     <div id="oauth-code-display" style="display: none;">
                         <p>Enter this code at: <a id="oauth-url" href="#" target="_blank">Twitch Activate</a></p>
                         <div class="oauth-code" id="oauth-code"></div>
-                        <button id="oauth-confirm">I've entered the code</button>
+                        <button id="oauth-confirm" class="ui-btn">I've entered the code</button>
                     </div>
                 </section>
 
-                <!-- Current Drop Progress -->
-                <section class="panel progress-panel">
+                <section class="ui-box progress-panel">
                     <h2 id="progress-header">Campaign Progress</h2>
                     <div id="progress-container">
                         <div id="no-drop-message">No active drop</div>
@@ -77,7 +74,7 @@
                                 <div class="manual-mode-info">
                                     🎯 Manual Mode: Mining <strong id="manual-mode-game"></strong>
                                 </div>
-                                <button id="exit-manual-btn" class="exit-manual-btn">Return to Auto Mode</button>
+                                <button id="exit-manual-btn" class="ui-btn">Return to Auto Mode</button>
                             </div>
                             <div class="drop-name" id="drop-name"></div>
                             <div class="drop-game" id="drop-game"></div>
@@ -90,20 +87,17 @@
                     </div>
                 </section>
 
-                <!-- Console Output -->
-                <section class="panel console-panel">
+                <section class="ui-box console-panel">
                     <h2 id="console-header">Logs</h2>
                     <div id="console-output" class="console-output"></div>
                 </section>
 
-                <!-- Channels List -->
-                <section class="panel channels-panel">
+                <section class="ui-box channels-panel">
                     <h2 id="channels-header">Channels</h2>
                     <div id="channels-list" class="channels-list"></div>
                 </section>
 
-                <!-- Wanted Items (New Panel) -->
-                <section class="panel wanted-panel">
+                <section class="ui-box wanted-panel">
                     <h2 id="wanted-header">Wanted Drop Queue</h2>
                     <div id="wanted-items-list" class="wanted-items-list">
                         <p class="empty-message-small">No wanted drops queued...</p>
@@ -117,65 +111,25 @@
             <div class="inventory-filters">
                 <div class="filter-controls">
                     <div class="filter-checkboxes">
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-active" />
-                            <span>Active</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-not-linked" checked />
-                            <span>Not Linked</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-upcoming" checked />
-                            <span>Upcoming</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-expired" />
-                            <span>Expired</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-finished" />
-                            <span>Finished</span>
-                        </label>
-                        <div class="filter-separator"
-                            style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;">
-                        </div>
-                        <label class="filter-checkbox" title="Direct Entitlement (Game Item)">
-                            <input type="checkbox" id="filter-benefit-item" checked />
-                            <span>Item</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-benefit-badge" checked />
-                            <span>Badge</span>
-                        </label>
-                        <div class="filter-separator"
-                            style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;">
-                        </div>
-						<label class="filter-checkbox">
-							<input type="checkbox" id="filter-benefit-emote" checked disabled />
-							<span>-</span>
-						</label>
-						<label class="filter-checkbox">
-							<input type="checkbox" id="filter-benefit-other" checked disabled />
-							<span>-</span>
-						</label>
-						<label class="filter-checkbox">
-							<input type="checkbox" id="--" checked disabled />
-							<span>-</span>
-						</label>
+                        <label class="filter-checkbox"><input type="checkbox" id="filter-active" class="ui-checkbox" /><span>Active</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="filter-not-linked" class="ui-checkbox" checked /><span>Not Linked</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="filter-upcoming" class="ui-checkbox" checked /><span>Upcoming</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="filter-expired" class="ui-checkbox" /><span>Expired</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="filter-finished" class="ui-checkbox" /><span>Finished</span></label>
+                        <div class="filter-separator"></div>
+                        <label class="filter-checkbox"><input type="checkbox" id="filter-benefit-item" class="ui-checkbox" checked /><span>Item</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="filter-benefit-badge" class="ui-checkbox" checked /><span>Badge</span></label>
+                        <div class="filter-separator"></div>
+						<label class="filter-checkbox"><input type="checkbox" id="filter-benefit-emote" class="ui-checkbox" checked disabled /><span>-</span></label>
+						<label class="filter-checkbox"><input type="checkbox" id="filter-benefit-other" class="ui-checkbox" checked disabled /><span>-</span></label>
                     </div>
                     <div class="filter-search">
                         <div class="game-dropdown-container">
-                            <div class="game-tags-display" id="selected-game-tags">
-                                <!-- Selected game tags will appear here -->
-                            </div>
-                            <input type="text" id="inventory-game-search" placeholder="Type to search games..."
-                                autocomplete="off" />
-                            <div class="game-dropdown-list" id="game-dropdown-list">
-                                <!-- Dropdown options will appear here -->
-                            </div>
+                            <div class="game-tags-display" id="selected-game-tags"></div>
+                            <input type="text" id="inventory-game-search" class="ui-input" placeholder="Type to search games..." autocomplete="off" />
+                            <div class="game-dropdown-list" id="game-dropdown-list"></div>
                         </div>
-                        <button id="clear-filters-btn" class="small-btn">Clear Filters</button>
+                        <button id="clear-filters-btn" class="ui-btn">Clear Filters</button>
                     </div>
                 </div>
             </div>
@@ -187,80 +141,71 @@
         <!-- Settings Tab -->
         <div id="settings-tab" class="tab-content">
             <div class="settings-container">
-                <section class="settings-section">
+                <!-- General Section -->
+                <section class="ui-box">
                     <h2 id="settings-general-header">General</h2>
-                    <label>
-                        <input type="checkbox" id="dark-mode"> Dark Mode
-                    </label>
-                    <label>
-                        <input type="checkbox" id="auto-sort-by-end"> Auto-sort by event ending time
-                    </label>
-                    <label>
-                        <input type="checkbox" id="mine-badges-first"> Prefer Badges to mine first
-                    </label>
-                    <label>
-                        <input type="checkbox" id="auto-add-all-games"> Auto-add all new events
-                    </label>
-                    <label>
-                        Connection Quality:
-                        <input type="number" id="connection-quality" min="1" max="6" value="1">
-                    </label>
-                    <label>
-                        Minimum Refresh Interval (minutes):
-                        <input type="number" id="minimum-refresh-interval" min="1" max="1440" value="30">
-                    </label>
-                    <label>
-                        Proxy URL:
-                        <input type="text" id="proxy-url" placeholder="http://user:pass@host:port">
-                        <button id="set-proxy-btn" class="secondary-btn" title="Set and verify proxy">Set
-                            Proxy</button>
-                        <button id="verify-proxy-btn" class="secondary-btn"
-                            title="Test proxy connection">Verify</button>
-                    </label>
-                    <small class="help-text-inline" style="margin-top: 5px;">Leave empty to disable. Supports
-                        HTTP/HTTPS/SOCKS.</small>
+                    
+                    <div class="ui-row">
+                        <span class="setting-text">Dark Mode</span>
+                        <input type="checkbox" id="dark-mode" class="ui-checkbox">
+                    </div>
+                    
+                    <div class="ui-row">
+                        <span class="setting-text">Auto-sort by event ending time</span>
+                        <input type="checkbox" id="auto-sort-by-end" class="ui-checkbox">
+                    </div>
+                    
+                    <div class="ui-row">
+                        <span class="setting-text">Auto-add all new events</span>
+                        <input type="checkbox" id="auto-add-all-games" class="ui-checkbox">
+                    </div>
+                    
+                    <div class="ui-row">
+                        <span class="setting-text">Connection Quality</span>
+                        <input type="number" id="connection-quality" class="ui-input" min="1" max="6" value="1">
+                    </div>
+                    
+                    <div class="ui-row">
+                        <span class="setting-text">Minimum Refresh Interval (minutes)</span>
+                        <input type="number" id="minimum-refresh-interval" class="ui-input" min="1" max="1440" value="30">
+                    </div>
+                    
+                    <div class="ui-row">
+                        <span class="setting-text">Proxy URL</span>
+                        <div class="input-group">
+                            <input type="text" id="proxy-url" class="ui-input" placeholder="http://user:pass@host:port">
+                            <button id="set-proxy-btn" class="ui-btn">Set Proxy</button>
+                            <button id="verify-proxy-btn" class="ui-btn">Verify</button>
+                        </div>
+                    </div>
+                    <small class="help-text-inline">Leave empty to disable. Supports HTTP/HTTPS/SOCKS.</small>
                     <div id="proxy-verify-result" class="verify-result" style="display: none;"></div>
                 </section>
 
-                <section class="settings-section">
+                <!-- Mining Benefits Section -->
+                <section class="ui-box">
                     <h2 id="settings-benefits-header">Mining Benefits</h2>
-                    <p id="settings-benefits-help" class="help-text">Select which types of drops you want to
-                        mine.</p>
+                    <p id="settings-benefits-help" class="help-text">Select which types of drops you want to mine.</p>
                     <div class="benefits-filter filter-checkboxes">
-                        <label class="filter-checkbox" title="Detailed description: Direct Entitlement (Game Item)">
-                            <input type="checkbox" id="mining-benefit-item" checked />
-                            <span>Item</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="mining-benefit-badge" checked />
-                            <span>Badge</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="mining-benefit-emote" checked disabled />
-                            <span>Emote</span>
-                        </label>
-                        <label class="filter-checkbox">
-                            <input type="checkbox" id="mining-benefit-unknown" checked disabled />
-                            <span>Other</span>
-                        </label>
+                        <label class="filter-checkbox"><input type="checkbox" id="mining-benefit-item" class="ui-checkbox" checked /><span>Item</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="mining-benefit-badge" class="ui-checkbox" checked /><span>Badge</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="mining-benefit-emote" class="ui-checkbox" checked disabled /><span>Emote</span></label>
+                        <label class="filter-checkbox"><input type="checkbox" id="mining-benefit-unknown" class="ui-checkbox" checked disabled /><span>Other</span></label>
                     </div>
                 </section>
 
-				<!-- Games to Watch Section -->
-                <section class="settings-section">
+                <!-- Games to Watch Section -->
+                <section class="ui-box">
                     <h2 id="settings-games-header">Games to Watch</h2>
-                    <p id="settings-games-help" class="help-text">Select games to watch. Order matters - drag to
-                        reorder
-                        priority (top = highest
-                        priority).</p>
+                    <p id="settings-games-help" class="help-text">Select games to watch. Order matters - drag to reorder priority.</p>
 
                     <div class="games-filter">
-                        <input type="text" id="games-filter" placeholder="Search games..." />
+                        <input type="text" id="games-filter" class="ui-input" placeholder="Search games..." />
                         <div class="filter-actions">
-                            <button id="select-all-btn" class="small-btn">Select All</button>
-                            <button id="deselect-all-btn" class="small-btn">Deselect All</button>
-                            <button id="add-game-btn" class="small-btn">Add Game</button>
-                            <button id="sort-by-end-btn" class="small-btn">Sort by end time</button>
+                            <button id="select-all-btn" class="ui-btn">Select All</button>
+                            <button id="deselect-all-btn" class="ui-btn">Deselect All</button>
+                            <button id="add-game-btn" class="ui-btn">Add Game</button>
+                            <button id="sort-by-end-btn" class="ui-btn">Sort by end time</button>
                         </div>
                     </div>
 
@@ -276,9 +221,8 @@
                         </div>
                     </div>
 
-                    <!-- Integrated reload action directly inside the games panel -->
-                    <div class="games-integrated-actions" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color, #333);">
-                        <button id="reload-btn" class="action-button full-width">⟳ Reload</button>
+                    <div class="games-integrated-actions">
+                        <button id="reload-btn" class="ui-btn full-width">⟳ Reload</button>
                     </div>
                 </section>
             </div>
@@ -289,17 +233,14 @@
             <div class="help-content">
                 <h2 id="help-about-header">About Twitch Drops Miner</h2>
                 <p>This application automatically mines timed Twitch drops without downloading stream data.</p>
-
                 <h3 id="help-howto-header">How to Use</h3>
                 <ol>
                     <li>Login using your Twitch account (OAuth device code flow)</li>
-                    <li>Link your accounts at <a href="https://www.twitch.tv/drops/campaigns"
-                            target="_blank">twitch.tv/drops/campaigns</a></li>
+                    <li>Link your accounts at <a href="https://www.twitch.tv/drops/campaigns" target="_blank">twitch.tv/drops/campaigns</a></li>
                     <li>The miner will automatically discover campaigns and start mining</li>
                     <li>Configure priority games in Settings to focus on what you want</li>
                     <li>Monitor progress in the Main and Inventory tabs</li>
                 </ol>
-
                 <h3 id="help-features-header">Features</h3>
                 <ul>
                     <li>Stream-less drop mining - saves bandwidth</li>
@@ -308,21 +249,18 @@
                     <li>Automatic channel switching</li>
                     <li>Real-time progress tracking</li>
                 </ul>
-
                 <h3 id="help-notes-header">Important Notes</h3>
                 <ul>
                     <li>Do not watch streams on the same account while mining</li>
                     <li>Keep your cookies.jar file secure</li>
                     <li>Requires linked game accounts for drops</li>
                 </ul>
-
                 <div class="help-links">
-                    <a href="https://github.com/rangermix/TwitchDropsMiner" target="_blank">GitHub
-                        Repository</a>
+                    <a href="https://github.com/rangermix/TwitchDropsMiner" target="_blank">GitHub Repository</a>
                 </div>
             </div>
         </div>
-        <!-- Footer -->
+
         <footer class="footer">
             <div class="footer-content">
                 <div class="footer-version">
@@ -339,8 +277,6 @@
             </div>
         </footer>
     </div>
-
     <script src="/static/app.js"></script>
 </body>
-
 </html>

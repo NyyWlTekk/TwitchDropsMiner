@@ -107,7 +107,7 @@ def set_games(manager: SettingsManager, games: set[Game]) -> None:
 def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) -> None:
     """Update settings from user input."""
     should_trigger_update = False
-    
+
     should_trigger_update |= check_and_update_setting(
         manager, "games_to_watch", settings_data.get("games_to_watch"), True
     )
@@ -118,6 +118,9 @@ def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) -> 
         manager, "auto_sort_by_end", settings_data.get("auto_sort_by_end")
     )
     should_trigger_update |= check_and_update_setting(
+        manager, "mine_badges_first", settings_data.get("mine_badges_first")
+    )
+    should_trigger_update |= check_and_update_setting(
         manager, "auto_add_all_games", settings_data.get("auto_add_all_games")
     )
     should_trigger_update |= check_and_update_setting(
@@ -126,7 +129,7 @@ def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) -> 
     should_trigger_update |= check_and_update_setting(
         manager, "connection_quality", settings_data.get("connection_quality")
     )
-    
+
     if "proxy" in settings_data:
         proxy_value = settings_data["proxy"]
         should_trigger_update |= check_and_update_setting(
@@ -136,7 +139,7 @@ def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) -> 
             True,
             lambda proxy: manager._log_change("Proxy cleared") if proxy == "" else None,
         )
-        
+
     should_trigger_update |= check_and_update_setting(
         manager,
         "minimum_refresh_interval_minutes",
@@ -165,19 +168,19 @@ def check_and_update_setting(
 ) -> bool:
     """Compare and commit a single settings change, then log and trigger callbacks."""
     old_value = getattr(manager._settings, key, None)
-    
+
     if new_value is None or old_value == new_value:
         return False
-        
+
     setattr(manager._settings, key, new_value)
-    
+
     # 1. Logování počtu sledovaných her
     if key == "games_to_watch" and isinstance(new_value, list):
         current_count = len(new_value)
         if manager._last_logged_games_count != current_count:
             manager._log_change(f"Setting changed: games_to_watch = {current_count} games")
             manager._last_logged_games_count = current_count
-        
+
     # 2. Logování změn v filtrech inventáře
     elif key == "inventory_filters" and isinstance(old_value, dict) and isinstance(new_value, dict):
         changes = []
@@ -187,15 +190,15 @@ def check_and_update_setting(
             new_val = new_value.get(k)
             if old_val != new_val:
                 changes.append(f"{k}: {old_val} -> {new_val}")
-        
+
         if changes:
             manager._log_change(f"Setting changed: inventory_filters updated -> " + ", ".join(changes))
         else:
             manager._log_change(f"Setting changed: {key} = {new_value}")
-            
+
     # 3. Fallback pro běžná nastavení
     else:
         manager._log_change(f"Setting changed: {key} = {new_value}")
-        
+
     action(new_value)
     return should_trigger_update

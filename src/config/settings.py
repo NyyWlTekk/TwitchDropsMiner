@@ -25,6 +25,7 @@ class InventoryFilters(TypedDict):
 default_settings = {
     "auto_sort_by_end": False,
     "auto_add_all_games": False,
+    "mine_badges_first": False,
     "connection_quality": 1,
     "dark_mode": False,
     "games_to_watch": [],
@@ -56,6 +57,7 @@ default_settings = {
 @dataclass
 class Settings:
     auto_sort_by_end: bool
+    mine_badges_first: bool
     auto_add_all_games: bool
     connection_quality: int
     dark_mode: bool

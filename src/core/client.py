@@ -266,15 +266,17 @@ class Twitch:
         self._inventory_dirty = True
         await self._inventory_service.fetch_inventory()
 
-    def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
-        return self._inventory_service.get_active_campaign(channel)
+        # Po načtení zavoláme prioritizaci
+        prioritize_badge_games(self)
 
-    async def get_live_streams(self, game: Game, *, limit: int = 20, drops_enabled: bool = True) -> list[Channel]:
-        return await self._channel_service.get_live_streams(game, limit=limit, drops_enabled=drops_enabled)
-
-    async def bulk_check_online(self, channels: abc.Iterable[Channel]):
+    async def bulk_check_online(self, channels: abc.Iterable[Channel]) -> None:
         await self._channel_service.bulk_check_online(channels)
 
+    async def get_live_streams(self, game: Game, *, drops_enabled: bool = False) -> list[Channel]:
+        return await self._channel_service.get_live_streams(game, drops_enabled=drops_enabled)
+        
+    def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
+        return self._inventory_service.get_active_campaign(channel)
 
 # ==============================================================================
 # 2. STATE MACHINE CORE LOOP (Flat module level - 0 Indentations)
@@ -498,7 +500,7 @@ async def handle_state_channel_switch(client: Twitch) -> None:
 
 async def claim_eligible_drops(client: Twitch) -> None:
     logger.debug(f"DEBUG: Počet kampaní v inventory: {len(client.inventory)}")
-    
+
     for campaign in client.inventory:
         # Kontrola linknutí
         if not getattr(campaign, "linked", True):
@@ -510,7 +512,7 @@ async def claim_eligible_drops(client: Twitch) -> None:
                 # 1. Kontrola, zda je drop připraven k vyzvednutí
                 if drop.can_claim:
                     logger.info(f"🚀 Pokus o claim dropu: {drop.name} (ID: {drop.id})")
-                    
+
                     # 2. THROTTLING: Pauza mezi claimy, aby bot nespamoval API
                     await asyncio.sleep(2)
 
@@ -521,7 +523,7 @@ async def claim_eligible_drops(client: Twitch) -> None:
                     else:
                         # Zde uvidíš varování, pokud se claim nezdařil
                         logger.warning(f"❌ Claim selhal pro drop: {drop.name} (ID: {drop.id}) - Twitch vrátil chybu nebo byl drop odmítnut.")
-                
+
                 # 4. DEBUG: Pokud není drop připraven, vypíše proč
                 else:
                     # Pokud má drop atributy pro minuty, vypíšeme progress pro přehled
@@ -556,9 +558,15 @@ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign
 
 
 def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
-    if getattr(client.settings, "auto_sort_by_end", False) and client.inventory:
-        logger.info("Auto-sort by event ending time")
+    auto_sort = getattr(client.settings, "auto_sort_by_end", False)
+    mine_badges_first = getattr(client.settings, "mine_badges_first", False)
+
+    if (auto_sort or mine_badges_first) and client.inventory:
+        logger.info("Auto-sorting games by pending badges and ending time")
         now_utc = datetime.now(timezone.utc)
+
+        # Uložíme si původní indexy pro případ, že auto_sort je vypnutý (zachová ruční pořadí)
+        original_indices = {game: idx for idx, game in enumerate(client.settings.games_to_watch)}
 
         def get_game_sort_key(game_name: str):
             game_campaigns = [
@@ -569,17 +577,82 @@ def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaig
             upcoming_c = [c for c in game_campaigns if c.upcoming]
             expired_c = [c for c in game_campaigns if c.expired]
 
-            if active_c:
-                return (0, min(c.ends_at for c in active_c))
-            elif upcoming_c:
-                return (1, min(c.starts_at for c in upcoming_c))
-            elif expired_c:
-                return (2, max(c.ends_at for c in expired_c))
-            else:
-                return (3, now_utc)
+            # 1. Kontrola, zda aktivní kampaň obsahuje NEDOTĚŽENOU badge
+            has_pending_badge = False
+            if mine_badges_first:
+                for c in active_c:
+                    for drop in getattr(c, "drops", []):
+                        is_badge = getattr(drop, "is_badge", False) or "badge" in getattr(drop, "name", "").lower()
+                        is_claimed = getattr(drop, "claimed", False) or getattr(drop, "completed", False)
+
+                        if is_badge and not is_claimed:
+                            has_pending_badge = True
+                            break
+                    if has_pending_badge:
+                        break
+
+            # Priority tier: 0 = Nedotěžená badge (první), 1 = Ostatní
+            badge_tier = 0 if (mine_badges_first and has_pending_badge) else 1
+
+            # 2A. Pokud je ZAPNUTÝ auto_sort podle času:
+            if auto_sort:
+                if active_c:
+                    return (badge_tier, 0, min(c.ends_at for c in active_c))
+                elif upcoming_c:
+                    return (badge_tier, 1, min(c.starts_at for c in upcoming_c))
+                elif expired_c:
+                    return (badge_tier, 2, max(c.ends_at for c in expired_c))
+                else:
+                    return (badge_tier, 3, now_utc)
+
+            # 2B. Pokud NENÍ zapnutý auto_sort: zachováme ruční pořadí u her bez badge
+            return (badge_tier, original_indices.get(game_name, 999))
 
         client.settings.games_to_watch.sort(key=get_game_sort_key)
 
+def prioritize_badge_games(client: Twitch, filtered_inventory: list[DropsCampaign] | None = None) -> None:
+    """
+    Vyčleněná funkce bez kompletního auto-sortu.
+    Pokud je zapnuto 'mine_badges_first', posune hry s nedotěženou badge na začátek fronty.
+    """
+    if not getattr(client.settings, "mine_badges_first", False) or not client.inventory:
+        return
+
+    # Pokud filtered_inventory nedodáme, načteme ho z clienta
+    if filtered_inventory is None:
+        filtered_inventory = get_filtered_inventory(client)
+
+    # 1. Najdeme názvy her, které mají aktivní a NEDOTĚŽENÝ odznak
+    badge_games: set[str] = set()
+
+    for campaign in filtered_inventory:
+        if not campaign.active:
+            continue
+
+        game_name = campaign.game.name if hasattr(campaign.game, "name") else str(campaign.game)
+
+        for drop in getattr(campaign, "drops", []):
+            is_badge = getattr(drop, "is_badge", False) or "badge" in getattr(drop, "name", "").lower()
+            is_claimed = getattr(drop, "claimed", False) or getattr(drop, "completed", False)
+
+            if is_badge and not is_claimed:
+                badge_games.add(game_name)
+                break
+
+    if not badge_games:
+        return
+
+    # 2. Rozdělíme seznam na hry s badge a ostatní (OPRAVENO: self -> client)
+    current_games = getattr(getattr(client, "settings", None), "games_to_watch", []) or []
+    with_badges = [g for g in current_games if g in badge_games]
+    without_badges = [g for g in current_games if g not in badge_games]
+
+    # 3. Hry s badge dáme dopředu
+    new_queue = with_badges + without_badges
+
+    if new_queue != current_games:
+        client.settings.games_to_watch = new_queue
+        logger.info(f"Prioritizovány hry s odznaky na začátek fronty: {with_badges}")
 
 def get_wanted_games(client: Twitch, filtered_inventory: list[DropsCampaign], next_hour: datetime, force_rebuild: bool = False) -> list[Game]:
     if client._inventory_dirty or force_rebuild or not client._wanted_games_cache:

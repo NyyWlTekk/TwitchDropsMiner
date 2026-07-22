@@ -1332,6 +1332,7 @@ function updateSettingsUI(settings) {
     state.settings = settings;
     document.getElementById('dark-mode').checked = settings.dark_mode || false;
     document.getElementById('auto-sort-by-end').checked = settings.auto_sort_by_end || false;
+    document.getElementById('mine-badges-first').checked = settings.mine_badges_first || false;
     document.getElementById('auto-add-all-games').checked = settings.auto_add_all_games || false;
     document.getElementById('connection-quality').value = settings.connection_quality || 1;
     document.getElementById('minimum-refresh-interval').value = settings.minimum_refresh_interval_minutes || 30;
@@ -1907,6 +1908,7 @@ async function saveSettings() {
         games_to_watch: state.settings.games_to_watch || [],
         inventory_filters: getInventoryFilters(),
         auto_sort_by_end: document.getElementById('auto-sort-by-end')?.checked || false,
+        mine_badges_first: document.getElementById('mine-badges-first')?.checked || false,
         auto_add_all_games: document.getElementById('auto-add-all-games')?.checked || false,
         mining_benefits: {
             "DIRECT_ENTITLEMENT": document.getElementById('mining-benefit-item')?.checked,
@@ -2413,6 +2415,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 	
+	document.getElementById('mine-badges-first').addEventListener('change', saveSettings);
     document.getElementById('language').addEventListener('change', saveSettings);
     document.getElementById('connection-quality').addEventListener('change', saveSettings);
     document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);

@@ -541,7 +541,7 @@ function updateRemainingTime(seconds) {
         dropTimeEl.textContent = `Time remaining: ${formatTime(seconds)} / ${formatTime(dropTotalSeconds)}`;
     }
 
-    // 2. PROSTŘEDNÍ LIŠTA: Čas pro aktuální kampaň
+    // 2. PROSTŘEDNÍ LIŠTA: Campaign Progress (bere nejdelší drop v kampani)
     if (state.currentDrop && state.currentDrop.campaign_id && state.campaigns) {
         const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
         const campaign = campaignsArray.find(c => c.id === state.currentDrop.campaign_id || c.campaign_id === state.currentDrop.campaign_id);
@@ -550,34 +550,32 @@ function updateRemainingTime(seconds) {
             let drops = campaign.drops;
             if (!Array.isArray(drops)) drops = Object.values(drops);
 
-            let campTotalRemainingSecs = 0;
-            let campTotalReqSecs = 0;
+            let maxCampRemainingSecs = 0;
+            let maxCampReqSecs = 0;
 
             drops.forEach(d => {
                 const req = (Number(d.required_minutes) || 1) * 60;
                 const cur = (Number(d.current_minutes) || 0) * 60;
-                campTotalReqSecs += req;
                 
-                if (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id) {
-                    campTotalRemainingSecs += seconds;
-                } else {
-                    const rem = d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur);
-                    campTotalRemainingSecs += rem;
-                }
+                const rem = (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id)
+                    ? seconds
+                    : (d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur));
+                
+                if (rem > maxCampRemainingSecs) maxCampRemainingSecs = rem;
+                if (req > maxCampReqSecs) maxCampReqSecs = req;
             });
 
             const campaignTimeEl = document.getElementById('campaign-progress-time');
             if (campaignTimeEl) {
-                campaignTimeEl.textContent = `Time remaining: ${formatTime(campTotalRemainingSecs)} / ${formatTime(campTotalReqSecs)}`;
+                campaignTimeEl.textContent = `Time remaining: ${formatTime(maxCampRemainingSecs)} / ${formatTime(maxCampReqSecs)}`;
             }
         }
     }
 
-    // 3. HORNÍ LIŠTA: Celkový čas pro všechny aktivní kampaně
+    // 3. HORNÍ LIŠTA: Overall Queue (vezme nejdelší z každé hry/kategorie a ty pak sečte)
     if (state.campaigns) {
         const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        let overallRemainingSecs = 0;
-        let overallReqSecs = 0;
+        const gameMap = {};
 
         campaignsArray.forEach(campaign => {
             if (!campaign || campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
@@ -587,18 +585,39 @@ function updateRemainingTime(seconds) {
             if (!drops) return;
             if (!Array.isArray(drops)) drops = Object.values(drops);
 
+            let campRem = 0;
+            let campReq = 0;
+
             drops.forEach(d => {
                 const req = (Number(d.required_minutes) || 1) * 60;
                 const cur = (Number(d.current_minutes) || 0) * 60;
-                overallReqSecs += req;
+                const rem = (state.currentDrop && (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id))
+                    ? seconds
+                    : (d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur));
 
-                if (state.currentDrop && (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id)) {
-                    overallRemainingSecs += seconds;
-                } else {
-                    const rem = d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur);
-                    overallRemainingSecs += rem;
-                }
+                if (rem > campRem) campRem = rem;
+                if (req > campReq) campReq = req;
             });
+
+            // Určení klíče podle názvu hry
+            const gameName = campaign.game_name || campaign.game?.name || campaign.name || 'Other';
+            
+            if (!gameMap[gameName]) {
+                gameMap[gameName] = { rem: 0, req: 0 };
+            }
+            // Ponecháme nejdelší hodnotu pro danou hru
+            if (campRem > gameMap[gameName].rem) {
+                gameMap[gameName].rem = campRem;
+                gameMap[gameName].req = campReq;
+            }
+        });
+
+        // Sečteme nejdelší časy napříč různými hrami
+        let overallRemainingSecs = 0;
+        let overallReqSecs = 0;
+        Object.values(gameMap).forEach(g => {
+            overallRemainingSecs += g.rem;
+            overallReqSecs += g.req;
         });
 
         const overallTimeEl = document.getElementById('overall-progress-time');
@@ -818,32 +837,35 @@ function updateCampaignProgressData(data, liveCurrentMins) {
     let drops = campaign.drops;
     if (!Array.isArray(drops)) drops = Object.values(drops);
 
-    let campTotalCurrent = 0;
-    let campTotalRequired = 0;
+    let maxReq = 0;
+    let maxCur = 0;
     let currentIndex = 1;
 
     drops.forEach((d, index) => {
         let cur = Number(d.current_minutes) || 0;
-        const req = Number(d.required_minutes) || 1;
+        const req = Number(d.required_minutes) || 0;
 
         if (d.id === data.drop_id || d.drop_id === data.drop_id) {
             cur = liveCurrentMins;
             currentIndex = index + 1;
         }
 
-        campTotalCurrent += cur;
-        campTotalRequired += req;
+        // Běží paralelně -> vezmeme nejdelší drop v kampani
+        if (req > maxReq) {
+            maxReq = req;
+            maxCur = cur;
+        }
     });
 
     if (campaignTitle && campaign.name) {
         campaignTitle.textContent = `${campaign.name} • Drop ${currentIndex}/${drops.length}`;
     }
 
-    if (campTotalRequired > 0) {
-        const percentage = Math.min(100, Math.round((campTotalCurrent / campTotalRequired) * 100));
+    if (maxReq > 0) {
+        const percentage = Math.min(100, Math.round((maxCur / maxReq) * 100));
         campaignFill.style.width = `${percentage}%`;
         campaignFill.textContent = `${percentage}%`;
-        campaignText.textContent = `${campTotalCurrent} / ${campTotalRequired} min`;
+        campaignText.textContent = `${maxCur} / ${maxReq} min`;
     } else {
         campaignFill.style.width = '0%';
         campaignFill.textContent = '0%';
@@ -853,11 +875,9 @@ function updateCampaignProgressData(data, liveCurrentMins) {
 
 function updateOverallProgress(tree = null) {
     try {
-        let totalCurrent = 0;
-        let totalRequired = 0;
-
         const overallFill = document.getElementById('overall-progress-fill');
         const overallText = document.getElementById('overall-progress-text');
+        const overallTimeEl = document.getElementById('overall-progress-time');
 
         if (!overallFill || !overallText) return;
 
@@ -868,23 +888,23 @@ function updateOverallProgress(tree = null) {
             return;
         }
 
-        let activeGames = new Set();
+        // 1. Získat položky PŘÍMO z fronty (tree nebo DOM elementů Wanted Drops Queue)
+        let queueItems = [];
         if (tree && Array.isArray(tree)) {
-            tree.forEach(g => {
-                const name = g.game_name || g.name;
-                if (name) activeGames.add(name.toLowerCase());
-            });
-        }
-
-        if (activeGames.size === 0) {
+            queueItems = tree;
+        } else {
             const domGameTitles = document.querySelectorAll('.wanted-game-title');
             domGameTitles.forEach(el => {
                 const text = el.textContent.trim();
-                if (text) activeGames.add(text.toLowerCase());
+                if (text) queueItems.push({ game_name: text });
             });
         }
 
-        if (activeGames.size === 0) {
+        if (queueItems.length === 0 && state.currentDrop && state.currentDrop.game_name) {
+            queueItems.push({ game_name: state.currentDrop.game_name });
+        }
+
+        if (queueItems.length === 0) {
             overallFill.style.width = '0%';
             overallFill.textContent = '0%';
             overallText.textContent = '0 / 0 min';
@@ -892,39 +912,73 @@ function updateOverallProgress(tree = null) {
         }
 
         const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        let gamesMap = {};
+        let totalCurrent = 0;
+        let totalRequired = 0;
 
-        campaignsArray.forEach(campaign => {
-            if (!campaign) return;
-            const gameName = campaign.game_name || campaign.game || campaign.name || '';
-            if (!gameName) return;
+        // 2. Projdeme položky fronty přesně v tom pořadí, v jakém tam jsou
+        queueItems.forEach(queueItem => {
+            const qGameName = (queueItem.game_name || queueItem.name || '').toLowerCase();
+            const qCampaignName = (queueItem.campaign_name || queueItem.name || '').toLowerCase();
 
-            const found = Array.from(activeGames).some(ag => ag === gameName.toLowerCase());
-            if (!found) return;
+            // Najdeme odpovídající kampaně v datech
+            const matchingCampaigns = campaignsArray.filter(campaign => {
+                if (!campaign) return false;
+                if (campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
+                    return false;
+                }
+                const cGameName = (campaign.game_name || campaign.game || campaign.name || '').toLowerCase();
+                const cCampName = (campaign.campaign_name || campaign.name || '').toLowerCase();
 
-            if (campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
-                return;
-            }
+                if (qGameName && cGameName === qGameName) {
+                    if (qCampaignName && qCampaignName !== qGameName) {
+                        return cCampName.includes(qCampaignName) || qCampaignName.includes(cCampName);
+                    }
+                    return true;
+                }
+                return false;
+            });
 
-            let drops = campaign.drops;
-            if (drops) {
+            if (matchingCampaigns.length === 0) return;
+
+            // Pro tuto položku ve frontě spočítáme minuty (pokud je víc kampaní pro stejnou hru, vezmeme nejdelší)
+            let bestCampReq = 0;
+            let bestCampCur = 0;
+
+            matchingCampaigns.forEach(campaign => {
+                let drops = campaign.drops;
+                if (!drops) return;
                 if (!Array.isArray(drops)) drops = Object.values(drops);
 
                 if (drops.length > 0) {
-                    const campRequired = Math.max(...drops.map(d => Number(d.required_minutes) || 0));
-                    const campCurrent = Math.max(...drops.map(d => Number(d.current_minutes) || 0));
+                    let campReq = 0;
+                    let campCur = 0;
 
-                    if (!gamesMap[gameName]) gamesMap[gameName] = [];
-                    gamesMap[gameName].push({ current: campCurrent, required: campRequired });
+                    drops.forEach(d => {
+                        let cur = Number(d.current_minutes) || 0;
+                        const req = Number(d.required_minutes) || 0;
+
+                        const isCurrentActive = state.currentDrop && (
+                            String(d.id) === String(state.currentDrop.drop_id) || 
+                            String(d.drop_id) === String(state.currentDrop.drop_id)
+                        );
+
+                        if (isCurrentActive) {
+                            cur = Number(state.currentDrop.current_minutes) || cur;
+                        }
+
+                        campReq += req;
+                        campCur += cur;
+                    });
+
+                    if (campReq > bestCampReq) {
+                        bestCampReq = campReq;
+                        bestCampCur = campCur;
+                    }
                 }
-            }
-        });
+            });
 
-        Object.values(gamesMap).forEach(campaignsList => {
-            if (campaignsList.length === 0) return;
-            let longestCampaign = campaignsList.reduce((max, c) => c.required > max.required ? c : max, campaignsList[0]);
-            totalCurrent += longestCampaign.current;
-            totalRequired += longestCampaign.required;
+            totalRequired += bestCampReq;
+            totalCurrent += bestCampCur;
         });
 
         if (totalRequired > 0) {
@@ -932,6 +986,12 @@ function updateOverallProgress(tree = null) {
             overallFill.style.width = `${percentage}%`;
             overallFill.textContent = `${percentage}%`;
             overallText.textContent = `${totalCurrent} / ${totalRequired} min`;
+
+            if (overallTimeEl && typeof formatTime === 'function') {
+                const overallReqSecs = totalRequired * 60;
+                const overallRemSecs = Math.max(0, (totalRequired - totalCurrent) * 60);
+                overallTimeEl.textContent = `Time remaining: ${formatTime(overallRemSecs)} / ${formatTime(overallReqSecs)}`;
+            }
         } else {
             overallFill.style.width = '0%';
             overallFill.textContent = '0%';
@@ -978,6 +1038,7 @@ function updateDrop(campaignId, dropData) {
         }
     }
 }
+
 // ==================== Inventory Filtering ====================
 
 function sortCampaigns(campaigns) {

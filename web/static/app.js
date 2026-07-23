@@ -477,11 +477,15 @@ function renderChannels() {
     });
 }
 
-// ==================== Active Campaign Rotation & Time Management ====================
+// ==================== Active Drop & Campaign Rotation ====================
 
 if (!state.activeCampaignsQueue) state.activeCampaignsQueue = [];
 if (!state.campaignRotationIndex) state.campaignRotationIndex = 0;
 if (!state.campaignRotationTimer) state.campaignRotationTimer = null;
+
+if (!state.activeDropsQueue) state.activeDropsQueue = [];
+if (!state.dropRotationIndex) state.dropRotationIndex = 0;
+if (!state.dropRotationTimer) state.dropRotationTimer = null;
 
 function startCampaignRotation() {
     if (state.campaignRotationTimer) return;
@@ -495,7 +499,22 @@ function startCampaignRotation() {
         if (nextCampaignData) {
             switchCampaignDisplay(nextCampaignData);
         }
-    }, 5000); // Switch every 5 seconds between campaigns
+    }, 5000);
+}
+
+function startDropRotation() {
+    if (state.dropRotationTimer) return;
+
+    state.dropRotationTimer = setInterval(() => {
+        if (!state.activeDropsQueue || state.activeDropsQueue.length <= 1) return;
+        
+        state.dropRotationIndex = (state.dropRotationIndex + 1) % state.activeDropsQueue.length;
+        const nextDropData = state.activeDropsQueue[state.dropRotationIndex];
+        
+        if (nextDropData) {
+            updateSingleDropDisplay(nextDropData);
+        }
+    }, 4000); // Střídá dropy každé 4 sekundy
 }
 
 function formatTime(secs) {
@@ -516,13 +535,13 @@ function formatTime(secs) {
 }
 
 function updateRemainingTime(seconds) {
-    // 1. DOLNÍ LIŠTA: Čas pro aktuální drop (current / total)
+    // 1. DOLNÍ LIŠTA: Čas pro aktuální drop
     const dropTimeEl = document.getElementById('progress-time');
     if (dropTimeEl && dropTotalSeconds > 0) {
         dropTimeEl.textContent = `Time remaining: ${formatTime(seconds)} / ${formatTime(dropTotalSeconds)}`;
     }
 
-    // 2. PROSTŘEDNÍ LIŠTA: Čas pro aktuální kampaň (current / total všech jejích dropů)
+    // 2. PROSTŘEDNÍ LIŠTA: Čas pro aktuální kampaň
     if (state.currentDrop && state.currentDrop.campaign_id && state.campaigns) {
         const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
         const campaign = campaignsArray.find(c => c.id === state.currentDrop.campaign_id || c.campaign_id === state.currentDrop.campaign_id);
@@ -554,7 +573,7 @@ function updateRemainingTime(seconds) {
         }
     }
 
-    // 3. HORNÍ LIŠTA: Celkový čas pro všechny aktivní kampaně/frontu (Overall Queue)
+    // 3. HORNÍ LIŠTA: Celkový čas pro všechny aktivní kampaně
     if (state.campaigns) {
         const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
         let overallRemainingSecs = 0;
@@ -629,6 +648,86 @@ function renderAllProgressBars(currentMins, dropData, elapsedSecsOverride = null
 
     updateCampaignProgressData(dropData, currentMins);
     updateOverallProgress();
+}
+
+function switchCampaignDisplay(data) {
+    state.currentDrop = data;
+
+    // Naplníme frontu dropů pro aktuální kampaň ze state.campaigns, pokud existují
+    if (state.campaigns) {
+        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        const campaign = campaignsArray.find(c => c.id === data.campaign_id || c.campaign_id === data.campaign_id);
+        if (campaign && campaign.drops) {
+            let drops = campaign.drops;
+            if (!Array.isArray(drops)) drops = Object.values(drops);
+            
+            state.activeDropsQueue = drops.map(d => ({
+                ...data,
+                drop_id: d.id || d.drop_id,
+                drop_name: d.name || d.drop_name,
+                current_minutes: d.current_minutes || 0,
+                required_minutes: d.required_minutes || 1,
+                remaining_seconds: d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, ((d.required_minutes || 1) - (d.current_minutes || 0)) * 60)
+            }));
+            state.dropRotationIndex = state.activeDropsQueue.findIndex(d => d.drop_id === data.drop_id);
+            if (state.dropRotationIndex === -1) state.dropRotationIndex = 0;
+        } else {
+            state.activeDropsQueue = [data];
+        }
+    } else {
+        state.activeDropsQueue = [data];
+    }
+
+    updateSingleDropDisplay(data);
+    startCampaignRotation();
+    startDropRotation();
+}
+
+function updateSingleDropDisplay(data) {
+    state.currentDrop = data;
+
+    const currentSecs = (data.current_minutes || 0) * 60;
+    dropTotalSeconds = currentSecs + (data.remaining_seconds || 0);
+
+    const noDropMessage = document.getElementById('no-drop-message');
+    const dropInfo = document.getElementById('drop-info');
+    if (noDropMessage) noDropMessage.style.display = 'none';
+    if (dropInfo) dropInfo.style.display = 'block';
+
+    const dropNameEl = document.getElementById('drop-name');
+    if (dropNameEl) {
+        const queueLength = state.activeCampaignsQueue && state.activeCampaignsQueue.length > 0 ? state.activeCampaignsQueue.length : 1;
+        const currentIndex = (state.campaignRotationIndex !== undefined ? state.campaignRotationIndex : 0) + 1;
+        dropNameEl.textContent = `${data.game_name} (${currentIndex}/${queueLength})`;
+    }
+
+    const currentDropLabel = document.getElementById('current-drop-label');
+    if (currentDropLabel) {
+        const dropQueueLen = state.activeDropsQueue && state.activeDropsQueue.length > 0 ? state.activeDropsQueue.length : 1;
+        const dropIdx = (state.dropRotationIndex !== undefined ? state.dropRotationIndex : 0) + 1;
+        currentDropLabel.textContent = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${data.drop_name}`;
+    }
+
+    const dropGameEl = document.getElementById('drop-game');
+    if (dropGameEl) {
+        if (data.campaign_id) {
+            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
+            dropGameEl.replaceChildren(
+                makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name),
+                document.createTextNode(` — ${data.drop_name}`),
+            );
+        } else {
+            dropGameEl.textContent = `${data.campaign_name} — ${data.drop_name}`;
+        }
+    }
+
+    renderAllProgressBars(data.current_minutes || 0, data);
+
+    if (state.countdownTimer !== null) {
+        clearTimeout(state.countdownTimer);
+        state.countdownTimer = null;
+    }
+    updateRemainingTime(data.remaining_seconds || 0);
 }
 
 function updateDropProgress(data) {

@@ -1,6 +1,11 @@
 // Twitch Drops Miner Web Client
 // Socket.IO and API communication
 
+
+let selectedInventoryGames = [];
+let availableGames = new Set(); // All games from campaigns
+let draggedElement = null;
+
 // Global state
 const state = {
     connected: false,
@@ -312,7 +317,10 @@ socket.on('wanted_items_update', (data) => {
 // ================================================================
 
 function updateStatus(status) {
-    document.getElementById('status-text').textContent = status;
+    const statusEl = document.getElementById('status-text');
+    if (statusEl) {
+        statusEl.textContent = status;
+    }
 }
 
 function addConsoleLine(message) {
@@ -322,10 +330,12 @@ function addConsoleLine(message) {
 function addConsoleLineRaw(line) {
     const console = document.getElementById('console-output');
     if (!console) return;
+
     const div = document.createElement('div');
     div.textContent = line;
     console.appendChild(div);
     console.scrollTop = console.scrollHeight;
+
     while (console.children.length > 1000) {
         console.removeChild(console.firstChild);
     }
@@ -368,7 +378,7 @@ function renderChannels() {
     if (channels.length === 0) {
         const emptyMsg = t.gui?.channels?.no_channels || 'No channels tracked yet...';
         container.replaceChildren(
-            makeElement('p', { class: 'empty-message' }, emptyMsg),
+            makeElement('p', { class: 'empty-message' }, emptyMsg)
         );
         return;
     }
@@ -384,7 +394,7 @@ function renderChannels() {
     if (filteredChannels.length === 0) {
         const emptyMsg = t.gui?.channels?.no_channels_for_games || 'No channels found for selected games...';
         container.replaceChildren(
-            makeElement('p', { class: 'empty-message' }, emptyMsg),
+            makeElement('p', { class: 'empty-message' }, emptyMsg)
         );
         return;
     }
@@ -480,46 +490,50 @@ function renderChannels() {
 // ==================== Active Drop & Campaign Rotation ====================
 
 if (!state.activeCampaignsQueue) state.activeCampaignsQueue = [];
-if (!state.campaignRotationIndex) state.campaignRotationIndex = 0;
-if (!state.campaignRotationTimer) state.campaignRotationTimer = null;
+if (state.campaignRotationIndex === undefined) state.campaignRotationIndex = 0;
 
 if (!state.activeDropsQueue) state.activeDropsQueue = [];
-if (!state.dropRotationIndex) state.dropRotationIndex = 0;
-if (!state.dropRotationTimer) state.dropRotationTimer = null;
+if (state.dropRotationIndex === undefined) state.dropRotationIndex = 0;
 
-function startCampaignRotation() {
-    if (state.campaignRotationTimer) return;
+// Používáme už jen tento jeden společný timer
+if (!state.rotationTimer) state.rotationTimer = null;
 
-    state.campaignRotationTimer = setInterval(() => {
-        if (!state.activeCampaignsQueue || state.activeCampaignsQueue.length <= 1) return;
-        
-        state.campaignRotationIndex = (state.campaignRotationIndex + 1) % state.activeCampaignsQueue.length;
-        const nextCampaignData = state.activeCampaignsQueue[state.campaignRotationIndex];
-        
-        if (nextCampaignData) {
-            switchCampaignDisplay(nextCampaignData);
+function startCombinedRotation() {
+    // Zamezíme běhu duplicitních časovačů
+    if (state.rotationTimer) return;
+
+    state.rotationTimer = setInterval(() => {
+        if (!state.activeDropsQueue || state.activeDropsQueue.length === 0) return;
+
+        // 1. Posuneme index dropu na další v pořadí
+        state.dropRotationIndex++;
+
+        // 2. Pokud jsme projeli VŠECHNY dropy v aktuální kampani (dosáhli jsme konce pole):
+        if (state.dropRotationIndex >= state.activeDropsQueue.length) {
+            state.dropRotationIndex = 0; // Vracíme dropy zpět na 1. položku
+
+            // A TEPRVE TEĎ přepneme na další kampaň!
+            if (state.activeCampaignsQueue && state.activeCampaignsQueue.length > 1) {
+                state.campaignRotationIndex = (state.campaignRotationIndex + 1) % state.activeCampaignsQueue.length;
+                const nextCampaignData = state.activeCampaignsQueue[state.campaignRotationIndex];
+
+                if (nextCampaignData) {
+                    switchCampaignDisplay(nextCampaignData);
+                }
+            }
         }
-    }, 5000);
-}
 
-function startDropRotation() {
-    if (state.dropRotationTimer) return;
-
-    state.dropRotationTimer = setInterval(() => {
-        if (!state.activeDropsQueue || state.activeDropsQueue.length <= 1) return;
-        
-        state.dropRotationIndex = (state.dropRotationIndex + 1) % state.activeDropsQueue.length;
+        // 3. Aktualizujeme zobrazení konkrétního dropu
         const nextDropData = state.activeDropsQueue[state.dropRotationIndex];
-        
         if (nextDropData) {
             updateSingleDropDisplay(nextDropData);
         }
-    }, 4000); // Střídá dropy každé 4 sekundy
+    }, 4000); // Časová prodleva mezi zobrazením jednotlivých dropů (4 sec)
 }
 
 function formatTime(secs) {
     if (isNaN(secs) || secs < 0) return '0:00';
-    
+
     const days = Math.floor(secs / 86400);
     const hours = Math.floor((secs % 86400) / 3600);
     const mins = Math.floor((secs % 3600) / 60);
@@ -535,17 +549,17 @@ function formatTime(secs) {
 }
 
 function updateRemainingTime(seconds) {
-    // 1. DOLNÍ LIŠTA: Čas pro aktuální drop
+    // 1. Current drop progress time
     const dropTimeEl = document.getElementById('progress-time');
     if (dropTimeEl && dropTotalSeconds > 0) {
         dropTimeEl.textContent = `Time remaining: ${formatTime(seconds)} / ${formatTime(dropTotalSeconds)}`;
     }
 
-    // 2. PROSTŘEDNÍ LIŠTA: Campaign Progress (bere nejdelší drop v kampani)
+    // 2. Campaign progress time (takes longest drop in campaign)
     if (state.currentDrop && state.currentDrop.campaign_id && state.campaigns) {
         const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
         const campaign = campaignsArray.find(c => c.id === state.currentDrop.campaign_id || c.campaign_id === state.currentDrop.campaign_id);
-        
+
         if (campaign && campaign.drops) {
             let drops = campaign.drops;
             if (!Array.isArray(drops)) drops = Object.values(drops);
@@ -556,11 +570,11 @@ function updateRemainingTime(seconds) {
             drops.forEach(d => {
                 const req = (Number(d.required_minutes) || 1) * 60;
                 const cur = (Number(d.current_minutes) || 0) * 60;
-                
+
                 const rem = (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id)
                     ? seconds
                     : (d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur));
-                
+
                 if (rem > maxCampRemainingSecs) maxCampRemainingSecs = rem;
                 if (req > maxCampReqSecs) maxCampReqSecs = req;
             });
@@ -572,7 +586,7 @@ function updateRemainingTime(seconds) {
         }
     }
 
-    // 3. HORNÍ LIŠTA: Overall Queue (vezme nejdelší z každé hry/kategorie a ty pak sečte)
+    // 3. Overall Queue progress time
     if (state.campaigns) {
         const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
         const gameMap = {};
@@ -599,20 +613,17 @@ function updateRemainingTime(seconds) {
                 if (req > campReq) campReq = req;
             });
 
-            // Určení klíče podle názvu hry
             const gameName = campaign.game_name || campaign.game?.name || campaign.name || 'Other';
-            
+
             if (!gameMap[gameName]) {
                 gameMap[gameName] = { rem: 0, req: 0 };
             }
-            // Ponecháme nejdelší hodnotu pro danou hru
             if (campRem > gameMap[gameName].rem) {
                 gameMap[gameName].rem = campRem;
                 gameMap[gameName].req = campReq;
             }
         });
 
-        // Sečteme nejdelší časy napříč různými hrami
         let overallRemainingSecs = 0;
         let overallReqSecs = 0;
         Object.values(gameMap).forEach(g => {
@@ -643,11 +654,11 @@ function updateRemainingTime(seconds) {
 function renderAllProgressBars(currentMins, dropData, elapsedSecsOverride = null) {
     const reqMins = dropData.required_minutes || 1;
     let dropPercentage = 0;
-    
-    const elapsedSecs = elapsedSecsOverride !== null 
-        ? elapsedSecsOverride 
+
+    const elapsedSecs = elapsedSecsOverride !== null
+        ? elapsedSecsOverride
         : (dropTotalSeconds - (dropData.remaining_seconds || 0));
-    
+
     if (dropTotalSeconds > 0) {
         dropPercentage = Math.min(100, Math.max(0, (elapsedSecs / dropTotalSeconds) * 100));
     } else {
@@ -669,38 +680,7 @@ function renderAllProgressBars(currentMins, dropData, elapsedSecsOverride = null
     updateOverallProgress();
 }
 
-function switchCampaignDisplay(data) {
-    state.currentDrop = data;
-
-    // Naplníme frontu dropů pro aktuální kampaň ze state.campaigns, pokud existují
-    if (state.campaigns) {
-        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        const campaign = campaignsArray.find(c => c.id === data.campaign_id || c.campaign_id === data.campaign_id);
-        if (campaign && campaign.drops) {
-            let drops = campaign.drops;
-            if (!Array.isArray(drops)) drops = Object.values(drops);
-            
-            state.activeDropsQueue = drops.map(d => ({
-                ...data,
-                drop_id: d.id || d.drop_id,
-                drop_name: d.name || d.drop_name,
-                current_minutes: d.current_minutes || 0,
-                required_minutes: d.required_minutes || 1,
-                remaining_seconds: d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, ((d.required_minutes || 1) - (d.current_minutes || 0)) * 60)
-            }));
-            state.dropRotationIndex = state.activeDropsQueue.findIndex(d => d.drop_id === data.drop_id);
-            if (state.dropRotationIndex === -1) state.dropRotationIndex = 0;
-        } else {
-            state.activeDropsQueue = [data];
-        }
-    } else {
-        state.activeDropsQueue = [data];
-    }
-
-    updateSingleDropDisplay(data);
-    startCampaignRotation();
-    startDropRotation();
-}
+// ==================== Active Drop Display & Rotation Fix ====================
 
 function updateSingleDropDisplay(data) {
     state.currentDrop = data;
@@ -713,6 +693,19 @@ function updateSingleDropDisplay(data) {
     if (noDropMessage) noDropMessage.style.display = 'none';
     if (dropInfo) dropInfo.style.display = 'block';
 
+    // Extract reward image URL from multiple possible Twitch API keys
+    const rewardImgUrl = data.image_url ||
+        data.reward_image_url ||
+        data.icon_url ||
+        data.benefit_icon_url ||
+        data.reward?.image_url ||
+        data.reward?.icon_url ||
+        data.benefit?.image_url ||
+        data.benefits?.[0]?.image_url ||
+        data.benefit_edges?.[0]?.node?.asset_url ||
+        data.benefit_edges?.[0]?.node?.image_url;
+
+    // 1. Update header counter
     const dropNameEl = document.getElementById('drop-name');
     if (dropNameEl) {
         const queueLength = state.activeCampaignsQueue && state.activeCampaignsQueue.length > 0 ? state.activeCampaignsQueue.length : 1;
@@ -720,23 +713,145 @@ function updateSingleDropDisplay(data) {
         dropNameEl.textContent = `${data.game_name} (${currentIndex}/${queueLength})`;
     }
 
+    // 2. Upper game preview (Game Box Art + Name)
+    const dropGameEl = document.getElementById('drop-game');
+    if (dropGameEl) {
+        let boxArtUrl = data.game_box_art_url;
+        if (!boxArtUrl && state.campaigns && data.campaign_id) {
+            const foundCampaign = state.campaigns[data.campaign_id] ||
+                Object.values(state.campaigns).find(c => c && (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
+            if (foundCampaign) {
+                boxArtUrl = foundCampaign.game_box_art_url || foundCampaign.box_art_url || foundCampaign.art_url;
+            }
+        }
+
+        dropGameEl.style.display = 'flex';
+        dropGameEl.style.alignItems = 'center';
+        dropGameEl.style.gap = '12px';
+        dropGameEl.style.margin = '8px 0';
+
+        const children = [];
+
+        if (boxArtUrl) {
+            const iconUrl = boxArtUrl.replace('{width}', '52').replace('{height}', '70');
+            const imgEl = makeImageElement(iconUrl, data.game_name || '', 'game-icon');
+            imgEl.style.width = '42px';
+            imgEl.style.height = '56px';
+            imgEl.style.borderRadius = '6px';
+            imgEl.style.objectFit = 'cover';
+            imgEl.style.flexShrink = '0';
+            children.push(imgEl);
+        }
+
+        const infoTextDiv = makeElement('div', { class: 'drop-game-text-info' });
+        infoTextDiv.style.display = 'flex';
+        infoTextDiv.style.flexDirection = 'column';
+        infoTextDiv.style.justifyContent = 'center';
+
+        if (data.campaign_id) {
+            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
+            const linkEl = makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name);
+            const subText = makeElement('span', { class: 'drop-sub-name' }, data.drop_name);
+            subText.style.fontSize = '0.9em';
+            subText.style.opacity = '0.85';
+
+            infoTextDiv.appendChild(linkEl);
+            infoTextDiv.appendChild(subText);
+        } else {
+            const titleEl = makeElement('span', { class: 'drop-campaign-title' }, data.campaign_name);
+            const subText = makeElement('span', { class: 'drop-sub-name' }, data.drop_name);
+            subText.style.fontSize = '0.9em';
+            subText.style.opacity = '0.85';
+
+            infoTextDiv.appendChild(titleEl);
+            infoTextDiv.appendChild(subText);
+        }
+
+        children.push(infoTextDiv);
+        dropGameEl.replaceChildren(...children);
+    }
+
+    // 3. Rebuild bottom drop card layout
     const currentDropLabel = document.getElementById('current-drop-label');
     if (currentDropLabel) {
         const dropQueueLen = state.activeDropsQueue && state.activeDropsQueue.length > 0 ? state.activeDropsQueue.length : 1;
         const dropIdx = (state.dropRotationIndex !== undefined ? state.dropRotationIndex : 0) + 1;
-        currentDropLabel.textContent = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${data.drop_name}`;
-    }
 
-    const dropGameEl = document.getElementById('drop-game');
-    if (dropGameEl) {
-        if (data.campaign_id) {
-            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
-            dropGameEl.replaceChildren(
-                makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name),
-                document.createTextNode(` — ${data.drop_name}`),
-            );
-        } else {
-            dropGameEl.textContent = `${data.campaign_name} — ${data.drop_name}`;
+        currentDropLabel.textContent = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${data.drop_name}`;
+
+        // Safely search for outer card container
+        let cardOuter = currentDropLabel.closest('.drop-card-container');
+        
+        if (!cardOuter) {
+            const progressTime = document.getElementById('progress-time');
+            const progressFill = document.getElementById('progress-fill');
+            let parentSearch = currentDropLabel.parentElement;
+
+            while (parentSearch && parentSearch !== document.body) {
+                if ((progressTime && parentSearch.contains(progressTime)) || (progressFill && parentSearch.contains(progressFill))) {
+                    cardOuter = parentSearch;
+                    cardOuter.classList.add('drop-card-container'); // Permanently tag outer card
+                    break;
+                }
+                parentSearch = parentSearch.parentElement;
+            }
+        }
+
+        if (cardOuter) {
+            let rightCol = cardOuter.querySelector('#drop-card-right-col');
+            let leftImg = cardOuter.querySelector('#drop-card-left-img');
+
+            // Wrap right side elements if not done yet
+            if (!rightCol) {
+                rightCol = document.createElement('div');
+                rightCol.id = 'drop-card-right-col';
+                rightCol.style.flex = '1';
+                rightCol.style.display = 'flex';
+                rightCol.style.flexDirection = 'column';
+                rightCol.style.justifyContent = 'space-between';
+                rightCol.style.gap = '6px';
+                rightCol.style.minWidth = '0';
+
+                while (cardOuter.firstChild) {
+                    rightCol.appendChild(cardOuter.firstChild);
+                }
+
+                cardOuter.style.display = 'flex';
+                cardOuter.style.flexDirection = 'row';
+                cardOuter.style.alignItems = 'stretch';
+                cardOuter.style.gap = '12px';
+
+                cardOuter.appendChild(rightCol);
+            }
+
+            // Cleanup any remaining duplicate images from previous runs
+            const extraImgs = cardOuter.querySelectorAll('img[id="drop-card-left-img"]');
+            if (extraImgs.length > 1) {
+                extraImgs.forEach((img, index) => {
+                    if (index > 0) img.remove();
+                });
+            }
+
+            // Insert / update left image without cropping
+            if (rewardImgUrl) {
+                if (!leftImg || !cardOuter.contains(leftImg)) {
+                    leftImg = document.createElement('img');
+                    leftImg.id = 'drop-card-left-img';
+                    cardOuter.insertBefore(leftImg, rightCol);
+                }
+                leftImg.src = rewardImgUrl;
+                leftImg.alt = data.drop_name || '';
+                leftImg.style.width = '72px';
+                leftImg.style.height = 'auto';
+                leftImg.style.maxHeight = '100%';
+                leftImg.style.alignSelf = 'center'; // Centers image vertically without stretching/cropping
+                leftImg.style.objectFit = 'contain'; // Ensures full uncropped image visibility
+                leftImg.style.borderRadius = '6px';
+                leftImg.style.flexShrink = '0';
+                leftImg.style.display = 'block';
+            } else if (leftImg) {
+                leftImg.remove();
+            }
         }
     }
 
@@ -747,6 +862,66 @@ function updateSingleDropDisplay(data) {
         state.countdownTimer = null;
     }
     updateRemainingTime(data.remaining_seconds || 0);
+}
+
+function switchCampaignDisplay(data) {
+    state.currentDrop = data;
+
+    if (state.campaigns) {
+        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        const campaign = campaignsArray.find(c => c.id === data.campaign_id || c.campaign_id === data.campaign_id);
+        if (campaign && campaign.drops) {
+            let drops = campaign.drops;
+            if (!Array.isArray(drops)) drops = Object.values(drops);
+
+            // Exclude claimed drops from rotation
+            const unclaimedDrops = drops.filter(d => !(d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED'));
+            const targetDrops = unclaimedDrops.length > 0 ? unclaimedDrops : drops;
+
+            state.activeDropsQueue = targetDrops.map(d => {
+                const dropImg = d.image_url ||
+                    d.reward_image_url ||
+                    d.icon_url ||
+                    d.benefit_icon_url ||
+                    d.reward?.image_url ||
+                    d.benefit?.image_url ||
+                    d.benefits?.[0]?.image_url ||
+                    d.benefit_edges?.[0]?.node?.asset_url ||
+                    data.image_url;
+
+                return {
+                    ...data,
+                    drop_id: d.id || d.drop_id,
+                    drop_name: d.name || d.drop_name,
+                    image_url: dropImg,
+                    current_minutes: d.current_minutes || 0,
+                    required_minutes: d.required_minutes || 1,
+                    remaining_seconds: d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, ((d.required_minutes || 1) - (d.current_minutes || 0)) * 60)
+                };
+            });
+
+            state.dropRotationIndex = state.activeDropsQueue.findIndex(d => d.drop_id === data.drop_id);
+            if (state.dropRotationIndex === -1) state.dropRotationIndex = 0;
+        } else {
+            state.activeDropsQueue = [data];
+        }
+    } else {
+        state.activeDropsQueue = [data];
+    }
+
+    // Preload všech obrázků ve frontě do cache prohlížeče
+    state.activeDropsQueue.forEach(dropItem => {
+        if (dropItem.image_url) {
+            const img = new Image();
+            img.src = dropItem.image_url;
+        }
+    });
+
+    // KLÍČOVÁ OPRAVA: Předáme již namapovaný drop z fronty s platnou URL obrázku
+    const initialActiveDrop = state.activeDropsQueue[state.dropRotationIndex] || data;
+    updateSingleDropDisplay(initialActiveDrop);
+
+    startCombinedRotation();
 }
 
 function updateDropProgress(data) {
@@ -762,52 +937,7 @@ function updateDropProgress(data) {
         switchCampaignDisplay(data);
     }
 
-    startCampaignRotation();
-}
-
-function switchCampaignDisplay(data) {
-    state.currentDrop = data;
-
-    const currentSecs = data.current_minutes * 60;
-    dropTotalSeconds = currentSecs + (data.remaining_seconds || 0);
-
-    const noDropMessage = document.getElementById('no-drop-message');
-    const dropInfo = document.getElementById('drop-info');
-    if (noDropMessage) noDropMessage.style.display = 'none';
-    if (dropInfo) dropInfo.style.display = 'block';
-
-    const dropNameEl = document.getElementById('drop-name');
-    if (dropNameEl) {
-        const queueLength = state.activeCampaignsQueue && state.activeCampaignsQueue.length > 0 ? state.activeCampaignsQueue.length : 1;
-        const currentIndex = (state.campaignRotationIndex !== undefined ? state.campaignRotationIndex : 0) + 1;
-        dropNameEl.textContent = `${data.game_name} (${currentIndex}/${queueLength})`;
-    }
-
-    const currentDropLabel = document.getElementById('current-drop-label');
-    if (currentDropLabel) {
-        currentDropLabel.textContent = `⚡ Drop: ${data.drop_name}`;
-    }
-
-    const dropGameEl = document.getElementById('drop-game');
-    if (dropGameEl) {
-        if (data.campaign_id) {
-            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
-            dropGameEl.replaceChildren(
-                makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name),
-                document.createTextNode(` — ${data.drop_name}`),
-            );
-        } else {
-            dropGameEl.textContent = `${data.campaign_name} — ${data.drop_name}`;
-        }
-    }
-
-    renderAllProgressBars(data.current_minutes, data);
-
-    if (state.countdownTimer !== null) {
-        clearTimeout(state.countdownTimer);
-        state.countdownTimer = null;
-    }
-    updateRemainingTime(data.remaining_seconds);
+    startCombinedRotation();
 }
 
 function updateCampaignProgressData(data, liveCurrentMins) {
@@ -850,7 +980,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
             currentIndex = index + 1;
         }
 
-        // Běží paralelně -> vezmeme nejdelší drop v kampani
         if (req > maxReq) {
             maxReq = req;
             maxCur = cur;
@@ -888,7 +1017,6 @@ function updateOverallProgress(tree = null) {
             return;
         }
 
-        // 1. Získat položky PŘÍMO z fronty (tree nebo DOM elementů Wanted Drops Queue)
         let queueItems = [];
         if (tree && Array.isArray(tree)) {
             queueItems = tree;
@@ -915,12 +1043,10 @@ function updateOverallProgress(tree = null) {
         let totalCurrent = 0;
         let totalRequired = 0;
 
-        // 2. Projdeme položky fronty přesně v tom pořadí, v jakém tam jsou
         queueItems.forEach(queueItem => {
             const qGameName = (queueItem.game_name || queueItem.name || '').toLowerCase();
             const qCampaignName = (queueItem.campaign_name || queueItem.name || '').toLowerCase();
 
-            // Najdeme odpovídající kampaně v datech
             const matchingCampaigns = campaignsArray.filter(campaign => {
                 if (!campaign) return false;
                 if (campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
@@ -940,7 +1066,6 @@ function updateOverallProgress(tree = null) {
 
             if (matchingCampaigns.length === 0) return;
 
-            // Pro tuto položku ve frontě spočítáme minuty (pokud je víc kampaní pro stejnou hru, vezmeme nejdelší)
             let bestCampReq = 0;
             let bestCampCur = 0;
 
@@ -958,7 +1083,7 @@ function updateOverallProgress(tree = null) {
                         const req = Number(d.required_minutes) || 0;
 
                         const isCurrentActive = state.currentDrop && (
-                            String(d.id) === String(state.currentDrop.drop_id) || 
+                            String(d.id) === String(state.currentDrop.drop_id) ||
                             String(d.drop_id) === String(state.currentDrop.drop_id)
                         );
 
@@ -998,7 +1123,7 @@ function updateOverallProgress(tree = null) {
             overallText.textContent = '0 / 0 min';
         }
     } catch (err) {
-        console.error("Chyba v updateOverallProgress:", err);
+        console.error("Error in updateOverallProgress:", err);
     }
 }
 
@@ -1231,7 +1356,7 @@ function clearInventoryFilters() {
 // ==================== Game Dropdown & Tags ====================
 
 // Track selected games for inventory filter
-let selectedInventoryGames = [];
+
 let gameDropdownFocusedIndex = -1;
 let gameDropdownVisible = false;
 
@@ -1898,9 +2023,6 @@ function updateManualModeUI(manualModeInfo) {
 }
 
 // ==================== Games to Watch Management ====================
-
-let availableGames = new Set(); // All games from campaigns
-let draggedElement = null;
 
 socket.on('games_available', (data) => {
     availableGames = new Set(data.games || []);

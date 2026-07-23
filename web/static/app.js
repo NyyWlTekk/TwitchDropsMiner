@@ -309,13 +309,10 @@ socket.on('wanted_items_update', (data) => {
 });
 
 // ==================== UI Update Functions ====================
-//================================================================
+// ================================================================
 
 function updateStatus(status) {
     document.getElementById('status-text').textContent = status;
-
-    // Loading overlay disabled - UI remains responsive during backend operations
-    // Backend now uses batch updates to prevent flickering
 }
 
 function addConsoleLine(message) {
@@ -324,12 +321,11 @@ function addConsoleLine(message) {
 
 function addConsoleLineRaw(line) {
     const console = document.getElementById('console-output');
+    if (!console) return;
     const div = document.createElement('div');
     div.textContent = line;
     console.appendChild(div);
-    // Auto-scroll to bottom
     console.scrollTop = console.scrollHeight;
-    // Limit lines
     while (console.children.length > 1000) {
         console.removeChild(console.firstChild);
     }
@@ -365,9 +361,9 @@ function clearWatchingChannel() {
 
 function renderChannels() {
     const container = document.getElementById('channels-list');
-    container.innerHTML = '';
+    if (!container) return;
 
-    const t = state.translations;
+    const t = state.translations || {};
     const channels = Object.values(state.channels);
     if (channels.length === 0) {
         const emptyMsg = t.gui?.channels?.no_channels || 'No channels tracked yet...';
@@ -377,15 +373,11 @@ function renderChannels() {
         return;
     }
 
-    // Get the games to watch list from settings
-    const gamesToWatch = state.settings.games_to_watch || [];
+    const gamesToWatch = state.settings?.games_to_watch || [];
     const gamesToWatchSet = new Set(gamesToWatch);
 
-    // Filter channels to only include those playing games in the watch list
     const filteredChannels = channels.filter(channel => {
         const gameName = channel.game;
-        // Include channels if: they have a game AND it's in the watch list
-        // OR if the watch list is empty (show all)
         return gamesToWatch.length === 0 || (gameName && gamesToWatchSet.has(gameName));
     });
 
@@ -397,7 +389,6 @@ function renderChannels() {
         return;
     }
 
-    // Group channels by game
     const gameGroups = {};
     filteredChannels.forEach(channel => {
         const gameName = channel.game || 'No Game';
@@ -414,23 +405,20 @@ function renderChannels() {
         gameGroups[gameId].channels.push(channel);
     });
 
-    // Sort games: prioritize games with watching channels, then by total viewers
     const sortedGames = Object.entries(gameGroups).sort(([idA, groupA], [idB, groupB]) => {
         const hasWatchingA = groupA.channels.some(ch => ch.watching);
         const hasWatchingB = groupB.channels.some(ch => ch.watching);
 
         if (hasWatchingA !== hasWatchingB) return hasWatchingB ? 1 : -1;
 
-        // Sum total viewers for each game
         const totalViewersA = groupA.channels.reduce((sum, ch) => sum + (ch.viewers || 0), 0);
         const totalViewersB = groupB.channels.reduce((sum, ch) => sum + (ch.viewers || 0), 0);
 
         return totalViewersB - totalViewersA;
     });
 
-    // Render each game group
+    container.innerHTML = '';
     sortedGames.forEach(([gameId, group]) => {
-        // Create game header
         const gameHeader = document.createElement('div');
         gameHeader.className = 'game-group-header';
 
@@ -452,14 +440,12 @@ function renderChannels() {
 
         container.appendChild(gameHeader);
 
-        // Sort channels within game: watching first, then online, then by viewers
         group.channels.sort((a, b) => {
             if (a.watching !== b.watching) return b.watching ? 1 : -1;
             if (a.online !== b.online) return b.online ? 1 : -1;
             return (b.viewers || 0) - (a.viewers || 0);
         });
 
-        // Render channels in this game
         group.channels.forEach(channel => {
             const div = document.createElement('div');
             div.className = 'channel-item';
@@ -491,83 +477,384 @@ function renderChannels() {
     });
 }
 
-function updateDropProgress(data) {
-    // Check if this is a new drop or if remaining seconds changed significantly
-    const isNewDrop = !state.currentDrop || state.currentDrop.drop_id !== data.drop_id;
+// ==================== Active Campaign Rotation & Time Management ====================
 
-    // Store old remaining seconds before updating state
-    const oldRemaining = state.currentDrop ? state.currentDrop.remaining_seconds : null;
+if (!state.activeCampaignsQueue) state.activeCampaignsQueue = [];
+if (!state.campaignRotationIndex) state.campaignRotationIndex = 0;
+if (!state.campaignRotationTimer) state.campaignRotationTimer = null;
 
-    // Update state with new data
-    state.currentDrop = data;
+function startCampaignRotation() {
+    if (state.campaignRotationTimer) return;
 
-    document.getElementById('no-drop-message').style.display = 'none';
-    document.getElementById('drop-info').style.display = 'block';
-
-    document.getElementById('drop-name').textContent = data.drop_name;
-
-    // Make campaign name clickable with link to Twitch
-    const dropGameEl = document.getElementById('drop-game');
-    if (data.campaign_id) {
-        const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
-        dropGameEl.replaceChildren(
-            makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name),
-            document.createTextNode(` (${data.game_name})`),
-        );
-    } else {
-        dropGameEl.textContent = `${data.campaign_name} (${data.game_name})`;
-    }
-
-    const progress = data.progress * 100;
-    const fill = document.getElementById('progress-fill');
-    fill.style.width = `${progress}%`;
-    fill.textContent = `${Math.round(progress)}%`;
-
-    document.getElementById('progress-text').textContent =
-        `${data.current_minutes} / ${data.required_minutes} minutes`;
-
-    // Only reset the timer if it's a new drop or if backend time differs by more than 2 seconds
-    // This prevents constant timer resets from periodic backend updates
-    const shouldResetTimer = isNewDrop || oldRemaining === null || Math.abs(oldRemaining - data.remaining_seconds) > 2;
-
-    if (shouldResetTimer) {
-        // Cancel any existing countdown timer before starting a new one
-        if (state.countdownTimer !== null) {
-            clearTimeout(state.countdownTimer);
-            state.countdownTimer = null;
+    state.campaignRotationTimer = setInterval(() => {
+        if (!state.activeCampaignsQueue || state.activeCampaignsQueue.length <= 1) return;
+        
+        state.campaignRotationIndex = (state.campaignRotationIndex + 1) % state.activeCampaignsQueue.length;
+        const nextCampaignData = state.activeCampaignsQueue[state.campaignRotationIndex];
+        
+        if (nextCampaignData) {
+            switchCampaignDisplay(nextCampaignData);
         }
+    }, 5000); // Switch every 5 seconds between campaigns
+}
 
-        // Start countdown with the new value from backend
-        updateRemainingTime(data.remaining_seconds);
+function formatTime(secs) {
+    if (isNaN(secs) || secs < 0) return '0:00';
+    
+    const days = Math.floor(secs / 86400);
+    const hours = Math.floor((secs % 86400) / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    const remSecs = secs % 60;
+
+    if (days > 0) {
+        return `${days}d ${hours}h ${mins}m`;
+    } else if (hours > 0) {
+        return `${hours}h ${mins.toString().padStart(2, '0')}m`;
+    } else {
+        return `${mins}:${remSecs.toString().padStart(2, '0')}`;
     }
-    // Otherwise, let the existing timer continue counting down smoothly
 }
 
 function updateRemainingTime(seconds) {
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    document.getElementById('progress-time').textContent =
-        `Time remaining: ${minutes}:${secs.toString().padStart(2, '0')}`;
+    // 1. DOLNÍ LIŠTA: Čas pro aktuální drop (current / total)
+    const dropTimeEl = document.getElementById('progress-time');
+    if (dropTimeEl && dropTotalSeconds > 0) {
+        dropTimeEl.textContent = `Time remaining: ${formatTime(seconds)} / ${formatTime(dropTotalSeconds)}`;
+    }
+
+    // 2. PROSTŘEDNÍ LIŠTA: Čas pro aktuální kampaň (current / total všech jejích dropů)
+    if (state.currentDrop && state.currentDrop.campaign_id && state.campaigns) {
+        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        const campaign = campaignsArray.find(c => c.id === state.currentDrop.campaign_id || c.campaign_id === state.currentDrop.campaign_id);
+        
+        if (campaign && campaign.drops) {
+            let drops = campaign.drops;
+            if (!Array.isArray(drops)) drops = Object.values(drops);
+
+            let campTotalRemainingSecs = 0;
+            let campTotalReqSecs = 0;
+
+            drops.forEach(d => {
+                const req = (Number(d.required_minutes) || 1) * 60;
+                const cur = (Number(d.current_minutes) || 0) * 60;
+                campTotalReqSecs += req;
+                
+                if (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id) {
+                    campTotalRemainingSecs += seconds;
+                } else {
+                    const rem = d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur);
+                    campTotalRemainingSecs += rem;
+                }
+            });
+
+            const campaignTimeEl = document.getElementById('campaign-progress-time');
+            if (campaignTimeEl) {
+                campaignTimeEl.textContent = `Time remaining: ${formatTime(campTotalRemainingSecs)} / ${formatTime(campTotalReqSecs)}`;
+            }
+        }
+    }
+
+    // 3. HORNÍ LIŠTA: Celkový čas pro všechny aktivní kampaně/frontu (Overall Queue)
+    if (state.campaigns) {
+        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        let overallRemainingSecs = 0;
+        let overallReqSecs = 0;
+
+        campaignsArray.forEach(campaign => {
+            if (!campaign || campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
+                return;
+            }
+            let drops = campaign.drops;
+            if (!drops) return;
+            if (!Array.isArray(drops)) drops = Object.values(drops);
+
+            drops.forEach(d => {
+                const req = (Number(d.required_minutes) || 1) * 60;
+                const cur = (Number(d.current_minutes) || 0) * 60;
+                overallReqSecs += req;
+
+                if (state.currentDrop && (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id)) {
+                    overallRemainingSecs += seconds;
+                } else {
+                    const rem = d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur);
+                    overallRemainingSecs += rem;
+                }
+            });
+        });
+
+        const overallTimeEl = document.getElementById('overall-progress-time');
+        if (overallTimeEl) {
+            overallTimeEl.textContent = `Time remaining: ${formatTime(overallRemainingSecs)} / ${formatTime(overallReqSecs)}`;
+        }
+    }
+
+    if (state.currentDrop) {
+        const reqMins = state.currentDrop.required_minutes || 1;
+        const elapsedSecsTotal = dropTotalSeconds - seconds;
+        const estimatedCurrentMins = Math.min(reqMins, Math.floor(elapsedSecsTotal / 60));
+        renderAllProgressBars(estimatedCurrentMins, state.currentDrop, elapsedSecsTotal);
+    }
 
     if (seconds > 0) {
-        // Store the timer ID so we can cancel it if needed
         state.countdownTimer = setTimeout(() => updateRemainingTime(seconds - 1), 1000);
     } else {
         state.countdownTimer = null;
     }
 }
 
+function renderAllProgressBars(currentMins, dropData, elapsedSecsOverride = null) {
+    const reqMins = dropData.required_minutes || 1;
+    let dropPercentage = 0;
+    
+    const elapsedSecs = elapsedSecsOverride !== null 
+        ? elapsedSecsOverride 
+        : (dropTotalSeconds - (dropData.remaining_seconds || 0));
+    
+    if (dropTotalSeconds > 0) {
+        dropPercentage = Math.min(100, Math.max(0, (elapsedSecs / dropTotalSeconds) * 100));
+    } else {
+        dropPercentage = (currentMins / reqMins) * 100;
+    }
+
+    const fill = document.getElementById('progress-fill');
+    if (fill) {
+        fill.style.width = `${dropPercentage.toFixed(1)}%`;
+        fill.textContent = `${Math.round(dropPercentage)}%`;
+    }
+
+    const progressText = document.getElementById('progress-text');
+    if (progressText) {
+        progressText.textContent = `${currentMins} / ${reqMins} min`;
+    }
+
+    updateCampaignProgressData(dropData, currentMins);
+    updateOverallProgress();
+}
+
+function updateDropProgress(data) {
+    const existingIndex = state.activeCampaignsQueue.findIndex(c => c.campaign_id === data.campaign_id);
+    if (existingIndex !== -1) {
+        state.activeCampaignsQueue[existingIndex] = data;
+    } else {
+        state.activeCampaignsQueue.push(data);
+    }
+
+    const isCurrentActive = !state.currentDrop || state.currentDrop.campaign_id === data.campaign_id;
+    if (isCurrentActive || state.activeCampaignsQueue.length === 1) {
+        switchCampaignDisplay(data);
+    }
+
+    startCampaignRotation();
+}
+
+function switchCampaignDisplay(data) {
+    state.currentDrop = data;
+
+    const currentSecs = data.current_minutes * 60;
+    dropTotalSeconds = currentSecs + (data.remaining_seconds || 0);
+
+    const noDropMessage = document.getElementById('no-drop-message');
+    const dropInfo = document.getElementById('drop-info');
+    if (noDropMessage) noDropMessage.style.display = 'none';
+    if (dropInfo) dropInfo.style.display = 'block';
+
+    const dropNameEl = document.getElementById('drop-name');
+    if (dropNameEl) {
+        const queueLength = state.activeCampaignsQueue && state.activeCampaignsQueue.length > 0 ? state.activeCampaignsQueue.length : 1;
+        const currentIndex = (state.campaignRotationIndex !== undefined ? state.campaignRotationIndex : 0) + 1;
+        dropNameEl.textContent = `${data.game_name} (${currentIndex}/${queueLength})`;
+    }
+
+    const currentDropLabel = document.getElementById('current-drop-label');
+    if (currentDropLabel) {
+        currentDropLabel.textContent = `⚡ Drop: ${data.drop_name}`;
+    }
+
+    const dropGameEl = document.getElementById('drop-game');
+    if (dropGameEl) {
+        if (data.campaign_id) {
+            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
+            dropGameEl.replaceChildren(
+                makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name),
+                document.createTextNode(` — ${data.drop_name}`),
+            );
+        } else {
+            dropGameEl.textContent = `${data.campaign_name} — ${data.drop_name}`;
+        }
+    }
+
+    renderAllProgressBars(data.current_minutes, data);
+
+    if (state.countdownTimer !== null) {
+        clearTimeout(state.countdownTimer);
+        state.countdownTimer = null;
+    }
+    updateRemainingTime(data.remaining_seconds);
+}
+
+function updateCampaignProgressData(data, liveCurrentMins) {
+    const campaignFill = document.getElementById('campaign-progress-fill');
+    const campaignText = document.getElementById('campaign-progress-text');
+    const campaignTitle = document.getElementById('campaign-progress-title');
+
+    if (!campaignFill || !campaignText) return;
+
+    if (!data || !data.campaign_id || !state.campaigns) {
+        campaignFill.style.width = '0%';
+        campaignFill.textContent = '0%';
+        campaignText.textContent = '0 / 0 min';
+        return;
+    }
+
+    const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+    const campaign = campaignsArray.find(c => c.id === data.campaign_id || c.campaign_id === data.campaign_id);
+
+    if (!campaign || !campaign.drops) {
+        campaignFill.style.width = '0%';
+        campaignFill.textContent = '0%';
+        campaignText.textContent = `${liveCurrentMins} / ${data.required_minutes} min`;
+        return;
+    }
+
+    let drops = campaign.drops;
+    if (!Array.isArray(drops)) drops = Object.values(drops);
+
+    let campTotalCurrent = 0;
+    let campTotalRequired = 0;
+    let currentIndex = 1;
+
+    drops.forEach((d, index) => {
+        let cur = Number(d.current_minutes) || 0;
+        const req = Number(d.required_minutes) || 1;
+
+        if (d.id === data.drop_id || d.drop_id === data.drop_id) {
+            cur = liveCurrentMins;
+            currentIndex = index + 1;
+        }
+
+        campTotalCurrent += cur;
+        campTotalRequired += req;
+    });
+
+    if (campaignTitle && campaign.name) {
+        campaignTitle.textContent = `${campaign.name} • Drop ${currentIndex}/${drops.length}`;
+    }
+
+    if (campTotalRequired > 0) {
+        const percentage = Math.min(100, Math.round((campTotalCurrent / campTotalRequired) * 100));
+        campaignFill.style.width = `${percentage}%`;
+        campaignFill.textContent = `${percentage}%`;
+        campaignText.textContent = `${campTotalCurrent} / ${campTotalRequired} min`;
+    } else {
+        campaignFill.style.width = '0%';
+        campaignFill.textContent = '0%';
+        campaignText.textContent = '0 / 0 min';
+    }
+}
+
+function updateOverallProgress(tree = null) {
+    try {
+        let totalCurrent = 0;
+        let totalRequired = 0;
+
+        const overallFill = document.getElementById('overall-progress-fill');
+        const overallText = document.getElementById('overall-progress-text');
+
+        if (!overallFill || !overallText) return;
+
+        if (!state || !state.campaigns) {
+            overallFill.style.width = '0%';
+            overallFill.textContent = '0%';
+            overallText.textContent = '0 / 0 min';
+            return;
+        }
+
+        let activeGames = new Set();
+        if (tree && Array.isArray(tree)) {
+            tree.forEach(g => {
+                const name = g.game_name || g.name;
+                if (name) activeGames.add(name.toLowerCase());
+            });
+        }
+
+        if (activeGames.size === 0) {
+            const domGameTitles = document.querySelectorAll('.wanted-game-title');
+            domGameTitles.forEach(el => {
+                const text = el.textContent.trim();
+                if (text) activeGames.add(text.toLowerCase());
+            });
+        }
+
+        if (activeGames.size === 0) {
+            overallFill.style.width = '0%';
+            overallFill.textContent = '0%';
+            overallText.textContent = '0 / 0 min';
+            return;
+        }
+
+        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        let gamesMap = {};
+
+        campaignsArray.forEach(campaign => {
+            if (!campaign) return;
+            const gameName = campaign.game_name || campaign.game || campaign.name || '';
+            if (!gameName) return;
+
+            const found = Array.from(activeGames).some(ag => ag === gameName.toLowerCase());
+            if (!found) return;
+
+            if (campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
+                return;
+            }
+
+            let drops = campaign.drops;
+            if (drops) {
+                if (!Array.isArray(drops)) drops = Object.values(drops);
+
+                if (drops.length > 0) {
+                    const campRequired = Math.max(...drops.map(d => Number(d.required_minutes) || 0));
+                    const campCurrent = Math.max(...drops.map(d => Number(d.current_minutes) || 0));
+
+                    if (!gamesMap[gameName]) gamesMap[gameName] = [];
+                    gamesMap[gameName].push({ current: campCurrent, required: campRequired });
+                }
+            }
+        });
+
+        Object.values(gamesMap).forEach(campaignsList => {
+            if (campaignsList.length === 0) return;
+            let longestCampaign = campaignsList.reduce((max, c) => c.required > max.required ? c : max, campaignsList[0]);
+            totalCurrent += longestCampaign.current;
+            totalRequired += longestCampaign.required;
+        });
+
+        if (totalRequired > 0) {
+            const percentage = Math.min(100, Math.round((totalCurrent / totalRequired) * 100));
+            overallFill.style.width = `${percentage}%`;
+            overallFill.textContent = `${percentage}%`;
+            overallText.textContent = `${totalCurrent} / ${totalRequired} min`;
+        } else {
+            overallFill.style.width = '0%';
+            overallFill.textContent = '0%';
+            overallText.textContent = '0 / 0 min';
+        }
+    } catch (err) {
+        console.error("Chyba v updateOverallProgress:", err);
+    }
+}
+
 function clearDropProgress() {
     state.currentDrop = null;
 
-    // Cancel any active countdown timer
     if (state.countdownTimer !== null) {
         clearTimeout(state.countdownTimer);
         state.countdownTimer = null;
     }
 
-    document.getElementById('no-drop-message').style.display = 'block';
-    document.getElementById('drop-info').style.display = 'none';
+    const noDropMsg = document.getElementById('no-drop-message');
+    const dropInfo = document.getElementById('drop-info');
+    if (noDropMsg) noDropMsg.style.display = 'block';
+    if (dropInfo) dropInfo.style.display = 'none';
 }
 
 function addCampaign(campaignData) {
@@ -581,16 +868,17 @@ function clearInventory() {
 }
 
 function updateDrop(campaignId, dropData) {
-    if (state.campaigns[campaignId]) {
+    if (state.campaigns && state.campaigns[campaignId]) {
         const drops = state.campaigns[campaignId].drops;
-        const index = drops.findIndex(d => d.id === dropData.id);
-        if (index !== -1) {
-            drops[index] = dropData;
-            renderInventory();
+        if (drops) {
+            const index = drops.findIndex(d => d.id === dropData.id);
+            if (index !== -1) {
+                drops[index] = dropData;
+                renderInventory();
+            }
         }
     }
 }
-
 // ==================== Inventory Filtering ====================
 
 function sortCampaigns(campaigns) {
@@ -1259,6 +1547,8 @@ function createCampaignCard(campaign, t) {
 function renderInventory() {
     const container = document.getElementById('inventory-grid');
     container.innerHTML = '';
+
+    updateOverallProgress();
 
     const t = state.translations;
     const allCampaigns = Object.values(state.campaigns);
@@ -2510,6 +2800,7 @@ function renderWantedItems(tree) {
     if (!tree || tree.length === 0) {
         const emptyMsg = state.translations.gui?.wanted?.none || 'No wanted drops queued...';
         container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
+        updateOverallProgress([]); // Vynuluje progress, když je prázdno
         return;
     }
 
@@ -2564,6 +2855,9 @@ function renderWantedItems(tree) {
         groupEl.appendChild(campaignListEl);
         container.appendChild(groupEl);
     });
+
+    // Spočítáme progress přímo z aktuálního stromu fronty!
+    updateOverallProgress(tree);
 }
 
 // ==================== DOM Utilities ====================

@@ -242,9 +242,30 @@ socket.on('inventory_batch_update', (data) => {
     applyAutoSortIfNeeded(); 
 });
 
-socket.on('drop_update', (data) => {
-    updateDrop(data.campaign_id, data.drop);
-});
+function updateDrop(campaignId, updatedDrop) {
+    // 1. Najdeme kampaň v paměti frontendu
+    // (uprav 'state.campaigns' podle toho, v jaké proměnné držíš seznam kampaní)
+    const campaignList = state.campaignsQueue || state.campaigns || [];
+    const campaign = campaignList.find(c => c.id === campaignId);
+    
+    if (!campaign) return;
+
+    // 2. Aktualizujeme data konkrétního dropu
+    const dropsList = campaign.drops || campaign.time_based_drops || [];
+    const dropIndex = dropsList.findIndex(d => d.id === updatedDrop.id);
+    
+    if (dropIndex !== -1) {
+        dropsList[dropIndex] = { ...dropsList[dropIndex], ...updatedDrop };
+    }
+
+    // 3. ⚡ OKAMŽITÝ RE-RENDER
+    // Vynutíme přepočet 5/5 claimed, přepnutí na Completed a prekreslení karty kampaně
+    if (typeof renderCampaign === 'function') {
+        renderCampaign(campaign);
+    } else if (typeof renderInventory === 'function') {
+        renderInventory();
+    }
+}
 
 socket.on('login_required', () => {
     showLoginForm();

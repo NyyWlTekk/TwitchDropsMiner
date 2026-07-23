@@ -917,11 +917,13 @@ header h1 {
     display: flex;
     flex-wrap: wrap;
     gap: 20px;
+    justify-content: flex-start; /* Zabrání tomu, aby se prázdný prostor roztahal do šířky */
 }
 
 .wanted-game-group {
-    flex: min-content;
-    min-width: 0;
+    flex: 1 1 280px;
+    width: 100%;          /* Na mobilu vyplní dostupnou šířku */
+    max-width: 280px;     /* Na větších obrazovkách nepřesáhne 280px */
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -1004,13 +1006,14 @@ header h1 {
 .wanted-drop-item {
     font-size: 0.6875rem;
     margin-bottom: 0px; 
-    padding: 8px; 
+    padding: 8px 12px; 
     background: transparent; 
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 6px;
+    gap: 12px;
+    justify-content: flex-start; /* Změna z space-between, aby se držely u sebe vlevo */
 }
 
 .wanted-drop-name {

@@ -187,7 +187,7 @@ class BaseDrop:
     async def claim(self) -> bool:
         if self.is_claimed or getattr(self, "_is_processing_claim", False):
             return False
-        
+
         if not self.can_claim:
             return False
 
@@ -199,9 +199,25 @@ class BaseDrop:
             success = await self._claim()
             if success:
                 self.is_claimed = True
-                self._on_state_changed() # Inv update.
-                claim_text = f"{self.campaign.game.name}\n{self.rewards_text()} ({self.campaign.claimed_drops}/{self.campaign.total_drops})"
+
+                # 1. Okamžité vyvolání aktualizace stavu pro web/websocket
+                self._on_state_changed()
+
+                # 2. Bezpečné získání počtu vybraných a celkových dropů (podpora pro metodu i property)
+                claimed_count = (
+                    self.campaign.claimed_drops() 
+                    if callable(getattr(self.campaign, "claimed_drops", None)) 
+                    else getattr(self.campaign, "claimed_drops", 0)
+                )
+                total_count = (
+                    self.campaign.total_drops() 
+                    if callable(getattr(self.campaign, "total_drops", None)) 
+                    else getattr(self.campaign, "total_drops", 0)
+                )
+
+                claim_text = f"{self.campaign.game.name}\n{self.rewards_text()} ({claimed_count}/{total_count})"
                 self._twitch.print(_.t["status"]["claimed_drop"].format(drop=claim_text.replace("\n", " ")))
+                
                 BaseDrop._failed_claims.pop(self.id, None)
                 return True
             else:
@@ -304,10 +320,21 @@ class TimedDrop(BaseDrop):
         self.extra_current_minutes = 0
         self._on_state_changed()
 
+        # ⚡ OKAMŽITÝ CLAIM PŘI DOSAŽENÍ 100 % (z Reálných minut od Twitche)
+        if self.can_claim:
+            logger.info(f"🎯 Drop {self.name} dosáhl 100 %! Spouštím okamžitý claim...")
+            asyncio.create_task(self.claim())
+
     def _bump_minutes(self, channel: Channel | None) -> bool:
         if self.can_earn(channel):
             self.extra_current_minutes += 1
             self._on_state_changed()
+
+            # ⚡ OKAMŽITÝ CLAIM PŘI DOSAŽENÍ 100 % (z lokálního časovače)
+            if self.can_claim:
+                logger.info(f"🎯 Drop {self.name} dosáhl 100 % (přes bump)! Spouštím okamžitý claim...")
+                asyncio.create_task(self.claim())
+
             if self.extra_current_minutes >= MAX_EXTRA_MINUTES:
                 return True
         return False

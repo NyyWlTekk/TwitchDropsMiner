@@ -1235,7 +1235,14 @@ function getCampaignStatus(campaign, now = Date.now()) {
                       (campaign.active === true)) && !isUpcoming);
 
     const isExpired = (endsAt > 0 && endsAt <= now) || (campaign.status === 'EXPIRED');
-    const isFinished = campaign.claimed_drops >= campaign.total_drops;
+    // NOVÝ KÓD:
+	const dropsList = campaign.drops || campaign.time_based_drops || [];
+	const realClaimed = dropsList.length > 0 
+		? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
+		: (campaign.claimed_drops || 0);
+	const realTotal = dropsList.length > 0 ? dropsList.length : (campaign.total_drops || 0);
+
+	const isFinished = realTotal > 0 && realClaimed >= realTotal;
 
     return {
         isActive,
@@ -1664,47 +1671,43 @@ function createDropBlock(drop, t) {
 
 // Renders the top header of a campaign card (Game art, linking state, external links)
 function createCampaignHeader(campaign) {
-    // 1. Sjednocená detekce stavu
-    const isCompleted = (campaign.claimed_drops !== undefined && campaign.total_drops !== undefined) 
-                        ? (campaign.claimed_drops >= campaign.total_drops) 
-                        : (campaign.claimed >= campaign.total);
-    
-    const statusClass = isCompleted ? 'completed' : (campaign.active ? 'active' : 'expired');
+    // 1. Sjednocená detekce stavu a reálného počtu dropů
+    const dropsList = campaign.drops || campaign.time_based_drops || [];
+    const realClaimed = dropsList.length > 0 
+        ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
+        : (campaign.claimed_drops || 0);
+    const realTotal = dropsList.length > 0 ? dropsList.length : (campaign.total_drops || 0);
 
-    // 2. Badge pro stav propojení
-    const linkStatusBadge = campaign.linked
-        ? makeElement('span', { class: 'campaign-badge linked', title: 'Account is linked' }, 'LINKED')
-        : makeElement('span', { class: 'campaign-badge not-linked', title: 'Click to link your account' }, 'NOT LINKED', el => {
-            el.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
-        });
+    const isCompleted = realTotal > 0 && realClaimed >= realTotal;
+    const isActive = (campaign.is_active !== undefined ? campaign.is_active : campaign.active) && !isCompleted;
 
-    // 4. Ikona (použijeme sjednocenou funkci)
-    const progressIcon = makeElement('div', { class: 'campaign-header-icon' }, '', el => {
-        el.innerHTML = getStatusIconSVG(statusClass);
-    });
+    // 2. Třída a text podle reálného stavu
+    let statusClass = 'expired';
+    let statusText = t.gui?.inventory?.expired || 'Expired';
 
-    const twitchLink = makeElement('a', { 
-        href: campaign.campaign_url, 
-        target: '_blank', 
-        rel: 'noopener noreferrer', 
-        class: 'campaign-name-link' 
-    }, campaign.name, el => el.appendChild(makeElement('span', { class: 'external-link-icon' }, ' 🔗')));
+    if (isCompleted) {
+        statusClass = 'completed';
+        statusText = t.gui?.inventory?.completed || 'Completed ✔';
+    } else if (isActive) {
+        statusClass = 'active';
+        statusText = t.gui?.inventory?.active || 'Active ✔';
+    }
 
-    const campaignGameDiv = makeElement('div', { class: 'campaign-game' }, '', el => {
-        if (campaign.game_box_art_url) {
-            const iconUrl = campaign.game_box_art_url.replace('{width}', '52').replace('{height}', '70');
-            el.appendChild(makeImageElement(iconUrl, campaign.game_name, 'game-icon'));
-        }
-        el.appendChild(makeElement('span', { class: 'campaign-game-name' }, campaign.game_name));
-        el.appendChild(linkStatusBadge);
-    });
+    const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
 
-    // Sestavení headeru
-    return makeElement('div', { class: 'campaign-header' }, '', el => {
-        el.appendChild(campaignGameDiv);        
-        el.appendChild(progressIcon);
-        el.appendChild(twitchLink);
-    });
+    // 3. Vytvoření samotného HTML prvku hlavičky
+    const headerEl = makeElement('div', { class: `campaign-header ${statusClass}` });
+
+    headerEl.appendChild(makeElement('div', { class: 'campaign-title-row' }, '', el => {
+        el.appendChild(makeElement('h3', {}, campaign.name || campaign.game_name || 'Campaign'));
+    }));
+
+    headerEl.appendChild(makeElement('div', { class: 'campaign-status', style: 'display: flex; justify-content: space-between;' }, '', el => {
+        el.appendChild(makeElement('span', { class: `status-tag ${statusClass}` }, statusText));
+        el.appendChild(makeElement('span', { class: 'claimed-counter' }, `${realClaimed} / ${realTotal} ${claimedCountText}`));
+    }));
+
+    return headerEl;
 }
 
 function createCampaignCard(campaign, t) {
@@ -1779,11 +1782,19 @@ function createCampaignCard(campaign, t) {
 
 	// --- Status řádek (pouze texty) ---
     const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
+
+    // Dynamické spočítání reálného stavu z pole dropů
+    const dropsList = campaign.drops || campaign.time_based_drops || [];
+    const realClaimed = dropsList.length > 0 
+        ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
+        : (campaign.claimed_drops || 0);
+    const realTotal = dropsList.length > 0 ? dropsList.length : (campaign.total_drops || 0);
+
     campaignInfo.appendChild(makeElement('div', { class: 'campaign-status', style: 'display: flex; justify-content: space-between;' }, '', el => {
         el.appendChild(makeElement('span', {}, statusText));
-        el.appendChild(makeElement('span', {}, `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
+        el.appendChild(makeElement('span', {}, `${realClaimed} / ${realTotal} ${claimedCountText}`));
     }));
-
+    
     // --- Tlačítko Link (přesunuto sem - mezi status a timing) ---
     if (!campaign.linked && campaign.link_url) {
         campaignInfo.appendChild(makeElement('button', { 

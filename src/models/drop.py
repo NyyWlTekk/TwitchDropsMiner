@@ -167,21 +167,21 @@ class BaseDrop:
             )
             logger.debug(f"Twitch response for {self.id}: {response}")
         except GQLException as e:
-            logger.error(f"GQL EXCEPTION pro drop {self.id}: {e}")
+            logger.error(f"GQL exception for drop {self.id}: {e}")
             return False
 
-        data = response.get("data", {})
-        if "errors" in data and data["errors"]:
-            logger.error(f"TWITCH API CHYBA pro drop {self.id}: {data['errors']}")
+        if "errors" in response and response["errors"]:
+            logger.error(f"Twitch API error for drop {self.id}: {response['errors']}")
             return False
-            
-        if "claimDropRewards" in data:
+
+        data = response.get("data") or {}
+        if "claimDropRewards" in data and data["claimDropRewards"]:
             status = data["claimDropRewards"].get("status")
             if status in ("ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"):
                 return True
             else:
-                logger.warning(f"Neúspěšný status claimu: {status} pro drop {self.id}")
-        
+                logger.warning(f"Unsuccessful claim status: {status} for drop {self.id}")
+
         return False
 
     async def claim(self) -> bool:
@@ -202,6 +202,12 @@ class BaseDrop:
 
                 # 1. Okamžité vyvolání aktualizace stavu pro web/websocket
                 self._on_state_changed()
+
+                # Refresh inventory immediately after successful claim
+                try:
+                    await self._twitch.fetch_inventory()
+                except Exception as e:
+                    logger.error(f"Failed to refresh inventory after claim: {e}")
 
                 # 2. Bezpečné získání počtu vybraných a celkových dropů (podpora pro metodu i property)
                 claimed_count = (

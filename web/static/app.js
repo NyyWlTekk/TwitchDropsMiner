@@ -524,19 +524,38 @@ function startCombinedRotation() {
     if (state.rotationTimer) return;
 
     state.rotationTimer = setInterval(() => {
-        if (!state.activeDropsQueue || state.activeDropsQueue.length === 0) return;
+        // 1. Filtrujeme POUZE aktivní nedokončené kampaně (progress < 100)
+        // Pokud máš v objektu příznak "is_mining" nebo "is_watching", můžeš použít c.is_mining
+        const activeCampaigns = (state.activeCampaignsQueue || []).filter(c => c.progress < 100 && !c.is_claimed);
 
-        // 1. Posuneme index dropu na další v pořadí
+        if (activeCampaigns.length === 0) return;
+
+        // Ošetření přetečení indexu kampaně
+        if (state.campaignRotationIndex >= activeCampaigns.length) {
+            state.campaignRotationIndex = 0;
+        }
+
+        const currentCampaign = activeCampaigns[state.campaignRotationIndex];
+
+        // 2. Vyfiltrujeme pouze nedokončené dropy z aktuální kampaně
+        const activeDrops = (currentCampaign.drops || state.activeDropsQueue || []).filter(d => !d.is_claimed && d.progress < 100);
+
+        if (activeDrops.length === 0) {
+            // Pokud kampaň nemá žádné aktivní dropy, přejdeme na další
+            state.campaignRotationIndex = (state.campaignRotationIndex + 1) % activeCampaigns.length;
+            return;
+        }
+
+        // 3. Posuneme index dropu
         state.dropRotationIndex++;
 
-        // 2. Pokud jsme projeli VŠECHNY dropy v aktuální kampani (dosáhli jsme konce pole):
-        if (state.dropRotationIndex >= state.activeDropsQueue.length) {
-            state.dropRotationIndex = 0; // Vracíme dropy zpět na 1. položku
+        // Pokud jsme projeli všechny aktivní dropy, přepneme kampaň
+        if (state.dropRotationIndex >= activeDrops.length) {
+            state.dropRotationIndex = 0;
 
-            // A TEPRVE TEĎ přepneme na další kampaň!
-            if (state.activeCampaignsQueue && state.activeCampaignsQueue.length > 1) {
-                state.campaignRotationIndex = (state.campaignRotationIndex + 1) % state.activeCampaignsQueue.length;
-                const nextCampaignData = state.activeCampaignsQueue[state.campaignRotationIndex];
+            if (activeCampaigns.length > 1) {
+                state.campaignRotationIndex = (state.campaignRotationIndex + 1) % activeCampaigns.length;
+                const nextCampaignData = activeCampaigns[state.campaignRotationIndex];
 
                 if (nextCampaignData) {
                     switchCampaignDisplay(nextCampaignData);
@@ -544,12 +563,12 @@ function startCombinedRotation() {
             }
         }
 
-        // 3. Aktualizujeme zobrazení konkrétního dropu
-        const nextDropData = state.activeDropsQueue[state.dropRotationIndex];
+        // 4. Aktualizujeme zobrazení konkrétního dropu
+        const nextDropData = activeDrops[state.dropRotationIndex];
         if (nextDropData) {
             updateSingleDropDisplay(nextDropData);
         }
-    }, 4000); // Časová prodleva mezi zobrazením jednotlivých dropů (4 sec)
+    }, 4000);
 }
 
 function formatTime(secs) {

@@ -186,9 +186,7 @@ class MessageHandlerService:
 
         Args:
             user_id: The user ID that sent the message
-            message: The websocket message payload, examples:
-                - {"type": "drop-progress", data: {"current_progress_min": 3, "required_progress_min": 10}}
-                - {"type": "drop-claim", data: {"drop_instance_id": ...}}
+            message: The websocket message payload
         """
         msg_type: str = message["type"]
         if msg_type not in ("drop-progress", "drop-claim"):
@@ -212,8 +210,6 @@ class MessageHandlerService:
             drop.display()
 
             # About 4-20s after claiming the drop, next drop can be started
-            # by re-sending the watch payload. We can test for it by fetching the current drop
-            # via GQL, and then comparing drop IDs.
             await asyncio.sleep(4)
 
             if watching_channel is not None:
@@ -233,6 +229,10 @@ class MessageHandlerService:
             if campaign.can_earn(watching_channel):
                 self._twitch.restart_watching()
             else:
+                logger.info(f"Campaign completed for {campaign.game}. Resetting active watching state.")
+                self._twitch.stop_watching()
+                if hasattr(self._twitch, "gui") and hasattr(self._twitch.gui, "channels"):
+                    self._twitch.gui.channels.clear_watching()
                 self._twitch.change_state(State.INVENTORY_FETCH)
             return
 

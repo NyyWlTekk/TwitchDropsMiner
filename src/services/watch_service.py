@@ -51,35 +51,31 @@ class WatchService:
         self._twitch = twitch
 
     def can_watch(self, channel: Channel) -> bool:
-        """
-        Determines if the given channel qualifies as a watching candidate.
-
-        A channel can be watched if:
-        - There are wanted games configured
-        - The channel is online
-        - Drops are enabled on the channel
-        - The channel is streaming a wanted game
-        - At least one campaign can be progressed on this channel
-
-        Args:
-            channel: The channel to evaluate
-
-        Returns:
-            True if the channel can be watched, False otherwise
-        """
         if not self._twitch.wanted_games:
             return False
 
-        # exit early if stream is offline or drops aren't enabled
         if not channel.online or not channel.drops_enabled:
             return False
 
-        # check if we can progress any campaign for the played game
-        if channel.game is None or channel.game not in self._twitch.wanted_games:
+        # Porovnávejme jména/ID, nikoli samotné objekty, pro zamezení bugům s typem
+        game_names = [g.name if hasattr(g, 'name') else str(g) for g in self._twitch.wanted_games]
+        channel_game_name = channel.game.name if hasattr(channel.game, 'name') else str(channel.game)
+
+        if channel.game is None or channel_game_name not in game_names:
             return False
 
-        return any(campaign.can_earn(channel) for campaign in self._twitch.inventory)
+        # Debug kontroly kampaní
+        matching_campaigns = []
+        for campaign in self._twitch.inventory:
+            camp_game_name = campaign.game.name if hasattr(campaign.game, 'name') else str(campaign.game)
+            if camp_game_name.lower() == channel_game_name.lower():
+                can = campaign.can_earn(channel)
+                logger.debug(f"Campaign '{campaign.name}' for {channel_game_name} can_earn: {can}")
+                if can:
+                    matching_campaigns.append(campaign)
 
+        return len(matching_campaigns) > 0
+    
     def should_switch(self, channel: Channel) -> bool:
         """
         Determines if the given channel qualifies as a switch candidate.

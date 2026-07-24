@@ -1840,3 +1840,22 @@ header h1 {
         width: 100%;
     }
 }
+
+/* Základní zarovnání SVG ikon v badge a stavitelných tagách */
+.status-tag, .wanted-game-time-badge, .wanted-campaign-dates {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.status-icon {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    flex-shrink: 0;
+}
+
+.wanted-campaign-dates .status-icon {
+    width: 12px;
+    height: 12px;
+}

@@ -17,6 +17,27 @@ const state = {
     translations: {}  // Store current translations
 };
 
+const imageCache = new Map();
+
+function getCachedImage(url, alt, className, styles = {}) {
+    if (!url) return null;
+    
+    if (imageCache.has(url)) {
+        const cachedImg = imageCache.get(url).cloneNode(true);
+        Object.assign(cachedImg.style, styles);
+        return cachedImg;
+    }
+
+    const imgEl = document.createElement('img');
+    imgEl.src = url;
+    if (alt) imgEl.alt = alt;
+    if (className) imgEl.className = className;
+    Object.assign(imgEl.style, styles);
+
+    imageCache.set(url, imgEl);
+    return imgEl.cloneNode(true);
+}
+
 // ==================== Version Checking ====================
 
 async function fetchAndDisplayVersion() {
@@ -510,67 +531,53 @@ function renderChannels() {
 
 // ==================== Active Drop & Campaign Rotation ====================
 
+// Initialize state variables if not already defined
 if (!state.activeCampaignsQueue) state.activeCampaignsQueue = [];
 if (state.campaignRotationIndex === undefined) state.campaignRotationIndex = 0;
-
 if (!state.activeDropsQueue) state.activeDropsQueue = [];
 if (state.dropRotationIndex === undefined) state.dropRotationIndex = 0;
-
-// Používáme už jen tento jeden společný timer
 if (!state.rotationTimer) state.rotationTimer = null;
+if (!state.countdownTimer) state.countdownTimer = null;
 
-function startCombinedRotation() {
-    // Zamezíme běhu duplicitních časovačů
-    if (state.rotationTimer) return;
+let dropTotalSeconds = 0;
 
-    state.rotationTimer = setInterval(() => {
-        // 1. Filtrujeme POUZE aktivní nedokončené kampaně (progress < 100)
-        // Pokud máš v objektu příznak "is_mining" nebo "is_watching", můžeš použít c.is_mining
-        const activeCampaigns = (state.activeCampaignsQueue || []).filter(c => c.progress < 100 && !c.is_claimed);
-
-        if (activeCampaigns.length === 0) return;
-
-        // Ošetření přetečení indexu kampaně
-        if (state.campaignRotationIndex >= activeCampaigns.length) {
-            state.campaignRotationIndex = 0;
-        }
-
-        const currentCampaign = activeCampaigns[state.campaignRotationIndex];
-
-        // 2. Vyfiltrujeme pouze nedokončené dropy z aktuální kampaně
-        const activeDrops = (currentCampaign.drops || state.activeDropsQueue || []).filter(d => !d.is_claimed && d.progress < 100);
-
-        if (activeDrops.length === 0) {
-            // Pokud kampaň nemá žádné aktivní dropy, přejdeme na další
-            state.campaignRotationIndex = (state.campaignRotationIndex + 1) % activeCampaigns.length;
-            return;
-        }
-
-        // 3. Posuneme index dropu
-        state.dropRotationIndex++;
-
-        // Pokud jsme projeli všechny aktivní dropy, přepneme kampaň
-        if (state.dropRotationIndex >= activeDrops.length) {
-            state.dropRotationIndex = 0;
-
-            if (activeCampaigns.length > 1) {
-                state.campaignRotationIndex = (state.campaignRotationIndex + 1) % activeCampaigns.length;
-                const nextCampaignData = activeCampaigns[state.campaignRotationIndex];
-
-                if (nextCampaignData) {
-                    switchCampaignDisplay(nextCampaignData);
-                }
-            }
-        }
-
-        // 4. Aktualizujeme zobrazení konkrétního dropu
-        const nextDropData = activeDrops[state.dropRotationIndex];
-        if (nextDropData) {
-            updateSingleDropDisplay(nextDropData);
-        }
-    }, 4000);
+/**
+ * Helper to universally check if a drop or campaign is claimed
+ */
+function isItemClaimed(item) {
+    if (!item) return true;
+    return item.is_claimed === true || 
+           item.claimed === true || 
+           item.isClaimed === true || 
+           item.status === 'CLAIMED';
 }
 
+/**
+ * Helper to retrieve campaign and its drops list accurately
+ */
+function getCampaignAndDrops(queueItem) {
+    if (!queueItem) return { campaign: null, drops: [] };
+
+    if (queueItem.drops) {
+        const drops = Array.isArray(queueItem.drops) ? queueItem.drops : Object.values(queueItem.drops);
+        return { campaign: queueItem, drops };
+    }
+
+    if (state.campaigns && queueItem.campaign_id) {
+        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        const found = campaignsArray.find(c => c && (c.id === queueItem.campaign_id || c.campaign_id === queueItem.campaign_id));
+        if (found && found.drops) {
+            const drops = Array.isArray(found.drops) ? found.drops : Object.values(found.drops);
+            return { campaign: found, drops };
+        }
+    }
+
+    return { campaign: queueItem, drops: [queueItem] };
+}
+
+/**
+ * Formats seconds into readable time (e.g. 1d 2h 3m, 2h 05m, or 5:00)
+ */
 function formatTime(secs) {
     if (isNaN(secs) || secs < 0) return '0:00';
 
@@ -588,109 +595,148 @@ function formatTime(secs) {
     }
 }
 
-function updateRemainingTime(seconds) {
-    // 1. Current drop progress time
-    const dropTimeEl = document.getElementById('progress-time');
-    if (dropTimeEl && dropTotalSeconds > 0) {
-        dropTimeEl.textContent = `Time remaining: ${formatTime(seconds)} / ${formatTime(dropTotalSeconds)}`;
-    }
-
-    // 2. Campaign progress time (takes longest drop in campaign)
-    if (state.currentDrop && state.currentDrop.campaign_id && state.campaigns) {
-        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        const campaign = campaignsArray.find(c => c.id === state.currentDrop.campaign_id || c.campaign_id === state.currentDrop.campaign_id);
-
-        if (campaign && campaign.drops) {
-            let drops = campaign.drops;
-            if (!Array.isArray(drops)) drops = Object.values(drops);
-
-            let maxCampRemainingSecs = 0;
-            let maxCampReqSecs = 0;
-
-            drops.forEach(d => {
-                const req = (Number(d.required_minutes) || 1) * 60;
-                const cur = (Number(d.current_minutes) || 0) * 60;
-
-                const rem = (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id)
-                    ? seconds
-                    : (d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur));
-
-                if (rem > maxCampRemainingSecs) maxCampRemainingSecs = rem;
-                if (req > maxCampReqSecs) maxCampReqSecs = req;
-            });
-
-            const campaignTimeEl = document.getElementById('campaign-progress-time');
-            if (campaignTimeEl) {
-                campaignTimeEl.textContent = `Time remaining: ${formatTime(maxCampRemainingSecs)} / ${formatTime(maxCampReqSecs)}`;
-            }
-        }
-    }
-
-    // 3. Overall Queue progress time
-    if (state.campaigns) {
-        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        const gameMap = {};
-
-        campaignsArray.forEach(campaign => {
-            if (!campaign || campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
-                return;
-            }
-            let drops = campaign.drops;
-            if (!drops) return;
-            if (!Array.isArray(drops)) drops = Object.values(drops);
-
-            let campRem = 0;
-            let campReq = 0;
-
-            drops.forEach(d => {
-                const req = (Number(d.required_minutes) || 1) * 60;
-                const cur = (Number(d.current_minutes) || 0) * 60;
-                const rem = (state.currentDrop && (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id))
-                    ? seconds
-                    : (d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, req - cur));
-
-                if (rem > campRem) campRem = rem;
-                if (req > campReq) campReq = req;
-            });
-
-            const gameName = campaign.game_name || campaign.game?.name || campaign.name || 'Other';
-
-            if (!gameMap[gameName]) {
-                gameMap[gameName] = { rem: 0, req: 0 };
-            }
-            if (campRem > gameMap[gameName].rem) {
-                gameMap[gameName].rem = campRem;
-                gameMap[gameName].req = campReq;
-            }
-        });
-
-        let overallRemainingSecs = 0;
-        let overallReqSecs = 0;
-        Object.values(gameMap).forEach(g => {
-            overallRemainingSecs += g.rem;
-            overallReqSecs += g.req;
-        });
-
-        const overallTimeEl = document.getElementById('overall-progress-time');
-        if (overallTimeEl) {
-            overallTimeEl.textContent = `Time remaining: ${formatTime(overallRemainingSecs)} / ${formatTime(overallReqSecs)}`;
-        }
-    }
-
-    if (state.currentDrop) {
-        const reqMins = state.currentDrop.required_minutes || 1;
-        const elapsedSecsTotal = dropTotalSeconds - seconds;
-        const estimatedCurrentMins = Math.min(reqMins, Math.floor(elapsedSecsTotal / 60));
-        renderAllProgressBars(estimatedCurrentMins, state.currentDrop, elapsedSecsTotal);
-    }
-
-    if (seconds > 0) {
-        state.countdownTimer = setTimeout(() => updateRemainingTime(seconds - 1), 1000);
-    } else {
+/**
+ * Clear or reset drop progress UI components
+ */
+function clearDropProgress() {
+    state.currentDrop = null;
+    dropTotalSeconds = 0;
+    
+    if (state.countdownTimer) {
+        clearInterval(state.countdownTimer);
         state.countdownTimer = null;
+    }
+
+    const noDropMessage = document.getElementById('no-drop-message');
+    const dropInfo = document.getElementById('drop-info');
+    if (noDropMessage) noDropMessage.style.display = 'block';
+    if (dropInfo) dropInfo.style.display = 'none';
+
+    const fill = document.getElementById('progress-fill');
+    if (fill) {
+        fill.style.width = '0%';
+        fill.textContent = '0%';
+    }
+
+    const progressText = document.getElementById('progress-text');
+    if (progressText) {
+        progressText.textContent = '0 / 0 min';
+    }
+
+    const timeEl = document.getElementById('progress-time');
+    if (timeEl) {
+        timeEl.textContent = 'Time remaining: 0:00';
     }
 }
 
+/**
+ * Live 1-Second Countdown Timer for active drop
+ */
+function updateRemainingTime(initialSeconds, forceReset = false) {
+    // Keep running timer uninterrupted if showing the same drop
+    if (state.countdownTimer && !forceReset) {
+        return;
+    }
+
+    if (state.countdownTimer) {
+        clearInterval(state.countdownTimer);
+        state.countdownTimer = null;
+    }
+
+    let remaining = Math.max(0, Math.floor(initialSeconds));
+
+    function tick() {
+        const timeEl = document.getElementById('progress-time');
+        
+        if (timeEl) {
+            const reqSecs = (state.currentDrop?.required_minutes || 0) * 60;
+            timeEl.textContent = `Time remaining: ${formatTime(remaining)} / ${formatTime(reqSecs)}`;
+        }
+
+        if (remaining <= 0) {
+            if (state.countdownTimer) {
+                clearInterval(state.countdownTimer);
+                state.countdownTimer = null;
+            }
+            return;
+        }
+
+        remaining--;
+        if (state.currentDrop) {
+            state.currentDrop.remaining_seconds = remaining;
+        }
+    }
+
+    tick();
+    state.countdownTimer = setInterval(tick, 1000);
+}
+
+/**
+ * Combined rotation timer for active campaigns and drops
+ */
+function startCombinedRotation(forceRestart = true) {
+    if (state.rotationTimer && !forceRestart) {
+        return; 
+    }
+
+    if (state.rotationTimer) {
+        clearInterval(state.rotationTimer);
+        state.rotationTimer = null;
+    }
+
+    const executeRotationStep = () => {
+        const rawQueue = state.activeCampaignsQueue || [];
+
+        const validCampaigns = rawQueue.filter(c => {
+            if (isItemClaimed(c)) return false;
+            const { drops } = getCampaignAndDrops(c);
+            if (drops.length === 0) return true;
+            return drops.some(d => !isItemClaimed(d));
+        });
+
+        if (validCampaigns.length === 0) {
+            return;
+        }
+
+        if (state.campaignRotationIndex >= validCampaigns.length || state.campaignRotationIndex < 0) {
+            state.campaignRotationIndex = 0;
+            state.dropRotationIndex = 0;
+        }
+
+        let currentCampaign = validCampaigns[state.campaignRotationIndex];
+        const { drops: cDrops } = getCampaignAndDrops(currentCampaign);
+        let activeDrops = cDrops.length > 0 ? cDrops.filter(d => !isItemClaimed(d)) : [currentCampaign];
+
+        if (state.dropRotationIndex >= activeDrops.length || state.dropRotationIndex < 0) {
+            state.dropRotationIndex = 0;
+        }
+
+        if (currentCampaign && typeof switchCampaignDisplay === 'function') {
+            switchCampaignDisplay(currentCampaign, false); 
+        }
+
+        // Only increment index if there are multiple campaigns or drops to cycle through
+        if (validCampaigns.length > 1 || activeDrops.length > 1) {
+            state.dropRotationIndex++;
+
+            if (state.dropRotationIndex >= activeDrops.length) {
+                state.dropRotationIndex = 0;
+                state.campaignRotationIndex++;
+                
+                if (state.campaignRotationIndex >= validCampaigns.length) {
+                    state.campaignRotationIndex = 0;
+                }
+            }
+        }
+    };
+
+    executeRotationStep();
+    state.rotationTimer = setInterval(executeRotationStep, 4000);
+}
+
+/**
+ * Render single drop progress bar
+ */
 function renderAllProgressBars(currentMins, dropData, elapsedSecsOverride = null) {
     const reqMins = dropData.required_minutes || 1;
     let dropPercentage = 0;
@@ -720,9 +766,15 @@ function renderAllProgressBars(currentMins, dropData, elapsedSecsOverride = null
     updateOverallProgress();
 }
 
-// ==================== Active Drop Display & Rotation Fix ====================
-
+/**
+ * Render single drop UI component
+ */
+/**
+ * Render single drop UI component with memory caching for zero-stutter rotation
+ */
 function updateSingleDropDisplay(data) {
+    if (!data) return;
+    
     state.currentDrop = data;
 
     const currentSecs = (data.current_minutes || 0) * 60;
@@ -733,7 +785,6 @@ function updateSingleDropDisplay(data) {
     if (noDropMessage) noDropMessage.style.display = 'none';
     if (dropInfo) dropInfo.style.display = 'block';
 
-    // Extract reward image URL from multiple possible Twitch API keys
     const rewardImgUrl = data.image_url ||
         data.reward_image_url ||
         data.icon_url ||
@@ -745,15 +796,21 @@ function updateSingleDropDisplay(data) {
         data.benefit_edges?.[0]?.node?.asset_url ||
         data.benefit_edges?.[0]?.node?.image_url;
 
-    // 1. Update header counter
     const dropNameEl = document.getElementById('drop-name');
     if (dropNameEl) {
-        const queueLength = state.activeCampaignsQueue && state.activeCampaignsQueue.length > 0 ? state.activeCampaignsQueue.length : 1;
+        const rawQueue = state.activeCampaignsQueue || [];
+        const validCampaigns = rawQueue.filter(c => {
+            if (isItemClaimed(c)) return false;
+            const { drops } = getCampaignAndDrops(c);
+            return drops.length === 0 || drops.some(d => !isItemClaimed(d));
+        });
+        
+        const queueLength = validCampaigns.length > 0 ? validCampaigns.length : 1;
         const currentIndex = (state.campaignRotationIndex !== undefined ? state.campaignRotationIndex : 0) + 1;
-        dropNameEl.textContent = `${data.game_name} (${currentIndex}/${queueLength})`;
+        
+        dropNameEl.textContent = `${data.game_name || ''} (${currentIndex}/${queueLength})`;
     }
 
-    // 2. Upper game preview (Game Box Art + Name)
     const dropGameEl = document.getElementById('drop-game');
     if (dropGameEl) {
         let boxArtUrl = data.game_box_art_url;
@@ -774,52 +831,54 @@ function updateSingleDropDisplay(data) {
 
         if (boxArtUrl) {
             const iconUrl = boxArtUrl.replace('{width}', '52').replace('{height}', '70');
-            const imgEl = makeImageElement(iconUrl, data.game_name || '', 'game-icon');
-            imgEl.style.width = '42px';
-            imgEl.style.height = '56px';
-            imgEl.style.borderRadius = '6px';
-            imgEl.style.objectFit = 'cover';
-            imgEl.style.flexShrink = '0';
-            children.push(imgEl);
+            const imgEl = getCachedImage(iconUrl, data.game_name || '', 'game-icon', {
+                width: '42px',
+                height: '56px',
+                borderRadius: '6px',
+                objectFit: 'cover',
+                flexShrink: '0'
+            });
+            if (imgEl) children.push(imgEl);
         }
 
-        const infoTextDiv = makeElement('div', { class: 'drop-game-text-info' });
-        infoTextDiv.style.display = 'flex';
-        infoTextDiv.style.flexDirection = 'column';
-        infoTextDiv.style.justifyContent = 'center';
+        if (typeof makeElement === 'function') {
+            const infoTextDiv = makeElement('div', { class: 'drop-game-text-info' });
+            infoTextDiv.style.display = 'flex';
+            infoTextDiv.style.flexDirection = 'column';
+            infoTextDiv.style.justifyContent = 'center';
 
-        if (data.campaign_id) {
-            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
-            const linkEl = makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name);
-            const subText = makeElement('span', { class: 'drop-sub-name' }, data.drop_name);
-            subText.style.fontSize = '0.9em';
-            subText.style.opacity = '0.85';
+            if (data.campaign_id) {
+                const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
+                const linkEl = makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, data.campaign_name || '');
+                const subText = makeElement('span', { class: 'drop-sub-name' }, data.drop_name || '');
+                subText.style.fontSize = '0.9em';
+                subText.style.opacity = '0.85';
 
-            infoTextDiv.appendChild(linkEl);
-            infoTextDiv.appendChild(subText);
-        } else {
-            const titleEl = makeElement('span', { class: 'drop-campaign-title' }, data.campaign_name);
-            const subText = makeElement('span', { class: 'drop-sub-name' }, data.drop_name);
-            subText.style.fontSize = '0.9em';
-            subText.style.opacity = '0.85';
+                infoTextDiv.appendChild(linkEl);
+                infoTextDiv.appendChild(subText);
+            } else {
+                const titleEl = makeElement('span', { class: 'drop-campaign-title' }, data.campaign_name || '');
+                const subText = makeElement('span', { class: 'drop-sub-name' }, data.drop_name || '');
+                subText.style.fontSize = '0.9em';
+                subText.style.opacity = '0.85';
 
-            infoTextDiv.appendChild(titleEl);
-            infoTextDiv.appendChild(subText);
+                infoTextDiv.appendChild(titleEl);
+                infoTextDiv.appendChild(subText);
+            }
+
+            children.push(infoTextDiv);
         }
 
-        children.push(infoTextDiv);
         dropGameEl.replaceChildren(...children);
     }
 
-    // 3. Rebuild bottom drop card layout
     const currentDropLabel = document.getElementById('current-drop-label');
     if (currentDropLabel) {
         const dropQueueLen = state.activeDropsQueue && state.activeDropsQueue.length > 0 ? state.activeDropsQueue.length : 1;
         const dropIdx = (state.dropRotationIndex !== undefined ? state.dropRotationIndex : 0) + 1;
 
-        currentDropLabel.textContent = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${data.drop_name}`;
+        currentDropLabel.textContent = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${data.drop_name || ''}`;
 
-        // Safely search for outer card container
         let cardOuter = currentDropLabel.closest('.drop-card-container');
         
         if (!cardOuter) {
@@ -830,7 +889,7 @@ function updateSingleDropDisplay(data) {
             while (parentSearch && parentSearch !== document.body) {
                 if ((progressTime && parentSearch.contains(progressTime)) || (progressFill && parentSearch.contains(progressFill))) {
                     cardOuter = parentSearch;
-                    cardOuter.classList.add('drop-card-container'); // Permanently tag outer card
+                    cardOuter.classList.add('drop-card-container');
                     break;
                 }
                 parentSearch = parentSearch.parentElement;
@@ -841,7 +900,6 @@ function updateSingleDropDisplay(data) {
             let rightCol = cardOuter.querySelector('#drop-card-right-col');
             let leftImg = cardOuter.querySelector('#drop-card-left-img');
 
-            // Wrap right side elements if not done yet
             if (!rightCol) {
                 rightCol = document.createElement('div');
                 rightCol.id = 'drop-card-right-col';
@@ -864,15 +922,6 @@ function updateSingleDropDisplay(data) {
                 cardOuter.appendChild(rightCol);
             }
 
-            // Cleanup any remaining duplicate images from previous runs
-            const extraImgs = cardOuter.querySelectorAll('img[id="drop-card-left-img"]');
-            if (extraImgs.length > 1) {
-                extraImgs.forEach((img, index) => {
-                    if (index > 0) img.remove();
-                });
-            }
-
-            // Insert / update left image without cropping
             if (rewardImgUrl) {
                 if (!leftImg || !cardOuter.contains(leftImg)) {
                     leftImg = document.createElement('img');
@@ -884,8 +933,8 @@ function updateSingleDropDisplay(data) {
                 leftImg.style.width = '72px';
                 leftImg.style.height = 'auto';
                 leftImg.style.maxHeight = '100%';
-                leftImg.style.alignSelf = 'center'; // Centers image vertically without stretching/cropping
-                leftImg.style.objectFit = 'contain'; // Ensures full uncropped image visibility
+                leftImg.style.alignSelf = 'center';
+                leftImg.style.objectFit = 'contain';
                 leftImg.style.borderRadius = '6px';
                 leftImg.style.flexShrink = '0';
                 leftImg.style.display = 'block';
@@ -897,89 +946,123 @@ function updateSingleDropDisplay(data) {
 
     renderAllProgressBars(data.current_minutes || 0, data);
 
-    if (state.countdownTimer !== null) {
-        clearTimeout(state.countdownTimer);
-        state.countdownTimer = null;
-    }
-    updateRemainingTime(data.remaining_seconds || 0);
+    const remSecs = data.remaining_seconds !== undefined 
+        ? data.remaining_seconds 
+        : Math.max(0, ((data.required_minutes || 1) - (data.current_minutes || 0)) * 60);
+
+    updateRemainingTime(remSecs);
 }
 
-function switchCampaignDisplay(data) {
-    state.currentDrop = data;
+/**
+ * Switch campaign display and prepare drops queue
+ */
+function switchCampaignDisplay(data, isManualSwitch = true) {
+    if (!data) return;
 
-    if (state.campaigns) {
-        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        const campaign = campaignsArray.find(c => c.id === data.campaign_id || c.campaign_id === data.campaign_id);
-        if (campaign && campaign.drops) {
-            let drops = campaign.drops;
-            if (!Array.isArray(drops)) drops = Object.values(drops);
+    const previousDropId = state.currentDrop ? (state.currentDrop.drop_id || state.currentDrop.id) : null;
 
-            // Exclude claimed drops from rotation
-            const unclaimedDrops = drops.filter(d => !(d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED'));
-            const targetDrops = unclaimedDrops.length > 0 ? unclaimedDrops : drops;
+    const { drops } = getCampaignAndDrops(data);
 
-            state.activeDropsQueue = targetDrops.map(d => {
-                const dropImg = d.image_url ||
-                    d.reward_image_url ||
-                    d.icon_url ||
-                    d.benefit_icon_url ||
-                    d.reward?.image_url ||
-                    d.benefit?.image_url ||
-                    d.benefits?.[0]?.image_url ||
-                    d.benefit_edges?.[0]?.node?.asset_url ||
-                    data.image_url;
+    if (drops.length > 0) {
+        if (data.drop_id) {
+            const targetDrop = drops.find(d => (d.id || d.drop_id) === data.drop_id);
+            if (targetDrop) {
+                if (data.current_minutes !== undefined) targetDrop.current_minutes = data.current_minutes;
+                if (data.required_minutes !== undefined) targetDrop.required_minutes = data.required_minutes;
+                if (data.remaining_seconds !== undefined) targetDrop.remaining_seconds = data.remaining_seconds;
+                if (data.is_claimed !== undefined) targetDrop.is_claimed = data.is_claimed;
+            }
+        }
 
-                return {
-                    ...data,
-                    drop_id: d.id || d.drop_id,
-                    drop_name: d.name || d.drop_name,
-                    image_url: dropImg,
-                    current_minutes: d.current_minutes || 0,
-                    required_minutes: d.required_minutes || 1,
-                    remaining_seconds: d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, ((d.required_minutes || 1) - (d.current_minutes || 0)) * 60)
-                };
-            });
+        const unclaimedDrops = drops.filter(d => !isItemClaimed(d));
+        const targetDrops = unclaimedDrops.length > 0 ? unclaimedDrops : drops;
 
-            state.dropRotationIndex = state.activeDropsQueue.findIndex(d => d.drop_id === data.drop_id);
-            if (state.dropRotationIndex === -1) state.dropRotationIndex = 0;
-        } else {
-            state.activeDropsQueue = [data];
+        state.activeDropsQueue = targetDrops.map(d => {
+            const dropImg = d.image_url ||
+                d.reward_image_url ||
+                d.icon_url ||
+                d.benefit_icon_url ||
+                d.reward?.image_url ||
+                d.benefit?.image_url ||
+                d.benefits?.[0]?.image_url ||
+                d.benefit_edges?.[0]?.node?.asset_url ||
+                data.image_url;
+
+            const curMins = d.current_minutes !== undefined ? d.current_minutes : (data.current_minutes || 0);
+            const reqMins = d.required_minutes || data.required_minutes || 1;
+
+            return {
+                ...data,
+                drop_id: d.id || d.drop_id,
+                drop_name: d.name || d.drop_name,
+                image_url: dropImg,
+                current_minutes: curMins,
+                required_minutes: reqMins,
+                remaining_seconds: d.remaining_seconds !== undefined 
+                    ? d.remaining_seconds 
+                    : Math.max(0, (reqMins - curMins) * 60)
+            };
+        });
+
+        if (isManualSwitch) {
+            const idx = state.activeDropsQueue.findIndex(d => (d.drop_id || d.id) === data.drop_id);
+            if (idx !== -1) {
+                state.dropRotationIndex = idx;
+            }
+            startCombinedRotation(true);
         }
     } else {
         state.activeDropsQueue = [data];
     }
 
-    // Preload všech obrázků ve frontě do cache prohlížeče
-    state.activeDropsQueue.forEach(dropItem => {
-        if (dropItem.image_url) {
-            const img = new Image();
-            img.src = dropItem.image_url;
-        }
-    });
+    if (Array.isArray(state.activeDropsQueue)) {
+        state.activeDropsQueue.forEach(dropItem => {
+            if (dropItem && dropItem.image_url) {
+                const img = new Image();
+                img.src = dropItem.image_url;
+            }
+        });
+    }
 
-    // KLÍČOVÁ OPRAVA: Předáme již namapovaný drop z fronty s platnou URL obrázku
-    const initialActiveDrop = state.activeDropsQueue[state.dropRotationIndex] || data;
-    updateSingleDropDisplay(initialActiveDrop);
+    const initialActiveDrop = state.activeDropsQueue[state.dropRotationIndex] || state.activeDropsQueue[0] || data;
+    const newDropId = initialActiveDrop ? (initialActiveDrop.drop_id || initialActiveDrop.id) : null;
+    const dropChanged = !previousDropId || !newDropId || previousDropId !== newDropId;
 
-    startCombinedRotation();
+    updateSingleDropDisplay(initialActiveDrop, dropChanged);
 }
 
+/**
+ * Handle incoming progress update
+ */
 function updateDropProgress(data) {
+    if (!state.activeCampaignsQueue) {
+        state.activeCampaignsQueue = [];
+    }
+
+    if (data.progress !== undefined && data.required_minutes) {
+        if (data.progress <= 1.0 && data.current_minutes === undefined) {
+            data.current_minutes = Math.floor(data.progress * data.required_minutes);
+        }
+    }
+
     const existingIndex = state.activeCampaignsQueue.findIndex(c => c.campaign_id === data.campaign_id);
     if (existingIndex !== -1) {
-        state.activeCampaignsQueue[existingIndex] = data;
+        state.activeCampaignsQueue[existingIndex] = { ...state.activeCampaignsQueue[existingIndex], ...data };
     } else {
         state.activeCampaignsQueue.push(data);
     }
 
     const isCurrentActive = !state.currentDrop || state.currentDrop.campaign_id === data.campaign_id;
     if (isCurrentActive || state.activeCampaignsQueue.length === 1) {
-        switchCampaignDisplay(data);
+        switchCampaignDisplay(data, false);
     }
 
-    startCombinedRotation();
+    startCombinedRotation(false);
 }
 
+/**
+ * Update campaign level progress bar
+ */
 function updateCampaignProgressData(data, liveCurrentMins) {
     const campaignFill = document.getElementById('campaign-progress-fill');
     const campaignText = document.getElementById('campaign-progress-text');
@@ -994,18 +1077,14 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         return;
     }
 
-    const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-    const campaign = campaignsArray.find(c => c.id === data.campaign_id || c.campaign_id === data.campaign_id);
+    const { campaign, drops } = getCampaignAndDrops(data);
 
-    if (!campaign || !campaign.drops) {
+    if (!campaign || drops.length === 0) {
         campaignFill.style.width = '0%';
         campaignFill.textContent = '0%';
-        campaignText.textContent = `${liveCurrentMins} / ${data.required_minutes} min`;
+        campaignText.textContent = `${liveCurrentMins} / ${data.required_minutes || 0} min`;
         return;
     }
-
-    let drops = campaign.drops;
-    if (!Array.isArray(drops)) drops = Object.values(drops);
 
     let maxReq = 0;
     let maxCur = 0;
@@ -1042,108 +1121,55 @@ function updateCampaignProgressData(data, liveCurrentMins) {
     }
 }
 
-function updateOverallProgress(tree = null) {
+/**
+ * Update overall queue progress bar strictly from the active campaigns queue
+ */
+function updateOverallProgress() {
     try {
         const overallFill = document.getElementById('overall-progress-fill');
         const overallText = document.getElementById('overall-progress-text');
-        const overallTimeEl = document.getElementById('overall-progress-time');
 
         if (!overallFill || !overallText) return;
 
-        if (!state || !state.campaigns) {
-            overallFill.style.width = '0%';
-            overallFill.textContent = '0%';
-            overallText.textContent = '0 / 0 min';
-            return;
-        }
-
-        let queueItems = [];
-        if (tree && Array.isArray(tree)) {
-            queueItems = tree;
-        } else {
-            const domGameTitles = document.querySelectorAll('.wanted-game-title');
-            domGameTitles.forEach(el => {
-                const text = el.textContent.trim();
-                if (text) queueItems.push({ game_name: text });
-            });
-        }
-
-        if (queueItems.length === 0 && state.currentDrop && state.currentDrop.game_name) {
-            queueItems.push({ game_name: state.currentDrop.game_name });
-        }
-
-        if (queueItems.length === 0) {
-            overallFill.style.width = '0%';
-            overallFill.textContent = '0%';
-            overallText.textContent = '0 / 0 min';
-            return;
-        }
-
-        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        const rawQueue = state.activeCampaignsQueue || [];
         let totalCurrent = 0;
         let totalRequired = 0;
+        let totalRemainingSecs = 0;
 
-        queueItems.forEach(queueItem => {
-            const qGameName = (queueItem.game_name || queueItem.name || '').toLowerCase();
-            const qCampaignName = (queueItem.campaign_name || queueItem.name || '').toLowerCase();
+        rawQueue.forEach(queueItem => {
+            if (isItemClaimed(queueItem)) return;
 
-            const matchingCampaigns = campaignsArray.filter(campaign => {
-                if (!campaign) return false;
-                if (campaign.expired || campaign.status === 'finished' || campaign.status === 'expired' || campaign.status === 'completed') {
-                    return false;
+            const { campaign, drops } = getCampaignAndDrops(queueItem);
+            
+            if (!campaign || drops.length === 0) {
+                let cur = Number(queueItem.current_minutes) || 0;
+                const req = Number(queueItem.required_minutes) || 0;
+                if (!isItemClaimed(queueItem)) {
+                    totalCurrent += cur;
+                    totalRequired += req;
+                    const remMins = Math.max(0, req - cur);
+                    totalRemainingSecs += remMins * 60;
                 }
-                const cGameName = (campaign.game_name || campaign.game || campaign.name || '').toLowerCase();
-                const cCampName = (campaign.campaign_name || campaign.name || '').toLowerCase();
+                return;
+            }
 
-                if (qGameName && cGameName === qGameName) {
-                    if (qCampaignName && qCampaignName !== qGameName) {
-                        return cCampName.includes(qCampaignName) || qCampaignName.includes(cCampName);
-                    }
-                    return true;
+            drops.forEach(d => {
+                if (isItemClaimed(d)) return;
+
+                let cur = Number(d.current_minutes) || 0;
+                const req = Number(d.required_minutes) || 0;
+
+                // Pokud jde o aktuálně běžecký drop, vezmeme živá data
+                if (state.currentDrop && (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id)) {
+                    cur = state.currentDrop.current_minutes || cur;
                 }
-                return false;
+
+                totalCurrent += cur;
+                totalRequired += req;
+
+                const remMins = Math.max(0, req - cur);
+                totalRemainingSecs += remMins * 60;
             });
-
-            if (matchingCampaigns.length === 0) return;
-
-            let bestCampReq = 0;
-            let bestCampCur = 0;
-
-            matchingCampaigns.forEach(campaign => {
-                let drops = campaign.drops;
-                if (!drops) return;
-                if (!Array.isArray(drops)) drops = Object.values(drops);
-
-                if (drops.length > 0) {
-                    let campReq = 0;
-                    let campCur = 0;
-
-                    drops.forEach(d => {
-                        let cur = Number(d.current_minutes) || 0;
-                        const req = Number(d.required_minutes) || 0;
-
-                        const isCurrentActive = state.currentDrop && (
-                            String(d.id) === String(state.currentDrop.drop_id) ||
-                            String(d.drop_id) === String(state.currentDrop.drop_id)
-                        );
-
-                        if (isCurrentActive) {
-                            cur = Number(state.currentDrop.current_minutes) || cur;
-                        }
-
-                        campReq += req;
-                        campCur += cur;
-                    });
-
-                    if (campReq > bestCampReq) {
-                        bestCampReq = campReq;
-                        bestCampCur = campCur;
-                    }
-                }
-            });
-
-            totalRequired += bestCampReq;
-            totalCurrent += bestCampCur;
         });
 
         if (totalRequired > 0) {
@@ -1151,56 +1177,30 @@ function updateOverallProgress(tree = null) {
             overallFill.style.width = `${percentage}%`;
             overallFill.textContent = `${percentage}%`;
             overallText.textContent = `${totalCurrent} / ${totalRequired} min`;
-
-            if (overallTimeEl && typeof formatTime === 'function') {
-                const overallReqSecs = totalRequired * 60;
-                const overallRemSecs = Math.max(0, (totalRequired - totalCurrent) * 60);
-                overallTimeEl.textContent = `Time remaining: ${formatTime(overallRemSecs)} / ${formatTime(overallReqSecs)}`;
-            }
         } else {
             overallFill.style.width = '0%';
             overallFill.textContent = '0%';
             overallText.textContent = '0 / 0 min';
         }
-    } catch (err) {
-        console.error("Error in updateOverallProgress:", err);
-    }
-}
 
-function clearDropProgress() {
-    state.currentDrop = null;
-
-    if (state.countdownTimer !== null) {
-        clearTimeout(state.countdownTimer);
-        state.countdownTimer = null;
-    }
-
-    const noDropMsg = document.getElementById('no-drop-message');
-    const dropInfo = document.getElementById('drop-info');
-    if (noDropMsg) noDropMsg.style.display = 'block';
-    if (dropInfo) dropInfo.style.display = 'none';
-}
-
-function addCampaign(campaignData) {
-    state.campaigns[campaignData.id] = campaignData;
-    renderInventory();
-}
-
-function clearInventory() {
-    state.campaigns = {};
-    renderInventory();
-}
-
-function updateDrop(campaignId, dropData) {
-    if (state.campaigns && state.campaigns[campaignId]) {
-        const drops = state.campaigns[campaignId].drops;
-        if (drops) {
-            const index = drops.findIndex(d => d.id === dropData.id);
-            if (index !== -1) {
-                drops[index] = dropData;
-                renderInventory();
+        let overallTimeEl = document.getElementById('overall-progress-time');
+        if (!overallTimeEl) {
+            const parent = overallText.parentElement;
+            if (parent) {
+                overallTimeEl = document.createElement('div');
+                overallTimeEl.id = 'overall-progress-time';
+                overallTimeEl.style.fontSize = '0.85em';
+                overallTimeEl.style.opacity = '0.8';
+                overallTimeEl.style.marginTop = '4px';
+                parent.appendChild(overallTimeEl);
             }
         }
+        if (overallTimeEl) {
+            overallTimeEl.textContent = `Total remaining time: ${formatTime(totalRemainingSecs)}`;
+        }
+
+    } catch (e) {
+        console.error('Error updating overall progress:', e);
     }
 }
 
@@ -3124,6 +3124,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ==================== Wanted Items Rendering ====================
 
+function formatCampaignDates(startIso, endIso) {
+    if (!startIso || !endIso) return '';
+    try {
+        const start = new Date(startIso);
+        const end = new Date(endIso);
+        const formatOpts = { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' };
+        return `${start.toLocaleDateString(undefined, formatOpts)} – ${end.toLocaleDateString(undefined, formatOpts)}`;
+    } catch (e) {
+        return '';
+    }
+}
+
 function renderWantedItems(tree) {
     const container = document.getElementById('wanted-items-list');
     if (!container) return;
@@ -3133,7 +3145,7 @@ function renderWantedItems(tree) {
     if (!tree || tree.length === 0) {
         const emptyMsg = state.translations.gui?.wanted?.none || 'No wanted drops queued...';
         container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
-        updateOverallProgress([]); // Vynuluje progress, když je prázdno
+        updateOverallProgress([]);
         return;
     }
 
@@ -3153,6 +3165,16 @@ function renderWantedItems(tree) {
         }
         headerChildren.push(makeElement('span', { class: 'wanted-game-title' }, gameGroup.game_name));
 
+        if (gameGroup.total_remaining_minutes) {
+            const hours = Math.floor(gameGroup.total_remaining_minutes / 60);
+            const mins = gameGroup.total_remaining_minutes % 60;
+            const timeText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+            
+            const badgeEl = makeElement('span', { class: 'wanted-game-time-badge' });
+            badgeEl.innerHTML = `${getStatusIconSVG('active')} ${timeText}`;
+            headerChildren.push(badgeEl);
+        }
+
         const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', el => {
             headerChildren.forEach(child => el.appendChild(child));
         });
@@ -3162,24 +3184,79 @@ function renderWantedItems(tree) {
         campaignListEl.className = 'wanted-campaign-list';
 
         gameGroup.campaigns.forEach(campaign => {
-            const dropContainer = makeElement('div', {});
             const cardEl = makeElement('div', { class: 'wanted-card' }, '', el => {
-                el.appendChild(makeElement('div', { class: 'wanted-card-header' }, '', h =>
-                    h.appendChild(makeElement('a', { href: campaign.url, target: '_blank', rel: 'noopener noreferrer', class: 'wanted-card-campaign-link', title: campaign.name }, campaign.name))
-                ));
+                // Hlavička kampaně
+                el.appendChild(makeElement('div', { class: 'wanted-card-header' }, '', h => {
+                    const titleRow = makeElement('div', { class: 'wanted-card-header-main' }, '', row => {
+                        row.appendChild(makeElement('a', { 
+                            href: campaign.url, 
+                            target: '_blank', 
+                            rel: 'noopener noreferrer', 
+                            class: 'wanted-card-campaign-link', 
+                            title: campaign.name 
+                        }, campaign.name));
+
+                        const claimedCount = campaign.claimed_drops_count ?? campaign.drops.filter(d => d.is_claimed).length;
+                        const totalCount = campaign.total_drops_count ?? campaign.drops.length;
+                        row.appendChild(makeElement('span', { class: 'wanted-campaign-badge' }, `(${claimedCount}/${totalCount})`));
+                    });
+                    h.appendChild(titleRow);
+
+                    // Datumy kampaně
+                    const dateText = formatCampaignDates(campaign.starts_at, campaign.ends_at);
+                    if (dateText) {
+                        const datesEl = makeElement('div', { class: 'wanted-campaign-dates' });
+                        datesEl.innerHTML = `${getStatusIconSVG('upcoming')} ${dateText}`;
+                        h.appendChild(datesEl);
+                    }
+                }));
+
+                const dropContainer = makeElement('div', { class: 'wanted-drops-container' });
+
+                campaign.drops.forEach(drop => {
+                    const dropEl = makeElement('div', { 
+                        class: `wanted-drop-item ${drop.is_claimed ? 'is-claimed' : ''}` 
+                    }, '', el => {
+                        
+                        // 1. Název dropu + Benefits
+                        const infoEl = makeElement('div', { class: 'wanted-drop-info' }, '', info => {
+                            info.appendChild(makeElement('span', { class: 'wanted-drop-name' }, drop.name));
+                            (drop.benefits || []).forEach(benefit => {
+                                info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
+                            });
+                        });
+                        el.appendChild(infoEl);
+
+                        // 2. Použití SVG ikon pro stavové štítky
+                        const statusEl = makeElement('div', { class: 'wanted-drop-status' });
+                        if (drop.is_claimed) {
+                            statusEl.innerHTML = `<span class="status-tag tag-claimed">${getStatusIconSVG('drop-claimed')} Claimed</span>`;
+                        } else if (drop.can_claim) {
+                            statusEl.innerHTML = `<span class="status-tag tag-ready">${getStatusIconSVG('drop-ready')} Ready to claim!</span>`;
+                        } else if (drop.required_minutes) {
+                            const current = drop.current_minutes || 0;
+                            statusEl.innerHTML = `<span class="status-tag tag-progress">${getStatusIconSVG('drop-active')} ${current} / ${drop.required_minutes} min</span>`;
+                        }
+                        el.appendChild(statusEl);
+
+                        // 3. Progress bar
+                        if (!drop.is_claimed && drop.progress !== undefined) {
+                            const progressPct = Math.min(100, Math.max(0, drop.progress));
+                            el.appendChild(makeElement('div', { class: 'wanted-drop-progressbar' }, '', pb => {
+                                pb.appendChild(makeElement('div', { 
+                                    class: 'wanted-drop-progressfill', 
+                                    style: `width: ${progressPct}%` 
+                                }));
+                            }));
+                        }
+                    });
+
+                    dropContainer.appendChild(dropEl);
+                });
+
                 el.appendChild(makeElement('div', { class: 'wanted-card-body' }, '', b =>
                     b.appendChild(dropContainer)
                 ));
-            });
-
-            campaign.drops.forEach(drop => {
-                const dropEl = makeElement('div', { class: 'wanted-drop-item' }, '', el => {
-                    el.appendChild(makeElement('span', { class: 'wanted-drop-name' }, drop.name));
-                    drop.benefits.forEach(benefit => {
-                        el.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
-                    });
-                });
-                dropContainer.appendChild(dropEl);
             });
 
             campaignListEl.appendChild(cardEl);
@@ -3189,7 +3266,6 @@ function renderWantedItems(tree) {
         container.appendChild(groupEl);
     });
 
-    // Spočítáme progress přímo z aktuálního stromu fronty!
     updateOverallProgress(tree);
 }
 

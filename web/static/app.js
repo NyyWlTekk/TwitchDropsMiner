@@ -1179,44 +1179,38 @@ function updateCampaignProgressData(data, liveCurrentMins) {
 }
 
 /**
- * Overall queue progress calculator with state caching to prevent blinking to zero
+ * Overall queue progress calculator reading directly from the global state
  */
-function updateOverallProgress(tree) {
+function updateOverallProgress() {
     try {
         const overallFill = document.getElementById('overall-progress-fill');
         const overallText = document.getElementById('overall-progress-text');
 
         if (!overallFill || !overallText) return;
 
-        // Získání stromu s ochranou proti vyprázdnění (fallback na cache)
-        let queueTree = Array.isArray(tree) && tree.length > 0 ? tree : null;
-        if (!queueTree && state.wantedItemsTree && Array.isArray(state.wantedItemsTree) && state.wantedItemsTree.length > 0) {
-            queueTree = state.wantedItemsTree;
-        }
-        if (!queueTree && window._lastValidWantedTree && window._lastValidWantedTree.length > 0) {
-            queueTree = window._lastValidWantedTree;
-        }
+        // Retrieve queue tree directly from global state with fallback cache
+        const queueTree = state.wantedItemsTree || window._lastValidWantedTree || [];
 
-        // Pokud máme platná data, uložíme je do cache
-        if (queueTree && queueTree.length > 0) {
-            window._lastValidWantedTree = queueTree;
-        } else {
-            // Pokud nemáme data ani v cache, tak teprve tehdy zobrazíme nulu
-            if (!window._lastValidWantedTree || window._lastValidWantedTree.length === 0) {
-                overallFill.style.width = '0%';
-                overallFill.textContent = '';
-                overallText.textContent = '0% (0 / 0 min)';
-                let overallTimeEl = document.getElementById('overall-progress-time');
-                if (overallTimeEl) overallTimeEl.textContent = 'Total remaining time: 0m';
+        if (!queueTree || queueTree.length === 0) {
+            overallFill.style.width = '0%';
+            overallFill.textContent = '';
+            overallText.textContent = '0% (0 / 0 min)';
+            
+            const overallTimeEl = document.getElementById('overall-progress-time');
+            if (overallTimeEl) {
+                overallTimeEl.textContent = 'Total remaining time: 0m';
             }
             return;
         }
+
+        // Cache valid data globally to prevent any flashing to zero
+        window._lastValidWantedTree = queueTree;
 
         let totalCurrent = 0;
         let totalRequired = 0;
         let totalRemainingSecs = 0;
 
-        // Projdeme jednotlivé skupiny her
+        // Process game groups from the global tree
         queueTree.forEach(gameGroup => {
             if (!gameGroup || !gameGroup.campaigns || !Array.isArray(gameGroup.campaigns)) return;
 
@@ -1224,7 +1218,7 @@ function updateOverallProgress(tree) {
             let maxCampaignCur = 0;
             let maxCampaignRemainingSecs = 0;
 
-            // Pro každou hru vybereme nejdelší kampaň
+            // Find the longest campaign per game group
             gameGroup.campaigns.forEach(campaign => {
                 if (!campaign || !campaign.drops || !Array.isArray(campaign.drops)) return;
 
@@ -1235,8 +1229,8 @@ function updateOverallProgress(tree) {
                 campaign.drops.forEach(drop => {
                     if (!drop) return;
 
-                    const req = Number(drop.required_minutes || drop.requiredMinutes || drop.duration || drop.total_minutes || 0);
-                    let cur = Number(drop.current_minutes || drop.currentMinutes || drop.progress_minutes || 0);
+                    const req = Number(drop.required_minutes || drop.requiredMinutes || drop.duration || 0);
+                    let cur = Number(drop.current_minutes || drop.currentMinutes || 0);
                     const isClaimed = Boolean(drop.is_claimed || drop.claimed || drop.isClaimed);
 
                     if (isClaimed) {
@@ -1251,7 +1245,6 @@ function updateOverallProgress(tree) {
                     campRemainingSecs += dropRemaining * 60;
                 });
 
-                // Hledáme kampaň s největším požadavkem na minuty pro danou hru
                 if (campReq > maxCampaignReq) {
                     maxCampaignReq = campReq;
                     maxCampaignCur = campCur;
@@ -1264,7 +1257,7 @@ function updateOverallProgress(tree) {
             totalRemainingSecs += maxCampaignRemainingSecs;
         });
 
-        // Aktualizace UI progress baru
+        // Update UI progress bar
         if (totalRequired > 0) {
             const percentage = Math.min(100, Math.round((totalCurrent / totalRequired) * 100));
             overallFill.style.width = `${percentage}%`;
@@ -1276,7 +1269,7 @@ function updateOverallProgress(tree) {
             overallText.textContent = '0% (0 / 0 min)';
         }
 
-        // Aktualizace UI štítku zbývajícího času
+        // Update UI remaining time label
         let overallTimeEl = document.getElementById('overall-progress-time');
         if (!overallTimeEl) {
             const parent = overallText.parentElement;
@@ -3239,10 +3232,13 @@ function renderWantedItems(tree) {
 
     container.innerHTML = '';
 
+    // Uložíme aktuální strom do globálního stavu
+    state.wantedItemsTree = tree || [];
+
     if (!tree || tree.length === 0) {
         const emptyMsg = state.translations.gui?.wanted?.none || 'No wanted drops queued...';
         container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
-        updateOverallProgress([]);
+        updateOverallProgress(); // Volání bez argumentu
         return;
     }
 
@@ -3363,7 +3359,8 @@ function renderWantedItems(tree) {
         container.appendChild(groupEl);
     });
 
-    updateOverallProgress(tree);
+    // Spuštění výpočtu celkového progressu ze synchronizovaného globálního stavu
+    updateOverallProgress();
 }
 
 // ==================== DOM Utilities ====================

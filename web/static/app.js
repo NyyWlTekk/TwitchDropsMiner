@@ -1179,139 +1179,96 @@ function updateCampaignProgressData(data, liveCurrentMins) {
 }
 
 /**
- * Fully safe overall queue progress calculator across all items in active queue
+ * Overall queue progress calculator with state caching to prevent blinking to zero
  */
-function updateOverallProgress() {
+function updateOverallProgress(tree) {
     try {
         const overallFill = document.getElementById('overall-progress-fill');
         const overallText = document.getElementById('overall-progress-text');
 
         if (!overallFill || !overallText) return;
 
-        // Ensure rawQueue is always an array
-        const rawQueueData = state.activeCampaignsQueue || [];
-        const rawQueue = Array.isArray(rawQueueData) 
-            ? rawQueueData 
-            : Object.values(rawQueueData);
+        // Získání stromu s ochranou proti vyprázdnění (fallback na cache)
+        let queueTree = Array.isArray(tree) && tree.length > 0 ? tree : null;
+        if (!queueTree && state.wantedItemsTree && Array.isArray(state.wantedItemsTree) && state.wantedItemsTree.length > 0) {
+            queueTree = state.wantedItemsTree;
+        }
+        if (!queueTree && window._lastValidWantedTree && window._lastValidWantedTree.length > 0) {
+            queueTree = window._lastValidWantedTree;
+        }
+
+        // Pokud máme platná data, uložíme je do cache
+        if (queueTree && queueTree.length > 0) {
+            window._lastValidWantedTree = queueTree;
+        } else {
+            // Pokud nemáme data ani v cache, tak teprve tehdy zobrazíme nulu
+            if (!window._lastValidWantedTree || window._lastValidWantedTree.length === 0) {
+                overallFill.style.width = '0%';
+                overallFill.textContent = '';
+                overallText.textContent = '0% (0 / 0 min)';
+                let overallTimeEl = document.getElementById('overall-progress-time');
+                if (overallTimeEl) overallTimeEl.textContent = 'Total remaining time: 0m';
+            }
+            return;
+        }
 
         let totalCurrent = 0;
         let totalRequired = 0;
         let totalRemainingSecs = 0;
 
-        // Helper function for reliable claim checking
-        const isClaimedSafe = (item) => {
-            if (!item) return true;
-            if (item.claimed || item.is_claimed || item.isClaimed) return true;
-            try {
-                if (typeof isItemClaimed === 'function') {
-                    return isItemClaimed(item);
-                }
-            } catch (e) {}
-            return false;
-        };
+        // Projdeme jednotlivé skupiny her
+        queueTree.forEach(gameGroup => {
+            if (!gameGroup || !gameGroup.campaigns || !Array.isArray(gameGroup.campaigns)) return;
 
-        rawQueue.forEach(queueItem => {
-            try {
-                if (!queueItem) return;
+            let maxCampaignReq = 0;
+            let maxCampaignCur = 0;
+            let maxCampaignRemainingSecs = 0;
 
-                // We DO NOT skip claimed items anymore. We need them to keep the total required minutes accurate.
-                const itemClaimed = isClaimedSafe(queueItem);
+            // Pro každou hru vybereme nejdelší kampaň
+            gameGroup.campaigns.forEach(campaign => {
+                if (!campaign || !campaign.drops || !Array.isArray(campaign.drops)) return;
 
-                let drops = [];
-                try {
-                    if (typeof getCampaignAndDrops === 'function') {
-                        const res = getCampaignAndDrops(queueItem);
-                        if (res) {
-                            if (Array.isArray(res.drops)) drops = res.drops;
-                            else if (res.drops && typeof res.drops === 'object') drops = Object.values(res.drops);
-                            else if (Array.isArray(res)) drops = res;
-                        }
+                let campReq = 0;
+                let campCur = 0;
+                let campRemainingSecs = 0;
+
+                campaign.drops.forEach(drop => {
+                    if (!drop) return;
+
+                    const req = Number(drop.required_minutes || drop.requiredMinutes || drop.duration || drop.total_minutes || 0);
+                    let cur = Number(drop.current_minutes || drop.currentMinutes || drop.progress_minutes || 0);
+                    const isClaimed = Boolean(drop.is_claimed || drop.claimed || drop.isClaimed);
+
+                    if (isClaimed) {
+                        cur = req;
                     }
-                } catch (e) {}
+                    if (cur > req) cur = req;
 
-                if (drops.length === 0 && queueItem.drops) {
-                    drops = Array.isArray(queueItem.drops) ? queueItem.drops : Object.values(queueItem.drops);
+                    campReq += req;
+                    campCur += cur;
+
+                    const dropRemaining = isClaimed ? 0 : Math.max(0, req - cur);
+                    campRemainingSecs += dropRemaining * 60;
+                });
+
+                // Hledáme kampaň s největším požadavkem na minuty pro danou hru
+                if (campReq > maxCampaignReq) {
+                    maxCampaignReq = campReq;
+                    maxCampaignCur = campCur;
+                    maxCampaignRemainingSecs = campRemainingSecs;
                 }
+            });
 
-                if (drops.length === 0 && queueItem.campaign && queueItem.campaign.drops) {
-                    drops = Array.isArray(queueItem.campaign.drops) ? queueItem.campaign.drops : Object.values(queueItem.campaign.drops);
-                }
-
-                if (drops.length === 0) {
-                    let cur = Number(queueItem.current_minutes || queueItem.currentMinutes || 0);
-                    const req = Number(queueItem.required_minutes || queueItem.requiredMinutes || queueItem.duration || 0);
-
-                    if (state.currentDrop && (
-                        queueItem.id === state.currentDrop.drop_id || 
-                        queueItem.drop_id === state.currentDrop.drop_id || 
-                        queueItem.id === state.currentDrop.id
-                    )) {
-                        cur = Number(state.currentDrop.current_minutes || state.currentDrop.currentMinutes) || cur;
-                    }
-
-                    if (itemClaimed) cur = req; // If claimed, force 100% progress
-                    if (cur > req) cur = req; // Prevent overflow
-
-                    totalCurrent += cur;
-                    totalRequired += req;
-                    totalRemainingSecs += itemClaimed ? 0 : Math.max(0, req - cur) * 60;
-                } else {
-                    let campReq = 0;
-                    let campCur = 0;
-                    let hasUnclaimed = false;
-
-                    drops.forEach(d => {
-                        try {
-                            if (!d) return;
-
-                            let cur = Number(d.current_minutes || d.currentMinutes || 0);
-                            const req = Number(d.required_minutes || d.requiredMinutes || d.duration || 0);
-                            const dClaimed = isClaimedSafe(d);
-
-                            if (state.currentDrop && (
-                                d.id === state.currentDrop.drop_id || 
-                                d.drop_id === state.currentDrop.drop_id || 
-                                d.id === state.currentDrop.id
-                            )) {
-                                cur = Number(state.currentDrop.current_minutes || state.currentDrop.currentMinutes) || cur;
-                            }
-
-                            if (dClaimed) cur = req;
-                            if (cur > req) cur = req;
-
-                            if (req > campReq) campReq = req;
-                            if (cur > campCur) campCur = cur;
-                            
-                            if (!dClaimed) hasUnclaimed = true;
-
-                        } catch (innerE) {
-                            console.error('Error processing drop item:', innerE);
-                        }
-                    });
-
-                    // If the parent item is claimed, assume full completion
-                    if (itemClaimed) {
-                        campCur = campReq;
-                        hasUnclaimed = false;
-                    }
-
-                    totalCurrent += campCur;
-                    totalRequired += campReq;
-                    totalRemainingSecs += hasUnclaimed ? Math.max(0, campReq - campCur) * 60 : 0;
-                }
-            } catch (itemErr) {
-                console.error('Error processing queue item:', itemErr);
-            }
+            totalRequired += maxCampaignReq;
+            totalCurrent += maxCampaignCur;
+            totalRemainingSecs += maxCampaignRemainingSecs;
         });
 
-        // Update UI Progress Bar
+        // Aktualizace UI progress baru
         if (totalRequired > 0) {
             const percentage = Math.min(100, Math.round((totalCurrent / totalRequired) * 100));
             overallFill.style.width = `${percentage}%`;
-            
-            // Put percentage directly into the fill bar if it's wide enough to fit
             overallFill.textContent = percentage > 5 ? `${percentage}%` : ''; 
-            
             overallText.textContent = `${percentage}% (${totalCurrent} / ${totalRequired} min)`;
         } else {
             overallFill.style.width = '0%';
@@ -1319,7 +1276,7 @@ function updateOverallProgress() {
             overallText.textContent = '0% (0 / 0 min)';
         }
 
-        // Update UI Time Label
+        // Aktualizace UI štítku zbývajícího času
         let overallTimeEl = document.getElementById('overall-progress-time');
         if (!overallTimeEl) {
             const parent = overallText.parentElement;

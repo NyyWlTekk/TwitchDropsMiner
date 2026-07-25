@@ -767,18 +767,44 @@ function renderAllProgressBars(currentMins, dropData, elapsedSecsOverride = null
 }
 
 /**
- * Render single drop UI component
- */
-/**
  * Render single drop UI component with memory caching for zero-stutter rotation
  */
 function updateSingleDropDisplay(data) {
     if (!data) return;
     
+    // Helper for claim checking
+    const isClaimedSafe = (item) => {
+        if (!item) return true;
+        if (item.claimed || item.is_claimed || item.isClaimed) return true;
+        try {
+            if (typeof isItemClaimed === 'function') {
+                return isItemClaimed(item);
+            }
+        } catch (e) {}
+        return false;
+    };
+
+    const reqMins = Number(data.required_minutes || 1);
+    const curMins = Number(data.current_minutes || 0);
+
+    // Automatically remove/skip completed or claimed drops immediately without requiring a page refresh
+    if (isClaimedSafe(data) || curMins >= reqMins) {
+        if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
+            const dropIdToClean = data.drop_id || data.id;
+            state.activeDropsQueue = state.activeDropsQueue.filter(d => (d.drop_id || d.id) !== dropIdToClean);
+        }
+        if (typeof startCombinedRotation === 'function') {
+            startCombinedRotation(true);
+        }
+        return;
+    }
+
     state.currentDrop = data;
 
-    const currentSecs = (data.current_minutes || 0) * 60;
-    dropTotalSeconds = currentSecs + (data.remaining_seconds || 0);
+    const currentSecs = curMins * 60;
+    // Strictly calculate remaining seconds based on current and required minutes to prevent desyncs (e.g. 3h 11m bug)
+    const remSecs = Math.max(0, (reqMins - curMins) * 60);
+    dropTotalSeconds = currentSecs + remSecs;
 
     const noDropMessage = document.getElementById('no-drop-message');
     const dropInfo = document.getElementById('drop-info');
@@ -800,9 +826,9 @@ function updateSingleDropDisplay(data) {
     if (dropNameEl) {
         const rawQueue = state.activeCampaignsQueue || [];
         const validCampaigns = rawQueue.filter(c => {
-            if (isItemClaimed(c)) return false;
+            if (isClaimedSafe(c)) return false;
             const { drops } = getCampaignAndDrops(c);
-            return drops.length === 0 || drops.some(d => !isItemClaimed(d));
+            return drops.length === 0 || drops.some(d => !isClaimedSafe(d));
         });
         
         const queueLength = validCampaigns.length > 0 ? validCampaigns.length : 1;
@@ -944,20 +970,47 @@ function updateSingleDropDisplay(data) {
         }
     }
 
-    renderAllProgressBars(data.current_minutes || 0, data);
-
-    const remSecs = data.remaining_seconds !== undefined 
-        ? data.remaining_seconds 
-        : Math.max(0, ((data.required_minutes || 1) - (data.current_minutes || 0)) * 60);
-
+    renderAllProgressBars(curMins, data);
     updateRemainingTime(remSecs);
 }
 
 /**
- * Switch campaign display and prepare drops queue
+ * Switch campaign display and prepare drops queue with automatic cleanup of claimed items
  */
 function switchCampaignDisplay(data, isManualSwitch = true) {
     if (!data) return;
+
+    // Automatically clean up claimed campaigns from the active queue so they disappear without a full refresh
+    if (state.activeCampaignsQueue && Array.isArray(state.activeCampaignsQueue)) {
+        state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => {
+            if (typeof isItemClaimed === 'function' && isItemClaimed(c)) return false;
+            if (c.claimed || c.is_claimed || c.isClaimed) return false;
+            
+            let cDrops = [];
+            try {
+                if (typeof getCampaignAndDrops === 'function') {
+                    const res = getCampaignAndDrops(c);
+                    if (res) {
+                        if (Array.isArray(res.drops)) cDrops = res.drops;
+                        else if (res.drops && typeof res.drops === 'object') cDrops = Object.values(res.drops);
+                        else if (Array.isArray(res)) cDrops = res;
+                    }
+                }
+            } catch (e) {}
+            
+            if (cDrops.length === 0 && c.drops) {
+                cDrops = Array.isArray(c.drops) ? c.drops : Object.values(c.drops);
+            }
+            
+            if (cDrops.length === 0) return true;
+            return cDrops.some(d => {
+                if (!d) return false;
+                if (d.claimed || d.is_claimed || d.isClaimed) return false;
+                if (typeof isItemClaimed === 'function' && isItemClaimed(d)) return false;
+                return true;
+            });
+        });
+    }
 
     const previousDropId = state.currentDrop ? (state.currentDrop.drop_id || state.currentDrop.id) : null;
 
@@ -1009,7 +1062,9 @@ function switchCampaignDisplay(data, isManualSwitch = true) {
             if (idx !== -1) {
                 state.dropRotationIndex = idx;
             }
-            startCombinedRotation(true);
+            if (typeof startCombinedRotation === 'function') {
+                startCombinedRotation(true);
+            }
         }
     } else {
         state.activeDropsQueue = [data];
@@ -1028,7 +1083,9 @@ function switchCampaignDisplay(data, isManualSwitch = true) {
     const newDropId = initialActiveDrop ? (initialActiveDrop.drop_id || initialActiveDrop.id) : null;
     const dropChanged = !previousDropId || !newDropId || previousDropId !== newDropId;
 
-    updateSingleDropDisplay(initialActiveDrop, dropChanged);
+    if (typeof updateSingleDropDisplay === 'function') {
+        updateSingleDropDisplay(initialActiveDrop, dropChanged);
+    }
 }
 
 /**
@@ -1122,7 +1179,7 @@ function updateCampaignProgressData(data, liveCurrentMins) {
 }
 
 /**
- * Update overall queue progress bar strictly from the active campaigns queue
+ * Fully safe overall queue progress calculator across all items in active queue
  */
 function updateOverallProgress() {
     try {
@@ -1131,58 +1188,138 @@ function updateOverallProgress() {
 
         if (!overallFill || !overallText) return;
 
-        const rawQueue = state.activeCampaignsQueue || [];
+        // Ensure rawQueue is always an array
+        const rawQueueData = state.activeCampaignsQueue || [];
+        const rawQueue = Array.isArray(rawQueueData) 
+            ? rawQueueData 
+            : Object.values(rawQueueData);
+
         let totalCurrent = 0;
         let totalRequired = 0;
         let totalRemainingSecs = 0;
 
-        rawQueue.forEach(queueItem => {
-            if (isItemClaimed(queueItem)) return;
+        // Helper function for reliable claim checking
+        const isClaimedSafe = (item) => {
+            if (!item) return true;
+            if (item.claimed || item.is_claimed || item.isClaimed) return true;
+            try {
+                if (typeof isItemClaimed === 'function') {
+                    return isItemClaimed(item);
+                }
+            } catch (e) {}
+            return false;
+        };
 
-            const { campaign, drops } = getCampaignAndDrops(queueItem);
-            
-            if (!campaign || drops.length === 0) {
-                let cur = Number(queueItem.current_minutes) || 0;
-                const req = Number(queueItem.required_minutes) || 0;
-                if (!isItemClaimed(queueItem)) {
+        rawQueue.forEach(queueItem => {
+            try {
+                if (!queueItem) return;
+
+                // We DO NOT skip claimed items anymore. We need them to keep the total required minutes accurate.
+                const itemClaimed = isClaimedSafe(queueItem);
+
+                let drops = [];
+                try {
+                    if (typeof getCampaignAndDrops === 'function') {
+                        const res = getCampaignAndDrops(queueItem);
+                        if (res) {
+                            if (Array.isArray(res.drops)) drops = res.drops;
+                            else if (res.drops && typeof res.drops === 'object') drops = Object.values(res.drops);
+                            else if (Array.isArray(res)) drops = res;
+                        }
+                    }
+                } catch (e) {}
+
+                if (drops.length === 0 && queueItem.drops) {
+                    drops = Array.isArray(queueItem.drops) ? queueItem.drops : Object.values(queueItem.drops);
+                }
+
+                if (drops.length === 0 && queueItem.campaign && queueItem.campaign.drops) {
+                    drops = Array.isArray(queueItem.campaign.drops) ? queueItem.campaign.drops : Object.values(queueItem.campaign.drops);
+                }
+
+                if (drops.length === 0) {
+                    let cur = Number(queueItem.current_minutes || queueItem.currentMinutes || 0);
+                    const req = Number(queueItem.required_minutes || queueItem.requiredMinutes || queueItem.duration || 0);
+
+                    if (state.currentDrop && (
+                        queueItem.id === state.currentDrop.drop_id || 
+                        queueItem.drop_id === state.currentDrop.drop_id || 
+                        queueItem.id === state.currentDrop.id
+                    )) {
+                        cur = Number(state.currentDrop.current_minutes || state.currentDrop.currentMinutes) || cur;
+                    }
+
+                    if (itemClaimed) cur = req; // If claimed, force 100% progress
+                    if (cur > req) cur = req; // Prevent overflow
+
                     totalCurrent += cur;
                     totalRequired += req;
-                    const remMins = Math.max(0, req - cur);
-                    totalRemainingSecs += remMins * 60;
+                    totalRemainingSecs += itemClaimed ? 0 : Math.max(0, req - cur) * 60;
+                } else {
+                    let campReq = 0;
+                    let campCur = 0;
+                    let hasUnclaimed = false;
+
+                    drops.forEach(d => {
+                        try {
+                            if (!d) return;
+
+                            let cur = Number(d.current_minutes || d.currentMinutes || 0);
+                            const req = Number(d.required_minutes || d.requiredMinutes || d.duration || 0);
+                            const dClaimed = isClaimedSafe(d);
+
+                            if (state.currentDrop && (
+                                d.id === state.currentDrop.drop_id || 
+                                d.drop_id === state.currentDrop.drop_id || 
+                                d.id === state.currentDrop.id
+                            )) {
+                                cur = Number(state.currentDrop.current_minutes || state.currentDrop.currentMinutes) || cur;
+                            }
+
+                            if (dClaimed) cur = req;
+                            if (cur > req) cur = req;
+
+                            if (req > campReq) campReq = req;
+                            if (cur > campCur) campCur = cur;
+                            
+                            if (!dClaimed) hasUnclaimed = true;
+
+                        } catch (innerE) {
+                            console.error('Error processing drop item:', innerE);
+                        }
+                    });
+
+                    // If the parent item is claimed, assume full completion
+                    if (itemClaimed) {
+                        campCur = campReq;
+                        hasUnclaimed = false;
+                    }
+
+                    totalCurrent += campCur;
+                    totalRequired += campReq;
+                    totalRemainingSecs += hasUnclaimed ? Math.max(0, campReq - campCur) * 60 : 0;
                 }
-                return;
+            } catch (itemErr) {
+                console.error('Error processing queue item:', itemErr);
             }
-
-            drops.forEach(d => {
-                if (isItemClaimed(d)) return;
-
-                let cur = Number(d.current_minutes) || 0;
-                const req = Number(d.required_minutes) || 0;
-
-                // Pokud jde o aktuálně běžecký drop, vezmeme živá data
-                if (state.currentDrop && (d.id === state.currentDrop.drop_id || d.drop_id === state.currentDrop.drop_id)) {
-                    cur = state.currentDrop.current_minutes || cur;
-                }
-
-                totalCurrent += cur;
-                totalRequired += req;
-
-                const remMins = Math.max(0, req - cur);
-                totalRemainingSecs += remMins * 60;
-            });
         });
 
+        // Update UI Progress Bar
         if (totalRequired > 0) {
             const percentage = Math.min(100, Math.round((totalCurrent / totalRequired) * 100));
             overallFill.style.width = `${percentage}%`;
-            overallFill.textContent = `${percentage}%`;
-            overallText.textContent = `${totalCurrent} / ${totalRequired} min`;
+            
+            // Put percentage directly into the fill bar if it's wide enough to fit
+            overallFill.textContent = percentage > 5 ? `${percentage}%` : ''; 
+            
+            overallText.textContent = `${percentage}% (${totalCurrent} / ${totalRequired} min)`;
         } else {
             overallFill.style.width = '0%';
-            overallFill.textContent = '0%';
-            overallText.textContent = '0 / 0 min';
+            overallFill.textContent = '';
+            overallText.textContent = '0% (0 / 0 min)';
         }
 
+        // Update UI Time Label
         let overallTimeEl = document.getElementById('overall-progress-time');
         if (!overallTimeEl) {
             const parent = overallText.parentElement;
@@ -1196,7 +1333,10 @@ function updateOverallProgress() {
             }
         }
         if (overallTimeEl) {
-            overallTimeEl.textContent = `Total remaining time: ${formatTime(totalRemainingSecs)}`;
+            const formattedTime = typeof formatTime === 'function' 
+                ? formatTime(totalRemainingSecs) 
+                : `${Math.ceil(totalRemainingSecs / 60)}m`;
+            overallTimeEl.textContent = `Total remaining time: ${formattedTime}`;
         }
 
     } catch (e) {

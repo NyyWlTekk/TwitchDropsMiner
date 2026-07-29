@@ -65,7 +65,10 @@ function renderWantedItems(tree) {
  */
 function createGameGroupElement(gameGroup, index) {
     console.group(`[CREATE_GAME_GROUP] Index: ${index}, Game: "${gameGroup.game_name}"`);
-    const groupEl = makeElement('div', { class: 'wanted-game-group' });
+    const groupEl = makeElement('div', { 
+        class: 'wanted-game-group',
+        'data-game-name': gameGroup.game_name 
+    });
 
     let iconUrl = gameGroup.game_icon;
     if (iconUrl) {
@@ -79,13 +82,16 @@ function createGameGroupElement(gameGroup, index) {
     }
     headerChildren.push(makeElement('span', { class: 'wanted-game-title' }, gameGroup.game_name));
 
-    if (gameGroup.total_remaining_minutes) {
+    if (gameGroup.total_remaining_minutes !== undefined) {
         const hours = Math.floor(gameGroup.total_remaining_minutes / 60);
         const mins = gameGroup.total_remaining_minutes % 60;
         const timeText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
         console.log(`[CREATE_GAME_GROUP] Group time remaining badge text: ${timeText}`);
 
-        const badgeEl = makeElement('span', { class: 'wanted-game-time-badge' });
+        const badgeEl = makeElement('span', { 
+            class: 'wanted-game-time-badge',
+            'data-game-badge': gameGroup.game_name 
+        });
         badgeEl.innerHTML = `${getStatusIconSVG('active')} ${timeText}`;
         headerChildren.push(badgeEl);
     }
@@ -109,7 +115,7 @@ function createGameGroupElement(gameGroup, index) {
 }
 
 /**
- * Creates a single campaign card element with its drop items.
+ * [INFO] Creates a single campaign card element with its drop items.
  */
 function createCampaignCardElement(campaign) {
     const campaignId = campaign.campaign_id || campaign.id || '';
@@ -130,9 +136,23 @@ function createCampaignCardElement(campaign) {
                 }, campaign.name || 'Campaign'));
 
                 const drops = campaign.drops || [];
-                const claimedCount = campaign.claimed_drops_count ?? drops.filter(d => d.is_claimed).length;
-                const totalCount = campaign.total_drops_count ?? drops.length;
-                console.log(`[CREATE_CAMPAIGN_CARD] Drop counts - claimed: ${claimedCount}, total: ${totalCount}`);
+                const totalCount = campaign.total_drops_count || drops.length;
+                
+                // Dropy, které už backend neposílá v poli drops (protože jsou hotové/claimed), 
+                // spočítáme jako rozdíl celkového počtu a toho, co zbývá v poli.
+                const completedOutsideArray = Math.max(0, totalCount - drops.length);
+                
+                // Plus zkontrolujeme, jestli v aktuálním poli drops není ještě nějaký dokončený/claimnutý
+                const finishedInArray = drops.filter(d => {
+                    const isClaimed = d.is_claimed === true || d.is_claimed === 1 || d.is_claimed === 'true' || d.is_claimed === '1';
+                    const canClaim = d.can_claim === true || d.can_claim === 1;
+                    const current = Math.round(d.current_minutes || 0);
+                    const required = d.required_minutes || 0;
+                    return isClaimed || canClaim || (required > 0 && current >= required);
+                }).length;
+                
+                const claimedCount = completedOutsideArray + finishedInArray;
+                console.log(`[CREATE_CAMPAIGN_CARD] Drop counts - finished/claimed: ${claimedCount}, total: ${totalCount}`);
                 
                 row.appendChild(makeElement('span', { class: 'wanted-campaign-badge' }, `(${claimedCount}/${totalCount})`));
             });
@@ -177,9 +197,6 @@ function getDropUniqueId(drop, index = 1) {
     return dropId;
 }
 
-/**
- * [INFO] Creates an individual drop item element.
- */
 function createDropItemElement(drop, index = 1) {
     const dropId = getDropUniqueId(drop, index);
     console.group(`[CREATE_DROP_ITEM] Index: ${index}, Drop ID: "${dropId}", Name: "${drop.name}"`);
@@ -192,9 +209,19 @@ function createDropItemElement(drop, index = 1) {
             const displayName = index ? `Drop ${index}: ${drop.name}` : drop.name;
             info.appendChild(makeElement('span', { class: 'wanted-drop-name' }, displayName));
             
-            (drop.benefits || []).forEach(benefit => {
-                info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
-            });
+            const rawName = (drop.name || '').toLowerCase();
+			// Normalizace názvu – oříznutí úvodních čísel a symbolů (např. "1. ")
+			const normalizedDropName = rawName.replace(/^\d+[\.\)]?\s*/, '').trim();
+
+			(drop.benefits || []).forEach(benefit => {
+				if (benefit) {
+					const cleanBenefit = benefit.trim().toLowerCase();
+					// Přeskočí benefit, pokud se shoduje nebo je obsažen v normalizovaném názvu
+					if (cleanBenefit && !normalizedDropName.includes(cleanBenefit) && cleanBenefit !== normalizedDropName) {
+						info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
+					}
+				}
+			});
         });
         el.appendChild(infoEl);
 
@@ -259,6 +286,8 @@ function syncWantedItemsProgress(arg1, arg2, arg3) {
     state.wantedItemsTree.forEach((gameGroup) => {
         if (!gameGroup.campaigns || !Array.isArray(gameGroup.campaigns)) return;
 
+        let groupHasChanges = false;
+
         gameGroup.campaigns.forEach((campaign) => {
             const campaignId = campaign.campaign_id || campaign.id;
             const isCampaignMatch = (data.campaign_id && campaignId === data.campaign_id) || 
@@ -291,8 +320,32 @@ function syncWantedItemsProgress(arg1, arg2, arg3) {
             });
 
             campaign.claimed_drops_count = campaign.drops.filter(d => d.is_claimed).length;
+            groupHasChanges = true;
             treeUpdated = true;
         });
+
+        // Pokud se v této skupině něco aktualizovalo, přepočítáme celkový zbývající čas a aktualizujeme DOM v hlavičce
+        if (groupHasChanges) {
+            let groupRemainingMins = 0;
+            gameGroup.campaigns.forEach(c => {
+                (c.drops || []).forEach(d => {
+                    if (!d.is_claimed) {
+                        const req = Number(d.required_minutes) || 0;
+                        const cur = Number(d.current_minutes) || 0;
+                        groupRemainingMins += Math.max(0, req - cur);
+                    }
+                });
+            });
+            gameGroup.total_remaining_minutes = groupRemainingMins;
+
+            const badgeEl = document.querySelector(`.wanted-game-group[data-game-name="${CSS.escape(gameGroup.game_name)}"] .wanted-game-time-badge`);
+            if (badgeEl) {
+                const hours = Math.floor(groupRemainingMins / 60);
+                const mins = groupRemainingMins % 60;
+                const timeText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+                badgeEl.innerHTML = `${getStatusIconSVG('active')} ${timeText}`;
+            }
+        }
     });
 
     console.log(`[SYNC_WANTED_PROGRESS] Synchronization complete. Tree updated flag: ${treeUpdated}`);

@@ -540,21 +540,31 @@ def get_filtered_inventory(client: Twitch) -> list[DropsCampaign]:
 
 
 def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
-    if getattr(client.settings, "auto_add_all_games", False) and client.inventory:
-        added_count = 0
-        for c in filtered_inventory:
-            c_game = getattr(c, "game", "")
-            c_game_name = c_game.name if hasattr(c_game, "name") else str(c_game)
+    if not getattr(client.settings, "auto_add_all_games", False) or not client.inventory:
+        return
 
-            if c_game_name and c_game_name not in client.settings.games_to_watch:
-                client.settings.games_to_watch.append(c_game_name)
-                added_count += 1
+    if not isinstance(client.settings.games_to_watch, list):
+        client.settings.games_to_watch = []
 
-        if added_count > 0:
-            logger.info("Automatically added %d new game(s) to watch list.", added_count)
-            client.settings.save()
-            if hasattr(client, "socketio"):
-                client.socketio.emit("settings_updated", client.settings.__dict__)
+    # Create a normalized set of current watched games for O(1) lookup
+    existing_games = {g.strip().lower() for g in client.settings.games_to_watch}
+    newly_added = []
+
+    for c in filtered_inventory:
+        c_game = getattr(c, "game", "")
+        c_game_name = c_game.name if hasattr(c_game, "name") else str(c_game)
+        c_game_name = c_game_name.strip()
+
+        if c_game_name and c_game_name.lower() not in existing_games:
+            client.settings.games_to_watch.append(c_game_name)
+            existing_games.add(c_game_name.lower())
+            newly_added.append(c_game_name)
+
+    if newly_added:
+        logger.info("Automatically added new games to watch list: %s", ", ".join(newly_added))
+        client.settings.save()
+        if hasattr(client, "socketio"):
+            client.socketio.emit("settings_updated", client.settings.__dict__)
 
 
 def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:

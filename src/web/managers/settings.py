@@ -174,13 +174,13 @@ def check_and_update_setting(
 
     setattr(manager._settings, key, new_value)
 
-    # 1. Logování počtu sledovaných her
+    # 1. Logování nově přidaných her
     if key == "games_to_watch" and isinstance(new_value, list):
-        current_count = len(new_value)
-        if manager._last_logged_games_count != current_count:
-            manager._log_change(f"Setting changed: games_to_watch = {current_count} games")
-            manager._last_logged_games_count = current_count
-
+        old_list = old_value if isinstance(old_value, list) else []
+        added_games = [g for g in new_value if g not in old_list]
+        if added_games:
+            manager._log_change(f"Games added: {', '.join(added_games)}")
+            manager._last_logged_games_count = len(new_value)
     # 2. Logování změn v filtrech inventáře
     elif key == "inventory_filters" and isinstance(old_value, dict) and isinstance(new_value, dict):
         changes = []

@@ -103,7 +103,7 @@ class InventoryService:
         status_update(_.t["gui"]["status"]["fetching_inventory"])
 
         # fetch in-progress campaigns (inventory)
-        response = await self._twitch.gql_request(GQL_OPERATIONS["Inventory"])        
+        response = await self._twitch.gql_request(GQL_OPERATIONS["Inventory"])
         inventory: JsonType = response["data"]["currentUser"]["inventory"]
         ongoing_campaigns: list[JsonType] = inventory["dropCampaignsInProgress"] or []
 

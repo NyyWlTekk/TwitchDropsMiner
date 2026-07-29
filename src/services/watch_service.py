@@ -51,30 +51,78 @@ class WatchService:
         self._twitch = twitch
 
     def can_watch(self, channel: Channel) -> bool:
+        """
+        Determines if a channel can be watched for earning drops.
+
+        Checks online status, drops status, game list matching, and specific
+        campaign requirements (ACL, account linking, completion state).
+        """
         if not self._twitch.wanted_games:
+            logger.debug("Cannot watch %s: No wanted games configured.", channel.name)
             return False
 
-        if not channel.online or not channel.drops_enabled:
+        if not channel.online:
+            logger.debug("Cannot watch %s: Channel is offline.", channel.name)
             return False
 
-        # Porovnávejme jména/ID, nikoli samotné objekty, pro zamezení bugům s typem
+        if not channel.drops_enabled:
+            logger.debug("Cannot watch %s: Drops are disabled on channel.", channel.name)
+            return False
+
+        # Compare names/IDs to prevent typing mismatched bugs
         game_names = [g.name if hasattr(g, 'name') else str(g) for g in self._twitch.wanted_games]
         channel_game_name = channel.game.name if hasattr(channel.game, 'name') else str(channel.game)
 
         if channel.game is None or channel_game_name not in game_names:
+            logger.debug(
+                "Cannot watch %s: Game '%s' is not in wanted games list.",
+                channel.name,
+                channel_game_name,
+            )
             return False
 
-        # Debug kontroly kampaní
         matching_campaigns = []
         for campaign in self._twitch.inventory:
             camp_game_name = campaign.game.name if hasattr(campaign.game, 'name') else str(campaign.game)
             if camp_game_name.lower() == channel_game_name.lower():
                 can = campaign.can_earn(channel)
-                logger.debug(f"Campaign '{campaign.name}' for {channel_game_name} can_earn: {can}")
+                
                 if can:
+                    logger.debug(
+                        "Campaign '%s' is eligible for channel %s.",
+                        campaign.name,
+                        channel.name,
+                    )
                     matching_campaigns.append(campaign)
+                else:
+                    # Build detailed explanation why can_earn returned False
+                    reasons = []
+                    
+                    if getattr(campaign, "progress", 0) >= 100:
+                        reasons.append("campaign 100% completed")
+                    if hasattr(campaign, "account_connected") and not campaign.account_connected:
+                        reasons.append("account not linked")
+                    if hasattr(campaign, "allowed_channels") and campaign.allowed_channels:
+                        if channel not in campaign.allowed_channels:
+                            reasons.append("channel not in ACL list")
 
-        return len(matching_campaigns) > 0
+                    reason_msg = ", ".join(reasons) if reasons else "can_earn condition failed"
+                    logger.debug(
+                        "Campaign '%s' rejected for %s (Reason: %s).",
+                        campaign.name,
+                        channel.name,
+                        reason_msg,
+                    )
+
+        if not matching_campaigns:
+            logger.info(
+                "Skipping channel %s for game '%s': No earnable campaigns active.",
+                channel.name,
+                channel_game_name,
+            )
+            return False
+
+        return True
     
     def should_switch(self, channel: Channel) -> bool:
         """

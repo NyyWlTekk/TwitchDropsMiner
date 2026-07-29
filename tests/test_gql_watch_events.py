@@ -1,7 +1,7 @@
 import base64
 import json
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from src.exceptions import RequestException
 from src.models.channel import Channel, Stream
@@ -65,6 +65,29 @@ class TestSpadeWatchEvents(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(properties["user_id"], int)
         self.assertRegex(properties["client_time"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
 
+    def test_stream_spade_payload_is_not_cached(self):
+        twitch = MagicMock()
+        twitch._auth_state.user_id = 12345
+        channel = MagicMock(spec=Channel)
+        channel.id = 67890
+        channel._login = "example_channel"
+        channel._twitch = twitch
+        stream = Stream(
+            channel,
+            id=24680,
+            game={"id": "13579", "name": "Example Game"},
+            viewers=100,
+            title="Example Stream",
+        )
+
+        first_payload = stream._spade_payload
+        second_payload = stream._spade_payload
+
+        self.assertIsNot(first_payload, second_payload)
+        first_payload["data"] = "mutated"
+
+        self.assertNotEqual(second_payload["data"], "mutated")
+
     async def test_send_watch_posts_to_spade_url_and_returns_true_for_204(self):
         twitch = MagicMock()
         twitch.gui.channels = MagicMock()
@@ -80,12 +103,15 @@ class TestSpadeWatchEvents(unittest.IsolatedAsyncioTestCase):
             title="Example Stream",
         )
 
-        result = await channel.send_watch()
+        payload = {"data": "encoded-minute-watched-event"}
+        with patch.object(
+            Stream, "_spade_payload", new_callable=PropertyMock, return_value=payload
+        ) as mock_payload:
+            result = await channel.send_watch()
 
         self.assertTrue(result)
-        twitch.request.assert_called_once_with(
-            "POST", channel._spade_url, data=channel._stream._spade_payload
-        )
+        twitch.request.assert_called_once_with("POST", channel._spade_url, data=payload)
+        mock_payload.assert_called_once_with()
 
     async def test_send_watch_fetches_spade_url_when_missing(self):
         twitch = MagicMock()
@@ -109,6 +135,24 @@ class TestSpadeWatchEvents(unittest.IsolatedAsyncioTestCase):
         mock_get_spade_url.assert_awaited_once()
         self.assertEqual(channel._spade_url, "https://spade.twitch.tv/fetched")
 
+    async def test_send_watch_returns_false_when_spade_url_fetch_fails(self):
+        from src.exceptions import MinerException
+
+        twitch = MagicMock()
+        twitch.gui.channels = MagicMock()
+        twitch._auth_state.user_id = "12345"
+        twitch.request = MagicMock(return_value=_FakeRequestCM(_FakeResponse(204)))
+        channel = Channel(twitch, id=67890, login="example_channel")
+        channel._stream = Stream(
+            channel,
+            id=24680,
+            game={"id": "13579", "name": "Example Game"},
+            viewers=100,
+            title="Example Stream",
+        )
+
+        with patch.object(Channel, "get_spade_url", AsyncMock(side_effect=MinerException("fail"))):
+            self.assertFalse(await channel.send_watch())
     async def test_send_watch_returns_false_for_non_204_status(self):
         twitch = MagicMock()
         twitch.gui.channels = MagicMock()

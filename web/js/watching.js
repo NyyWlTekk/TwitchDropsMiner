@@ -1,0 +1,146 @@
+
+function updateChannel(channelData) {
+    state.channels[channelData.id] = channelData;
+    renderChannels();
+}
+
+function removeChannel(channelId) {
+    delete state.channels[channelId];
+    renderChannels();
+}
+
+function clearChannels() {
+    state.channels = {};
+    renderChannels();
+}
+
+function setWatchingChannel(channelId) {
+    Object.values(state.channels).forEach(ch => ch.watching = false);
+    if (state.channels[channelId]) {
+        state.channels[channelId].watching = true;
+    }
+    renderChannels();
+}
+
+function clearWatchingChannel() {
+    Object.values(state.channels).forEach(ch => ch.watching = false);
+    renderChannels();
+}
+
+function renderChannels() {
+    const container = document.getElementById('channels-list');
+    if (!container) return;
+
+    const t = state.translations || {};
+    const channels = Object.values(state.channels);
+    if (channels.length === 0) {
+        const emptyMsg = t.gui?.channels?.no_channels || 'No channels tracked yet...';
+        container.replaceChildren(
+            makeElement('p', { class: 'empty-message' }, emptyMsg)
+        );
+        return;
+    }
+
+    const gamesToWatch = state.settings?.games_to_watch || [];
+    const gamesToWatchSet = new Set(gamesToWatch);
+
+    const filteredChannels = channels.filter(channel => {
+        const gameName = channel.game;
+        return gamesToWatch.length === 0 || (gameName && gamesToWatchSet.has(gameName));
+    });
+
+    if (filteredChannels.length === 0) {
+        const emptyMsg = t.gui?.channels?.no_channels_for_games || 'No channels found for selected games...';
+        container.replaceChildren(
+            makeElement('p', { class: 'empty-message' }, emptyMsg)
+        );
+        return;
+    }
+
+    const gameGroups = {};
+    filteredChannels.forEach(channel => {
+        const gameName = channel.game || 'No Game';
+        const gameId = channel.game_id || 'no-game';
+        const gameIcon = channel.game_icon;
+
+        if (!gameGroups[gameId]) {
+            gameGroups[gameId] = {
+                name: gameName,
+                icon: gameIcon,
+                channels: []
+            };
+        }
+        gameGroups[gameId].channels.push(channel);
+    });
+
+    const sortedGames = Object.entries(gameGroups).sort(([idA, groupA], [idB, groupB]) => {
+        const hasWatchingA = groupA.channels.some(ch => ch.watching);
+        const hasWatchingB = groupB.channels.some(ch => ch.watching);
+
+        if (hasWatchingA !== hasWatchingB) return hasWatchingB ? 1 : -1;
+
+        const totalViewersA = groupA.channels.reduce((sum, ch) => sum + (ch.viewers || 0), 0);
+        const totalViewersB = groupB.channels.reduce((sum, ch) => sum + (ch.viewers || 0), 0);
+
+        return totalViewersB - totalViewersA;
+    });
+
+    container.innerHTML = '';
+    sortedGames.forEach(([gameId, group]) => {
+        const gameHeader = document.createElement('div');
+        gameHeader.className = 'game-group-header';
+
+        const channelCount = group.channels.length;
+        const totalViewers = group.channels.reduce((sum, ch) => sum + (ch.viewers || 0), 0);
+
+        const channelText = channelCount === 1
+            ? (t.gui?.channels?.channel_count || 'channel')
+            : (t.gui?.channels?.channel_count_plural || 'channels');
+        const viewersText = t.gui?.channels?.viewers || 'viewers';
+
+        if (group.icon) {
+            gameHeader.appendChild(makeImageElement(group.icon.replace('{width}', '40').replace('{height}', '53'), group.name, 'game-icon'));
+        }
+        gameHeader.appendChild(makeElement('div', { class: 'game-group-info' }, null, el => {
+            el.appendChild(makeElement('div', { class: 'game-group-name' }, group.name));
+            el.appendChild(makeElement('div', { class: 'game-group-stats' }, `${channelCount} ${channelText} • ${totalViewers.toLocaleString()} ${viewersText}`));
+        }));
+
+        container.appendChild(gameHeader);
+
+        group.channels.sort((a, b) => {
+            if (a.watching !== b.watching) return b.watching ? 1 : -1;
+            if (a.online !== b.online) return b.online ? 1 : -1;
+            return (b.viewers || 0) - (a.viewers || 0);
+        });
+
+        group.channels.forEach(channel => {
+            const div = document.createElement('div');
+            div.className = 'channel-item';
+            if (channel.watching) div.classList.add('watching');
+            if (channel.online) div.classList.add('online');
+            else div.classList.add('offline');
+
+            const nameDiv = makeElement('div', { class: 'channel-name' }, channel.name, el => {
+                if (channel.drops_enabled) {
+                    el.appendChild(document.createTextNode(' '));
+                    el.appendChild(makeElement('span', { class: 'channel-badge drops' }, 'DROPS'));
+                }
+                if (channel.acl_based) {
+                    el.appendChild(document.createTextNode(' '));
+                    el.appendChild(makeElement('span', { class: 'channel-badge acl' }, 'ACL'));
+                }
+            });
+            const infoDiv = makeElement('div', { class: 'channel-info' }, channel.viewers !== null ? channel.viewers.toLocaleString() + ' viewers' : 'Offline', el => {
+                if (channel.watching) {
+                    el.appendChild(document.createTextNode(' • '));
+                    el.appendChild(makeElement('strong', {}, 'WATCHING'));
+                }
+            });
+            div.replaceChildren(nameDiv, infoDiv);
+
+            div.onclick = () => selectChannel(channel.id);
+            container.appendChild(div);
+        });
+    });
+}

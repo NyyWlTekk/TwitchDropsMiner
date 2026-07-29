@@ -374,8 +374,18 @@
         </footer>
     </div>
 
-    <script src="/js/index.js"></script>
-    <script src="/js/main.js"></script>
+	<!-- 1. UI modules and function definitions (must load first) -->
+	<script src="/js/watching.js"></script>
+	<script src="/js/wanted.js"></script>
+	<script src="/js/inventory.js"></script>
+	<script src="/js/progress.js"></script>
+
+	<!-- 2. Socket initialization -->
+	<script src="/js/sockets.js"></script>
+
+	<!-- 3. Main app logic -->
+	<script src="/js/index.js"></script>
+	<script src="/js/main.js"></script>
 </body>
 
 </html>

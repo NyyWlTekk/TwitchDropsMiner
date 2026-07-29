@@ -166,141 +166,204 @@ socket.on('connect_error', (error) => {
 });
 
 /**
- * [CHANNELS_CACHE] Handles initial channel loading with cache fallback to prevent unwanted overwrites on refresh
+ * [CACHE_HELPER] Safely set item in localStorage
  */
-function handleInitialChannels(channelsData) {
-    if (!state.channels) state.channels = {};
-
-    if (!channelsData || channelsData.length === 0) {
-        const cachedChannels = localStorage.getItem('app_saved_channels');
-        if (cachedChannels) {
-            try {
-                state.channels = JSON.parse(cachedChannels);
-                console.log("[CHANNELS_CACHE] Restored channels from localStorage on refresh.");
-            } catch (e) {
-                console.error("[CHANNELS_CACHE] Failed to parse cached channels:", e);
-            }
-        }
-    } else {
-        channelsData.forEach(ch => {
-            state.channels[ch.id] = ch;
-        });
-        localStorage.setItem('app_saved_channels', JSON.stringify(state.channels));
+function safeSetStorage(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+        console.error(`[CACHE_ERROR] Failed to save ${key}:`, e);
     }
-    renderChannels();
 }
 
 /**
- * [WANTED_CACHE] Handles wanted items tree loading with cache fallback on refresh
+ * [CACHE_HELPER] Safely get item from localStorage
+ */
+function safeGetStorage(key) {
+    try {
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : null;
+    } catch (e) {
+        console.error(`[CACHE_ERROR] Failed to read ${key}:`, e);
+        return null;
+    }
+}
+
+/**
+ * [CHANNELS_CACHE] Handles initial channel loading with cache fallback
+ */
+function handleInitialChannels(channelsData) {
+    state.channels = {};
+
+    let channelsList = [];
+    if (Array.isArray(channelsData)) {
+        channelsList = channelsData;
+    } else if (channelsData && typeof channelsData === 'object') {
+        channelsList = Object.values(channelsData);
+    }
+
+    if (channelsList.length === 0) {
+        const cached = safeGetStorage('app_saved_channels');
+        if (cached && typeof cached === 'object') {
+            state.channels = cached;
+            console.log("[CHANNELS_CACHE] Restored channels from localStorage.");
+        }
+    } else {
+        channelsList.forEach(ch => {
+            if (ch && ch.id) {
+                state.channels[ch.id] = ch;
+            }
+        });
+        safeSetStorage('app_saved_channels', state.channels);
+    }
+
+    if (typeof renderChannels === 'function') {
+        renderChannels();
+    }
+}
+
+/**
+ * [WANTED_CACHE] Handles wanted items tree loading with cache fallback
  */
 function handleInitialWantedItems(wantedData) {
     let treeToRender = wantedData;
 
-    if (!treeToRender || (Array.isArray(treeToRender) && treeToRender.length === 0)) {
-        const cachedTree = localStorage.getItem('app_saved_wanted_tree');
-        if (cachedTree) {
-            try {
-                treeToRender = JSON.parse(cachedTree);
-                console.log("[WANTED_CACHE] Restored wanted items tree from localStorage on refresh.");
-            } catch (e) {
-                console.error("[WANTED_CACHE] Failed to parse cached wanted tree:", e);
-            }
+    if (treeToRender && !Array.isArray(treeToRender) && typeof treeToRender === 'object') {
+        treeToRender = Object.values(treeToRender);
+    }
+
+    if (!Array.isArray(treeToRender) || treeToRender.length === 0) {
+        const cached = safeGetStorage('app_saved_wanted_tree');
+        if (Array.isArray(cached) && cached.length > 0) {
+            treeToRender = cached;
+            console.log("[WANTED_CACHE] Restored wanted tree from localStorage.");
         }
     }
 
-    if (treeToRender && treeToRender.length > 0) {
+    if (Array.isArray(treeToRender) && treeToRender.length > 0) {
         state.wantedItemsTree = treeToRender;
-        localStorage.setItem('app_saved_wanted_tree', JSON.stringify(treeToRender));
-        renderWantedItems(treeToRender);
+        safeSetStorage('app_saved_wanted_tree', treeToRender);
+        if (typeof renderWantedItems === 'function') {
+            renderWantedItems(treeToRender);
+        }
     }
 }
 
 /**
- * [DROP_CACHE] Handles current drop fallback on refresh
+ * [DROP_CACHE] Drží progress bar z keše, dokud nepřijdou nová platná data
  */
 function handleInitialCurrentDrop(dropData) {
-    if (dropData && Object.keys(dropData).length > 0) {
-        localStorage.setItem('app_saved_current_drop', JSON.stringify(dropData));
-        updateDropProgress(dropData);
-    } else {
-        const cachedDrop = localStorage.getItem('app_saved_current_drop');
-        if (cachedDrop) {
-            try {
-                const parsedDrop = JSON.parse(cachedDrop);
-                console.log("[DROP_CACHE] Restored current drop from localStorage during gathering/empty state.");
-                updateDropProgress(parsedDrop);
-                return;
-            } catch (e) {
-                console.error("[DROP_CACHE] Failed to parse cached current drop:", e);
-            }
+    const hasValidDrop = dropData && typeof dropData === 'object' && Object.keys(dropData).length > 0;
+
+    if (hasValidDrop) {
+        // Přišla nová platná data z backendu -> uložíme a vykreslíme
+        safeSetStorage('app_saved_current_drop', dropData);
+        if (typeof updateDropProgress === 'function') {
+            updateDropProgress(dropData);
         }
-        if (typeof clearDropProgress === 'function') {
+    } else {
+        // Backend neposlal drop (např. při gathering channels) -> VŽDY držíme keš!
+        const cached = safeGetStorage('app_saved_current_drop');
+        if (cached && typeof cached === 'object' && Object.keys(cached).length > 0) {
+            console.log("[DROP_CACHE] Backend nezaslal drop (gathering). Držím progress bar z keše.");
+            if (typeof updateDropProgress === 'function') {
+                updateDropProgress(cached);
+            }
+        } else if (typeof clearDropProgress === 'function') {
+            // Provedeme clear JEN v případě, že nemáme vůbec nic v keši
             clearDropProgress();
         }
     }
 }
 
-socket.on('initial_state', (data) => {
-    console.log('Received initial state', data);
-    if (data.status) updateStatus(data.status);
+// Instant cache restore on DOM load (before WebSocket connection completes)
+document.addEventListener('DOMContentLoaded', () => {
+    console.log("[CACHE] Instant recovery sequence started...");
 
-    // 1. Vykreslení wanted položek (musí být první, aby existovaly elementy v DOMu)
-    handleInitialWantedItems(data.wanted_items);
-
-    // 2. Kanály
-    handleInitialChannels(data.channels);
-
-    // 3. Kampaně a inventář
-    if (data.campaigns) {
-        state.campaigns = {};
-        data.campaigns.forEach(camp => {
-            state.campaigns[camp.id] = camp;
-        });
-        renderInventory();
-    }
-
-    // 4. Konzole
-    if (data.console) {
-        const consoleEl = document.getElementById('console-output');
-        if (consoleEl) {
-            const fragment = document.createDocumentFragment();
-            data.console.forEach(line => {
-                const div = document.createElement('div');
-                div.textContent = line;
-                fragment.appendChild(div);
-            });
-            consoleEl.appendChild(fragment);
-            consoleEl.scrollTop = consoleEl.scrollHeight;
-            while (consoleEl.children.length > 1000) {
-                consoleEl.removeChild(consoleEl.firstChild);
-            }
+    // 1. Restore current drop progress immediately
+    const cachedDrop = safeGetStorage('app_saved_current_drop');
+    if (cachedDrop && Object.keys(cachedDrop).length > 0) {
+        if (typeof updateDropProgress === 'function') {
+            updateDropProgress(cachedDrop);
         }
     }
 
-    // 5. UI stavy
-    if (data.settings) updateSettingsUI(data.settings);
-    if (data.login) updateLoginStatus(data.login);
-    if (data.manual_mode) updateManualModeUI(data.manual_mode);
-
-    // 6. Aktuální drop (domácí elementy už jsou zaručeně vyrenderované)
-    handleInitialCurrentDrop(data.current_drop);
-
-    // 7. Automatické řazení a rotace
-    const autosortEl = document.getElementById('auto-sort-by-end');
-    if (autosortEl && data.settings) {
-        autosortEl.checked = data.settings.auto_sort_by_end || false;
-        applyAutoSortIfNeeded();
-    }
-    
-    const autoaddEl = document.getElementById('auto-add-all-games');
-    if (autoaddEl && data.settings) {
-        autoaddEl.checked = data.settings.auto_add_all_games || false;
-        applyAutoAddIfNeeded();
+    // 2. Restore channels
+    const cachedChannels = safeGetStorage('app_saved_channels');
+    if (cachedChannels && Object.keys(cachedChannels).length > 0) {
+        state.channels = cachedChannels;
+        if (typeof renderChannels === 'function') renderChannels();
     }
 
-    if (typeof startCombinedRotation === 'function') {
-        startCombinedRotation(true);
+    // 3. Restore wanted tree
+    const cachedWanted = safeGetStorage('app_saved_wanted_tree');
+    if (Array.isArray(cachedWanted) && cachedWanted.length > 0) {
+        state.wantedItemsTree = cachedWanted;
+        if (typeof renderWantedItems === 'function') renderWantedItems(cachedWanted);
     }
+});
+
+// Main socket event listener with fail-safe blocks
+socket.on('initial_state', (data) => {
+    console.log('[SOCKET] Received initial state', data);
+
+    try { if (data.status && typeof updateStatus === 'function') updateStatus(data.status); } catch (e) { console.error("[INIT_ERR] Status:", e); }
+    try { handleInitialWantedItems(data.wanted_items); } catch (e) { console.error("[INIT_ERR] Wanted:", e); }
+    try { handleInitialChannels(data.channels); } catch (e) { console.error("[INIT_ERR] Channels:", e); }
+
+    try {
+        if (data.campaigns) {
+            state.campaigns = {};
+            const campList = Array.isArray(data.campaigns) ? data.campaigns : Object.values(data.campaigns);
+            campList.forEach(camp => {
+                if (camp && camp.id) state.campaigns[camp.id] = camp;
+            });
+            if (typeof renderInventory === 'function') renderInventory();
+        }
+    } catch (e) { console.error("[INIT_ERR] Campaigns:", e); }
+
+    try {
+        if (data.console && typeof document !== 'undefined') {
+            const consoleEl = document.getElementById('console-output');
+            if (consoleEl && Array.isArray(data.console)) {
+                const fragment = document.createDocumentFragment();
+                data.console.forEach(line => {
+                    const div = document.createElement('div');
+                    div.textContent = line;
+                    fragment.appendChild(div);
+                });
+                consoleEl.appendChild(fragment);
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+                while (consoleEl.children.length > 1000) {
+                    consoleEl.removeChild(consoleEl.firstChild);
+                }
+            }
+        }
+    } catch (e) { console.error("[INIT_ERR] Console:", e); }
+
+    try { if (data.settings && typeof updateSettingsUI === 'function') updateSettingsUI(data.settings); } catch (e) { console.error("[INIT_ERR] Settings:", e); }
+    try { if (data.login && typeof updateLoginStatus === 'function') updateLoginStatus(data.login); } catch (e) { console.error("[INIT_ERR] Login:", e); }
+    try { if (data.manual_mode && typeof updateManualModeUI === 'function') updateManualModeUI(data.manual_mode); } catch (e) { console.error("[INIT_ERR] ManualMode:", e); }
+
+    try { handleInitialCurrentDrop(data.current_drop, data.status); } catch (e) { console.error("[INIT_ERR] Drop:", e); }
+
+    try {
+        const autosortEl = document.getElementById('auto-sort-by-end');
+        if (autosortEl && data.settings) {
+            autosortEl.checked = !!data.settings.auto_sort_by_end;
+            if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
+        }
+
+        const autoaddEl = document.getElementById('auto-add-all-games');
+        if (autoaddEl && data.settings) {
+            autoaddEl.checked = !!data.settings.auto_add_all_games;
+            if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
+        }
+
+        if (typeof startCombinedRotation === 'function') {
+            startCombinedRotation(true);
+        }
+    } catch (e) { console.error("[INIT_ERR] Rotation:", e); }
 });
 
 socket.on('status_update', (data) => {

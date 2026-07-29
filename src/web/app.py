@@ -398,13 +398,14 @@ async def get_wanted_items(sid):
         await sio.emit("wanted_items_update", gui_manager.get_wanted_game_tree(), to=sid)
 
 
-# Mount static files (CSS, JS, images)
+# Mount static directories (CSS, JS, icons)
 # Web files are in project_root/web/, we're in project_root/src/web/
 web_dir = Path(__file__).parent.parent.parent / "web"
 if web_dir.exists():
-    static_dir = web_dir / "static"
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    for folder in ("css", "js", "icons"):
+        folder_path = web_dir / folder
+        if folder_path.exists():
+            app.mount(f"/{folder}", StaticFiles(directory=folder_path), name=folder)
 
 
 # Development server runner

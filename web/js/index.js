@@ -493,6 +493,10 @@ function renderAvailableGames(games, filterText) {
     if (!container) return;
 
     const t = state.translations;
+    const isAutoAdd = state.settings?.auto_add_all_games || false;
+    const ignoredGames = state.settings?.ignored_games || [];
+    const gamesToWatch = state.settings?.games_to_watch || [];
+
     container.innerHTML = '';
 
     if (games.length === 0) {
@@ -501,22 +505,42 @@ function renderAvailableGames(games, filterText) {
             const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, `${emptyMsg}${addHint}`));
         } else {
-            const emptyMsg = t.gui?.settings?.all_games_selected || 'All games are selected or no games available.';
+            const emptyMsg = isAutoAdd 
+                ? (t.gui?.settings?.no_games_ignored || 'No games on ignore list.')
+                : (t.gui?.settings?.all_games_selected || 'All games are selected or no games available.');
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
         }
         return;
     }
 
     games.forEach(game => {
+        // Zjistíme, zda má být checkbox zaškrtnutý (v závislosti na režimu Auto-add)
+        const isChecked = isAutoAdd 
+            ? ignoredGames.includes(game) 
+            : gamesToWatch.includes(game);
+
         const label = document.createElement('label');
         label.className = 'game-checkbox';
+        
+        const input = makeElement('input', { type: 'checkbox', value: game });
+        input.checked = isChecked;
+
         label.replaceChildren(
-            makeElement('input', { type: 'checkbox', value: game }),
+            input,
             makeElement('span', {}, game),
         );
 
-        const checkbox = label.querySelector('input[type="checkbox"]');
-        checkbox.addEventListener('change', (e) => toggleGameWatch(game, e.target.checked));
+        input.addEventListener('change', (e) => {
+            if (isAutoAdd) {
+                // Pokud je zapnutý Auto-add, přepínáme Ignore List
+                if (typeof toggleGameIgnore === 'function') {
+                    toggleGameIgnore(game, e.target.checked);
+                }
+            } else {
+                // Jinak standardní sledování
+                toggleGameWatch(game, e.target.checked);
+            }
+        });
 
         container.appendChild(label);
     });
@@ -728,6 +752,25 @@ function applyAutoSortIfNeeded() {
     }
 }
 
+async function toggleGameIgnore(game, isIgnored) {
+    if (!state.settings.ignored_games) {
+        state.settings.ignored_games = [];
+    }
+
+    if (isIgnored) {
+        // Add game to ignore list if not present
+        if (!state.settings.ignored_games.includes(game)) {
+            state.settings.ignored_games.push(game);
+        }
+    } else {
+        // Remove game from ignore list
+        state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
+    }
+
+    // Save updated settings to backend
+    await saveSettings();
+}
+
 // Standalone function to handle auto-adding games based on user settings
 function applyAutoAddIfNeeded() {
     const autoaddEl = document.getElementById('auto-add-all-games');
@@ -880,6 +923,7 @@ async function saveSettings() {
         auto_sort_by_end: document.getElementById('auto-sort-by-end')?.checked || false,
         mine_badges_first: document.getElementById('mine-badges-first')?.checked || false,
         auto_add_all_games: document.getElementById('auto-add-all-games')?.checked || false,
+        ignored_games: state.settings.ignored_games || [],
         mining_benefits: {
             "DIRECT_ENTITLEMENT": document.getElementById('mining-benefit-item')?.checked,
             "BADGE": document.getElementById('mining-benefit-badge')?.checked,
@@ -1368,19 +1412,28 @@ document.addEventListener('DOMContentLoaded', () => {
 	}
     
 	document.getElementById('auto-add-all-games')?.addEventListener('change', async (e) => {
-		// Ensure the state is updated locally first
+		const isChecked = e.target.checked;
+
+		// 1. Aktualizace lokalního stavu
 		if (state && state.settings) {
-			state.settings.auto_add_all_games = e.target.checked;
+			state.settings.auto_add_all_games = isChecked;
 		}
 		
-		// Always save the new checkbox state to the backend immediately
+		// 2. Změna nadpisu (Available Games <-> Ignore List)
+		const gamesHeading = document.querySelector('.available-games h3');
+		if (gamesHeading) {
+			gamesHeading.textContent = isChecked ? 'Ignore List' : 'Available Games';
+		}
+
+		// 3. Okamžité přerendrování seznamu her
+		renderGamesToWatch();
+		
+		// 4. Uložení na backend
 		await saveSettings();
 		
-		if (e.target.checked) {
-			// Apply the logic to add games if needed
+		if (isChecked) {
 			applyAutoAddIfNeeded();
 		} else {
-			// Unlock UI or apply other logic when turned off
 			updateUIState();
 		}
 	});
@@ -1401,6 +1454,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateUIState();
         }
     });
+    
     document.getElementById('verify-proxy-btn').addEventListener('click', verifyProxy);
     document.getElementById('reload-btn').addEventListener('click', reloadCampaigns);
 

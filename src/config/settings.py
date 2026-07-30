@@ -29,6 +29,7 @@ default_settings = {
     "connection_quality": 1,
     "dark_mode": False,
     "games_to_watch": [],
+    "ignored_games": [], 
     "games_available": [],
     "language": DEFAULT_LANG,
     "inventory_filters": {
@@ -62,6 +63,7 @@ class Settings:
     connection_quality: int
     dark_mode: bool
     games_to_watch: list[str]
+    ignored_games: list[str]  # <-- Přidáno sem
     games_available: list[str]
     language: str
     inventory_filters: InventoryFilters

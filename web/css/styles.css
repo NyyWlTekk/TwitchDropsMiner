@@ -1861,10 +1861,25 @@ header h1 {
 }
 
 /* Právě těžená kampaň – Zelená */
-.wanted-card.active-mining {
-    border-color: #2ecc71; 
-    box-shadow: 0 0 10px rgba(46, 204, 113, 0.3);
+@keyframes slowPulseGreen {
+    0% {
+        border-color: rgba(46, 204, 113, 0.4);
+        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
+    }
+    50% {
+        border-color: rgba(46, 204, 113, 1);
+        box-shadow: 0 0 18px rgba(46, 204, 113, 0.6);
+    }
+    100% {
+        border-color: rgba(46, 204, 113, 0.4);
+        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
+    }
 }
+
+.wanted-card.active-mining {
+    animation: slowPulseGreen 3s infinite ease-in-out;
+}
+
 .wanted-card.active-mining .wanted-card-header {
     background-color: rgba(46, 204, 113, 0.08);
 }
@@ -1874,6 +1889,7 @@ header h1 {
     border-color: #f1c40f; 
     box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
 }
+
 .wanted-card.in-progress .wanted-card-header {
     background-color: rgba(241, 196, 15, 0.08);
 }

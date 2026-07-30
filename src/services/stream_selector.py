@@ -1,8 +1,11 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from src.config.settings import Settings
 from src.models.campaign import DropsCampaign
 from src.models.game import Game
+
+logger = logging.getLogger(__name__)
 
 
 class StreamSelector:
@@ -14,11 +17,24 @@ class StreamSelector:
         Ignoring 'can earn within' time constraint.
         """
         wanted_games = []
-        games_to_watch = settings.games_to_watch
         mining_benefits = settings.mining_benefits
         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
 
-        for game_name in games_to_watch:
+        auto_add = getattr(settings, "auto_add_all_games", False)
+        # Determine target games based on auto_add_all_games setting
+        if auto_add:
+            ignored_games_lower = {g.lower() for g in getattr(settings, "ignored_games", [])}
+            target_game_names = []
+            for campaign in campaigns:
+                g_name = campaign.game.name if hasattr(campaign.game, "name") else str(campaign.game)
+                if g_name.lower() not in ignored_games_lower and g_name not in target_game_names:
+                    target_game_names.append(g_name)
+            logger.debug("Auto-add enabled: evaluated %d target games from active inventory.", len(target_game_names))
+        else:
+            target_game_names = settings.games_to_watch
+            logger.debug("Auto-add disabled: evaluating %d games from watch list.", len(target_game_names))
+
+        for game_name in target_game_names:
             wanted_campaigns = []
             game_obj = None
             game_name_lower = game_name.lower()
@@ -32,6 +48,7 @@ class StreamSelector:
                     game_obj = campaign.game
 
                 if not campaign.can_earn_within(next_hour):
+                    logger.debug("Skipping campaign '%s' for game '%s': drops cannot be earned within time limit.", campaign.name, game_name)
                     continue
 
                 wanted_drops = []
@@ -39,7 +56,7 @@ class StreamSelector:
                     # Skip if already claimed
                     if drop.is_claimed:
                         continue
-                    
+
                     # Skip if fully watched but stuck/unclaimed (e.g. 30/30 minutes)
                     if hasattr(drop, "current_minutes") and hasattr(drop, "required_minutes"):
                         if drop.current_minutes >= drop.required_minutes:
@@ -50,7 +67,7 @@ class StreamSelector:
                     if len(filtered_benefits) > 0:
                         current_mins = getattr(drop, "current_minutes", 0)
                         req_mins = getattr(drop, "required_minutes", 0)
-                        
+
                         # Calculate progress percentage safely
                         progress_val = getattr(drop, "progress", 0)
                         if not progress_val and req_mins > 0:
@@ -73,7 +90,7 @@ class StreamSelector:
                     claimed_count = sum(1 for d in campaign.drops if getattr(d, "is_claimed", False))
                     total_count = len(campaign.drops)
 
-                    # Získání a zformátování datumu startu a konce
+                    # Get and format start and end dates
                     starts_at = getattr(campaign, "starts_at", None)
                     ends_at = getattr(campaign, "ends_at", None)
                     starts_at_str = starts_at.isoformat() if hasattr(starts_at, "isoformat") else (str(starts_at) if starts_at else None)
@@ -86,6 +103,7 @@ class StreamSelector:
                             "url": campaign.campaign_url,
                             "starts_at": starts_at_str,
                             "ends_at": ends_at_str,
+                            "_raw_ends_at": ends_at,  # Internal raw datetime object for sorting
                             "drops": wanted_drops,
                             "claimed_drops_count": claimed_count,
                             "total_drops_count": total_count,
@@ -93,7 +111,7 @@ class StreamSelector:
                     )
 
             if len(wanted_campaigns) > 0:
-                # Zbývající čas hry je MAXIMÁLNÍ zbývající čas z dropů
+                # Remaining time is MAX remaining time from drops
                 all_remaining_mins = [
                     max(0, d["required_minutes"] - d["current_minutes"])
                     for c in wanted_campaigns
@@ -112,6 +130,56 @@ class StreamSelector:
                     }
                 )
 
+        logger.info("Building wanted games list: found %d eligible games.", len(wanted_games))
+
+        # --- SORT WANTED GAMES QUEUE ---
+        def get_game_sort_key(game_item):
+            end_times = []
+            max_progress = 0
+            for c in game_item["campaigns"]:
+                raw_end = c.get("_raw_ends_at")
+                if raw_end and isinstance(raw_end, datetime):
+                    end_times.append(raw_end)
+                elif c.get("ends_at"):
+                    try:
+                        end_times.append(datetime.fromisoformat(c["ends_at"]))
+                    except Exception:
+                        pass
+
+                for d in c["drops"]:
+                    prog = d.get("progress", 0)
+                    if 0 < prog < 100 and prog > max_progress:
+                        max_progress = prog
+
+            # Default to max datetime if no campaign end date is found
+            earliest_end = min(end_times) if end_times else datetime.max.replace(tzinfo=timezone.utc)
+
+            # Primary sort: Earliest ending campaign
+            # Secondary sort: Highest active progress (negative value to sort descending)
+            return (earliest_end, -max_progress)
+
+        if getattr(settings, "auto_sort_by_end", True):
+            wanted_games.sort(key=get_game_sort_key)
+
+            # Log the sorted queue order and campaign end dates
+            queue_log = []
+            for g in wanted_games:
+                e_str = "N/A"
+                if g["campaigns"]:
+                    e_times = [c.get("ends_at") for c in g["campaigns"] if c.get("ends_at")]
+                    if e_times:
+                        e_str = min(e_times)
+                queue_log.append(f"{g['game_name']} (Ends: {e_str})")
+
+            logger.info("Wanted games queue sorted by ending time: %s", " -> ".join(queue_log))
+        else:
+            logger.info("Auto-sorting disabled. Using default game order: %s", ", ".join([g['game_name'] for g in wanted_games]))
+
+        # Clean up internal raw datetimes before returning payload
+        for g in wanted_games:
+            for c in g["campaigns"]:
+                c.pop("_raw_ends_at", None)
+
         return wanted_games
 
     def get_wanted_game_tree(
@@ -122,4 +190,6 @@ class StreamSelector:
         ]
 
     def get_wanted_games(self, settings: Settings, campaigns: list[DropsCampaign]) -> list[Game]:
-        return [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]
+        games = [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]
+        logger.debug("Retrieved %d wanted game objects for watching.", len(games))
+        return games

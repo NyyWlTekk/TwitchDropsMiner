@@ -69,6 +69,7 @@ class ChannelSelectRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     games_to_watch: list[str] | None = None
+    ignored_games: list[str] | None = None
     dark_mode: bool | None = None
     auto_sort_by_end: bool | None = None
     mine_badges_first: bool | None = None

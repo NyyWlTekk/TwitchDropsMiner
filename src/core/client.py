@@ -547,33 +547,37 @@ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign
     if not isinstance(client.settings.games_to_watch, list):
         client.settings.games_to_watch = []
 
-    # Zjistíme množinu všech her aktuálně dostupných v inventáři
+    # Zjistíme množinu ignorovaných her (v lowercase)
+    ignored_games = {g.strip().lower() for g in getattr(client.settings, "ignored_games", [])}
+
+    # Zjistíme množinu všech her aktuálně dostupných v inventáři (mimo ignorované)
     inventory_games = set()
     inventory_games_original = {}
     for c in filtered_inventory:
         c_game = getattr(c, "game", "")
         c_game_name = c_game.name if hasattr(c_game, "name") else str(c_game)
         c_game_name = c_game_name.strip()
-        if c_game_name:
-            inventory_games.add(c_game_name.lower())
-            inventory_games_original[c_game_name.lower()] = c_game_name
+        c_lower = c_game_name.lower()
+        if c_game_name and c_lower not in ignored_games:
+            inventory_games.add(c_lower)
+            inventory_games_original[c_lower] = c_game_name
 
     existing_games = {g.strip().lower(): g for g in client.settings.games_to_watch}
     newly_added = []
 
-    # 1. Přidání nových her
+    # 1. Přidání nových her (pouze pokud nejsou ignorované)
     for c_lower, c_original in inventory_games_original.items():
         if c_lower not in existing_games:
             client.settings.games_to_watch.append(c_original)
             existing_games[c_lower] = c_original
             newly_added.append(c_original)
 
-    # 2. Odebrání her, které už v aktuálním inventáři nejsou
+    # 2. Odebrání her, které už v aktuálním inventáři nejsou NEBO byly přidány do Ignore Listu
     removed_games = []
     updated_list = []
     for g in client.settings.games_to_watch:
         g_lower = g.strip().lower()
-        if g_lower in inventory_games:
+        if g_lower in inventory_games and g_lower not in ignored_games:
             updated_list.append(g)
         else:
             removed_games.append(g)
@@ -585,12 +589,11 @@ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign
         if newly_added:
             logger.info("Automatically added new games to watch list: %s", ", ".join(newly_added))
         if removed_games:
-            logger.info("Automatically removed inactive games from watch list: %s", ", ".join(removed_games))
+            logger.info("Automatically removed inactive/ignored games from watch list: %s", ", ".join(removed_games))
             
         client.settings.save()
         if hasattr(client, "socketio"):
             client.socketio.emit("settings_updated", client.settings.__dict__)
-
 
 def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
     auto_sort = getattr(client.settings, "auto_sort_by_end", False)

@@ -451,20 +451,33 @@ function updateDropTitle(data) {
     const dropNameEl = document.getElementById('drop-name');
     if (!dropNameEl) return;
 
+    // Zobrazení se nyní řídí chráněným názvem hry z kroku 2
+    const displayGameName = data.game_name || 'Drop';
+
     // Vycházíme striktně z běžící fronty (live items)
     const validCampaigns = (state.activeCampaignsQueue || []).filter(c => {
         if (!c || isClaimed(c)) return false;
+        
+        // [OPRAVA] Vyfiltrujeme POUZE kampaně pro aktuální hru, aby po přepnutí zmizely staré!
+        const cGameName = c.game_name || c.gameName || 'Drop';
+        if (cGameName !== displayGameName) return false;
+        
         const drops = extractCampaignDrops(c);
         return !drops || drops.length === 0 || drops.some(d => !isClaimed(d));
     });
 
     const queueLength = validCampaigns.length > 0 ? validCampaigns.length : 1;
-    const currentIndex = (state.campaignRotationIndex !== undefined ? state.campaignRotationIndex : 0) + 1;
-    const displayIndex = Math.min(currentIndex, queueLength);
-
-    // Zobrazení se nyní řídí chráněným názvem hry z kroku 2
-    const displayGameName = data.game_name || 'Drop';
     
+    // [OPRAVA] Získáme reálnou pozici (např. 1 nebo 2) aktuální kampaně v rámci této hry, 
+    // místo spoléhání se na globální index rotace.
+    let displayIndex = 1;
+    if (data.campaign_id) {
+        const foundIndex = validCampaigns.findIndex(c => (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
+        if (foundIndex !== -1) {
+            displayIndex = foundIndex + 1;
+        }
+    }
+
     dropNameEl.textContent = `${displayGameName} (${displayIndex}/${queueLength})`;
 }
 
@@ -892,32 +905,49 @@ function updateCampaignProgressData(data, liveCurrentMins) {
     let totalCampaignCurrent = 0;
     let totalCampaignRequired = 0;
 
-    if (campaignTitle && state.campaigns && data.campaign_id) {
+    if (state.campaigns && data.campaign_id) {
         const campaign = state.campaigns[data.campaign_id] || 
             Object.values(state.campaigns).find(c => c && (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
             
         if (campaign) {
             const drops = extractCampaignDrops(campaign);
             const campName = campaign.name || campaign.campaign_name || 'Campaign';
-            let dropVisualIndex = 1;
             
-            drops.forEach((d, index) => {
-                // Update exact drop minutes internally if it's the active one
+            // 1. Nejprve aktualizujeme aktivní drop a zjistíme maximální / současný čas
+            drops.forEach((d) => {
                 if ((d.drop_id || d.id) === targetDropId) {
                     d.current_minutes = currentDropCurrent;
-                    dropVisualIndex = index + 1;
                 }
             });
-            
-            // Take the maximum value from the drops set instead of summing them up
-            totalCampaignCurrent = drops.length > 0 ? Math.max(...drops.map(d => Number(d.current_minutes) || 0)) : 0;
+
+            // Spočítáme maximální čas napříč dropy v této kampani
+            const maxCampaignCurrent = drops.length > 0 ? Math.max(...drops.map(d => Number(d.current_minutes) || 0)) : currentDropCurrent;
             totalCampaignRequired = drops.length > 0 ? Math.max(...drops.map(d => Number(d.required_minutes) || 0)) : 0;
-            
-            campaignTitle.textContent = `${campName} • Drop ${dropVisualIndex}/${drops.length}`;
+            totalCampaignCurrent = maxCampaignCurrent;
+
+            // 2. KLÍČOVÝ KROK: Přidělíme tento nejvyšší čas VŠEM položkám kampaně a okamžitě překreslíme jejich DOM!
+            drops.forEach(d => {
+                d.current_minutes = maxCampaignCurrent;
+                const dId = d.drop_id || d.id;
+                if (dId) {
+                    const reqMins = Number(d.required_minutes || d.duration || 0);
+                    // Zavoláme DOM aktualizaci pro každou položku zvlášť, aby se překreslilo rozhraní
+                    updateDropInDOM(dId, maxCampaignCurrent, reqMins, isClaimed(d));
+                }
+            });
+
+            // Spočítáme index pro nadpis
+            let dropVisualIndex = 1;
+            const foundIdx = drops.findIndex(d => (d.drop_id || d.id) === targetDropId);
+            if (foundIdx !== -1) dropVisualIndex = foundIdx + 1;
+
+            if (campaignTitle) {
+                campaignTitle.textContent = `${campName} • Drop ${dropVisualIndex}/${drops.length}`;
+            }
         }
     }
 
-    // Fallback if campaign drops couldn't be evaluated from state
+    // Fallback pokud kampaň nebyla nalezena ve state.campaigns
     if (totalCampaignRequired === 0) {
         totalCampaignCurrent = currentDropCurrent;
         totalCampaignRequired = Number(data.required_minutes) || 0;
@@ -932,6 +962,11 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         campaignFill.style.width = '0%';
         campaignFill.textContent = '0%';
         campaignText.textContent = `${totalCampaignCurrent} / 0 min`;
+    }
+
+    // 3. Pojistka pro kompletní překreslení wanted stromu, pokud je k dispozici
+    if (typeof state.wantedItemsTree !== 'undefined' && typeof renderWantedItems === 'function') {
+        renderWantedItems(state.wantedItemsTree);
     }
 }
 

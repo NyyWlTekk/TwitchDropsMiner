@@ -57,10 +57,6 @@ class WatchService:
         Checks online status, drops status, game list matching, and specific
         campaign requirements (ACL, account linking, completion state).
         """
-        if not self._twitch.wanted_games:
-            logger.debug("Cannot watch %s: No wanted games configured.", channel.name)
-            return False
-
         if not channel.online:
             logger.debug("Cannot watch %s: Channel is offline.", channel.name)
             return False
@@ -69,17 +65,37 @@ class WatchService:
             logger.debug("Cannot watch %s: Drops are disabled on channel.", channel.name)
             return False
 
-        # Compare names/IDs to prevent typing mismatched bugs
-        game_names = [g.name if hasattr(g, 'name') else str(g) for g in self._twitch.wanted_games]
-        channel_game_name = channel.game.name if hasattr(channel.game, 'name') else str(channel.game)
-
-        if channel.game is None or channel_game_name not in game_names:
-            logger.debug(
-                "Cannot watch %s: Game '%s' is not in wanted games list.",
-                channel.name,
-                channel_game_name,
-            )
+        if channel.game is None:
+            logger.debug("Cannot watch %s: Channel has no active game.", channel.name)
             return False
+
+        # Compare names/IDs to prevent typing mismatched bugs
+        channel_game_name = channel.game.name if hasattr(channel.game, 'name') else str(channel.game)
+        settings = getattr(self._twitch, "settings", None)
+
+        # Check game eligibility based on auto_add_all_games and ignored_games
+        if settings and getattr(settings, "auto_add_all_games", False):
+            ignored_games = getattr(settings, "ignored_games", [])
+            if channel_game_name in ignored_games:
+                logger.debug(
+                    "Cannot watch %s: Game '%s' is in ignored games list.",
+                    channel.name,
+                    channel_game_name,
+                )
+                return False
+        else:
+            if not self._twitch.wanted_games:
+                logger.debug("Cannot watch %s: No wanted games configured.", channel.name)
+                return False
+
+            game_names = [g.name if hasattr(g, 'name') else str(g) for g in self._twitch.wanted_games]
+            if channel_game_name not in game_names:
+                logger.debug(
+                    "Cannot watch %s: Game '%s' is not in wanted games list.",
+                    channel.name,
+                    channel_game_name,
+                )
+                return False
 
         matching_campaigns = []
         for campaign in self._twitch.inventory:
@@ -231,7 +247,7 @@ class WatchService:
         while True:
             channel: Channel = await self._twitch.watching_channel.get()
 
-			# --- POJISTKA: Debugování stavu ---
+            # --- POJISTKA: Debugování stavu ---
             channel_campaigns = [c for c in self._twitch.inventory if c.game == channel.game]
             active_campaign = self._twitch._inventory_service.get_active_campaign(channel)
             

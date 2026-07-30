@@ -119,10 +119,43 @@ function createGameGroupElement(gameGroup, index) {
  */
 function createCampaignCardElement(campaign) {
     const campaignId = campaign.campaign_id || campaign.id || '';
-    console.group(`[CREATE_CAMPAIGN_CARD] Campaign ID: "${campaignId}", Name: "${campaign.name}"`);
+    
+    const drops = campaign.drops || [];
+    
+    // 1. Zjištění, zda se tato kampaň aktuálně těží
+    let isActivelyMining = false;
+    const currentDrop = (typeof state !== 'undefined' && state.currentDrop) || safeGetStorage('app_saved_current_drop');
+    if (currentDrop) {
+        const dropCampaignId = currentDrop.campaign_id || currentDrop.parent_campaign_id;
+        if (dropCampaignId && String(dropCampaignId) === String(campaignId)) {
+            isActivelyMining = true;
+        } else if (drops.length > 0) {
+            isActivelyMining = drops.some(d => 
+                (d.id && currentDrop.id && String(d.id) === String(currentDrop.id)) ||
+                (d.drop_id && currentDrop.drop_id && String(d.drop_id) === String(currentDrop.drop_id))
+            );
+        }
+    }
+
+    // 2. Zjištění, zda má kampaň nějaký rozpracovaný progress (a netěží se zrovna teď)
+    let hasProgress = false;
+    if (!isActivelyMining) {
+        hasProgress = drops.some(d => {
+            const current = Math.round(d.current_minutes || 0);
+            return current > 0;
+        });
+    }
+
+    // Sestavení tříd pro kartu
+    let cardClasses = 'wanted-card';
+    if (isActivelyMining) {
+        cardClasses += ' active-mining';
+    } else if (hasProgress) {
+        cardClasses += ' in-progress';
+    }
 
     const element = makeElement('div', {
-        class: 'wanted-card',
+        class: cardClasses,
         'data-campaign-id': String(campaignId)
     }, '', cardEl => {
         const headerEl = makeElement('div', { class: 'wanted-card-header' }, '', h => {
@@ -135,14 +168,9 @@ function createCampaignCardElement(campaign) {
                     title: campaign.name || 'Campaign'
                 }, campaign.name || 'Campaign'));
 
-                const drops = campaign.drops || [];
                 const totalCount = campaign.total_drops_count || drops.length;
-                
-                // Dropy, které už backend neposílá v poli drops (protože jsou hotové/claimed), 
-                // spočítáme jako rozdíl celkového počtu a toho, co zbývá v poli.
                 const completedOutsideArray = Math.max(0, totalCount - drops.length);
                 
-                // Plus zkontrolujeme, jestli v aktuálním poli drops není ještě nějaký dokončený/claimnutý
                 const finishedInArray = drops.filter(d => {
                     const isClaimed = d.is_claimed === true || d.is_claimed === 1 || d.is_claimed === 'true' || d.is_claimed === '1';
                     const canClaim = d.can_claim === true || d.can_claim === 1;
@@ -152,8 +180,6 @@ function createCampaignCardElement(campaign) {
                 }).length;
                 
                 const claimedCount = completedOutsideArray + finishedInArray;
-                console.log(`[CREATE_CAMPAIGN_CARD] Drop counts - finished/claimed: ${claimedCount}, total: ${totalCount}`);
-                
                 row.appendChild(makeElement('span', { class: 'wanted-campaign-badge' }, `(${claimedCount}/${totalCount})`));
             });
             h.appendChild(titleRow);
@@ -169,9 +195,6 @@ function createCampaignCardElement(campaign) {
         });
 
         const dropContainer = makeElement('div', { class: 'wanted-drops-container' });
-        const drops = campaign.drops || [];
-        console.log(`[CREATE_CAMPAIGN_CARD] Creating ${drops.length} drop item elements.`);
-        
         drops.forEach((drop, index) => {
             if (typeof createDropItemElement === 'function') {
                 dropContainer.appendChild(createDropItemElement(drop, index + 1));
@@ -184,7 +207,6 @@ function createCampaignCardElement(campaign) {
         cardEl.appendChild(bodyEl);
     });
 
-    console.groupEnd();
     return element;
 }
 
@@ -249,30 +271,24 @@ function createDropItemElement(drop, index = 1) {
 /**
  * [INFO] Syncs progress for wanted items in the tree with automatic initialization and safe matching.
  */
-function syncWantedItemsProgress(arg1, arg2, arg3) {
-    let data = arg3;
-    if (!data || typeof data !== 'object') {
-        if (arg2 && typeof arg2 === 'object') {
-            data = arg2;
-        } else if (arg1 && typeof arg1 === 'object') {
-            data = arg1;
-        }
-    }
-
+function syncWantedItemsProgress(data) {
     console.group("[SYNC_WANTED_PROGRESS]");
-    console.log("Normalized sync data payload:", data);
 
-    if (!data || typeof data !== 'object') {
-        console.warn("[SYNC_WANTED] Guard violation: Incoming data is empty or invalid after normalization:", { arg1, arg2, arg3 });
-        console.groupEnd();
-        return false;
+    // [FIX] Handle case where data is passed simply as a primitive string ID
+    if (typeof data === 'string') {
+        const dropId = data;
+        console.log("[SYNC_WANTED] Received data is a raw string ID, resolving drop info:", dropId);
+        
+        const activeDrop = (state.activeDropsQueue || []).find(d => (d.drop_id || d.id) === dropId) ||
+                           (state.currentDrop && (state.currentDrop.drop_id || state.currentDrop.id) === dropId ? state.currentDrop : null);
+        
+        data = activeDrop ? { ...activeDrop } : { drop_id: dropId, current_minutes: activeDrop?.current_minutes || 0 };
     }
 
-    if (data.gathering || data.current_minutes === undefined) {
-        console.warn("[SYNC_WANTED] Ignoring data in gathering state or missing minutes:", data);
-        console.groupEnd();
-        return false;
-    }
+    console.log("Aktuální wantedItemsTree:", state.wantedItemsTree);
+    const dropIdToFind = data.drop_id || data.id || data.current_drop_id;
+    console.log("Hledám drop ID:", dropIdToFind);
+    console.log("Celý objekt data přicházející do wanted.js:", JSON.stringify(data, null, 2));
 
     // Safely initialize wantedItemsTree if it's not ready yet to prevent sync drops on early socket events
     if (!state.wantedItemsTree || !Array.isArray(state.wantedItemsTree)) {
@@ -290,33 +306,49 @@ function syncWantedItemsProgress(arg1, arg2, arg3) {
 
         gameGroup.campaigns.forEach((campaign) => {
             const campaignId = campaign.campaign_id || campaign.id;
+            
+            // [ROTATION FIX] Verify if the campaign matches by ID/name OR if it contains the currently rotated drop
+            const hasMatchingDrop = (campaign.drops || []).some(d => {
+                const dId = d.drop_id || d.id;
+                return (data.drop_id && dId === data.drop_id) || (data.drop_name && d.name === data.drop_name);
+            });
+
             const isCampaignMatch = (data.campaign_id && campaignId === data.campaign_id) || 
-                                   (data.campaign_name && campaign.name === data.campaign_name);
+                                   (data.campaign_name && campaign.name === data.campaign_name) ||
+                                   hasMatchingDrop;
             
             if (!isCampaignMatch || !campaign.drops || !Array.isArray(campaign.drops)) return;
 
             console.log(`[CAMPAIGN_SYNC] Match found! Updating campaign: "${campaign.name}" (ID: ${campaignId}) with shared minutes: ${sharedCurrentMins}`);
 
             campaign.drops.forEach((drop, index) => {
-                const reqMins = Number(drop.required_minutes) || 0;
+                const dropId = drop.drop_id || drop.id;
+                const isMatchingDrop = (data.drop_id && dropId === data.drop_id) || 
+                                       (data.drop_name && drop.name === data.drop_name);
                 
-                drop.current_minutes = sharedCurrentMins; 
-                
-                if (reqMins > 0) {
-                    const effectiveMins = Math.min(sharedCurrentMins, reqMins);
-                    drop.progress = Math.min(100, (effectiveMins / reqMins) * 100);
-                    drop.can_claim = sharedCurrentMins >= reqMins && !drop.is_claimed;
+                const isCampaignWideUpdate = !data.drop_id && !data.drop_name;
+
+                // Apply current_minutes ONLY to the specific drop being reported (or all if campaign-wide)
+                if (isMatchingDrop || isCampaignWideUpdate) {
+                    const reqMins = Number(drop.required_minutes) || 0;
+                    drop.current_minutes = sharedCurrentMins; 
+                    
+                    if (reqMins > 0) {
+                        const effectiveMins = Math.min(sharedCurrentMins, reqMins);
+                        drop.progress = Math.min(100, (effectiveMins / reqMins) * 100);
+                        drop.can_claim = sharedCurrentMins >= reqMins && !drop.is_claimed;
+                    }
                 }
 
-                const dropId = drop.drop_id || drop.id;
-                if (data.is_claimed !== undefined && (dropId === data.drop_id || drop.name === data.drop_name)) {
+                if (data.is_claimed !== undefined && isMatchingDrop) {
                     drop.is_claimed = data.is_claimed;
                     console.log(`[CAMPAIGN_SYNC] Drop claim status updated for "${drop.name}": ${drop.is_claimed}`);
                 }
 
                 const targetDropId = getDropUniqueId(drop, index + 1);
-                console.log(`[CAMPAIGN_SYNC] Syncing DOM element for drop index ${index + 1} [ID: ${targetDropId}] - Current: ${drop.current_minutes}, Required: ${reqMins}`);
-                updateDropInDOM(targetDropId, drop.current_minutes, reqMins, drop.is_claimed);
+                const reqMinsForDom = Number(drop.required_minutes) || 0;
+                console.log(`[CAMPAIGN_SYNC] Syncing DOM element for drop index ${index + 1} [ID: ${targetDropId}] - Current: ${drop.current_minutes}, Required: ${reqMinsForDom}`);
+                updateDropInDOM(targetDropId, drop.current_minutes, reqMinsForDom, drop.is_claimed);
             });
 
             campaign.claimed_drops_count = campaign.drops.filter(d => d.is_claimed).length;
@@ -324,24 +356,45 @@ function syncWantedItemsProgress(arg1, arg2, arg3) {
             treeUpdated = true;
         });
 
-        // Pokud se v této skupině něco aktualizovalo, přepočítáme celkový zbývající čas a aktualizujeme DOM v hlavičce
+		// If anything updated in this group, calculate total remaining time dynamically (sum vs max)
         if (groupHasChanges) {
-            let groupRemainingMins = 0;
-            gameGroup.campaigns.forEach(c => {
-                (c.drops || []).forEach(d => {
-                    if (!d.is_claimed) {
-                        const req = Number(d.required_minutes) || 0;
-                        const cur = Number(d.current_minutes) || 0;
-                        groupRemainingMins += Math.max(0, req - cur);
-                    }
-                });
+            const uncompletedCampaigns = gameGroup.campaigns.filter(c => {
+                return (c.drops || []).some(d => !d.is_claimed);
             });
-            gameGroup.total_remaining_minutes = groupRemainingMins;
+
+            let totalRemainingMins = 0;
+
+            if (uncompletedCampaigns.length > 0) {
+                const campaignInfoList = uncompletedCampaigns.map(c => {
+                    let campRem = 0;
+                    let hasStarted = false;
+                    (c.drops || []).forEach(d => {
+                        if (!d.is_claimed) {
+                            const req = Number(d.required_minutes) || 0;
+                            const cur = Number(d.current_minutes) || 0;
+                            campRem += Math.max(0, req - cur);
+                            if (cur > 0) hasStarted = true;
+                        }
+                    });
+                    return { remaining: campRem, hasStarted };
+                });
+
+                // Zjistíme, kolik kampaní už reálně začalo těžit (má current_minutes > 0)
+                const startedCount = campaignInfoList.filter(item => item.hasStarted).length;
+
+                if (uncompletedCampaigns.length > 1 && startedCount > 1) {
+                    totalRemainingMins = Math.max(...campaignInfoList.map(item => item.remaining));
+                } else {
+                    totalRemainingMins = campaignInfoList.reduce((sum, item) => sum + item.remaining, 0);
+                }
+            }
+
+            gameGroup.total_remaining_minutes = totalRemainingMins;
 
             const badgeEl = document.querySelector(`.wanted-game-group[data-game-name="${CSS.escape(gameGroup.game_name)}"] .wanted-game-time-badge`);
             if (badgeEl) {
-                const hours = Math.floor(groupRemainingMins / 60);
-                const mins = groupRemainingMins % 60;
+                const hours = Math.floor(totalRemainingMins / 60);
+                const mins = totalRemainingMins % 60;
                 const timeText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
                 badgeEl.innerHTML = `${getStatusIconSVG('active')} ${timeText}`;
             }

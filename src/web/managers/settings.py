@@ -174,14 +174,23 @@ def check_and_update_setting(
 
     setattr(manager._settings, key, new_value)
 
-    # 1. Logování nově přidaných her
+    # 1. Log added and removed games for games_to_watch
     if key == "games_to_watch" and isinstance(new_value, list):
         old_list = old_value if isinstance(old_value, list) else []
-        added_games = [g for g in new_value if g not in old_list]
+        old_set = {g.strip().lower() for g in old_list}
+        new_set = {g.strip().lower() for g in new_value}
+
+        added_games = [g for g in new_value if g.strip().lower() not in old_set]
+        removed_games = [g for g in old_list if g.strip().lower() not in new_set]
+
         if added_games:
             manager._log_change(f"Games added: {', '.join(added_games)}")
-            manager._last_logged_games_count = len(new_value)
-    # 2. Logování změn v filtrech inventáře
+        if removed_games:
+            manager._log_change(f"Games removed: {', '.join(removed_games)}")
+            
+        manager._last_logged_games_count = len(new_value)
+
+    # 2. Log changes in inventory filters
     elif key == "inventory_filters" and isinstance(old_value, dict) and isinstance(new_value, dict):
         changes = []
         all_keys = sorted(set(old_value.keys()) | set(new_value.keys()))
@@ -196,7 +205,7 @@ def check_and_update_setting(
         else:
             manager._log_change(f"Setting changed: {key} = {new_value}")
 
-    # 3. Fallback pro běžná nastavení
+    # 3. Fallback for standard settings
     else:
         manager._log_change(f"Setting changed: {key} = {new_value}")
 

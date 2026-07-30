@@ -194,8 +194,10 @@ function clearInventoryFilters() {
 }
 
 // Renders a single benefit item (icon + name + type)
-function createBenefitItem(benefit) {
-    return makeElement('div', { class: 'benefit-item' }, '', el => {
+function createBenefitItem(benefit, statusClass = '') {
+    const className = statusClass ? `benefit-item ${statusClass}` : 'benefit-item';
+    
+    return makeElement('div', { class: className }, '', el => {
         el.appendChild(makeImageElement(benefit.image_url, benefit.name, 'benefit-icon'));
         el.appendChild(makeElement('div', { class: 'benefit-info' }, '', el2 => {
             el2.appendChild(makeElement('span', { class: 'benefit-name' }, benefit.name));
@@ -243,23 +245,24 @@ function createDropItem(drop, t) {
         )
     );
     
-	// Benefity
+    // Benefity
     const benefitsList = makeElement('div', { class: 'benefits-list' });
     if (drop.benefits && drop.benefits.length > 0) {
         drop.benefits.forEach(benefit => {
-            const benefitEl = createBenefitItem(benefit);
+            // Tady se předává statusClass, aby benefitItem dostal správnou stavovou třídu
+            const benefitEl = createBenefitItem(benefit, statusClass);
             
             // Přidání ikony do každého benefitu
-			const iconHTML = getStatusIconSVG(statusClass);
-			if (iconHTML) {
-				const iconDiv = document.createElement('div');
-				iconDiv.className = 'benefit-status-icon'; // TUTO TŘÍDU CSS ZNÁ
-				iconDiv.style.marginLeft = 'auto';
-				iconDiv.style.display = 'flex';
-				iconDiv.style.alignItems = 'center';
-				iconDiv.innerHTML = iconHTML;
-				benefitEl.appendChild(iconDiv);
-			}
+            const iconHTML = getStatusIconSVG(statusClass);
+            if (iconHTML) {
+                const iconDiv = document.createElement('div');
+                iconDiv.className = 'benefit-status-icon';
+                iconDiv.style.marginLeft = 'auto';
+                iconDiv.style.display = 'flex';
+                iconDiv.style.alignItems = 'center';
+                iconDiv.innerHTML = iconHTML;
+                benefitEl.appendChild(iconDiv);
+            }
             
             benefitsList.appendChild(benefitEl);
         });
@@ -287,20 +290,6 @@ function createDropItem(drop, t) {
     dropItem.appendChild(contentWrapper);
     return dropItem;
 }
-
-function createDropsContainer(drops, t) {
-    const container = document.createElement('div');
-    container.className = 'campaign-drops';
-
-    if (drops && drops.length > 0) {
-        drops.forEach(drop => {
-            container.appendChild(createDropBlock(drop, t));
-        });
-    }
-
-    return container;
-}
-
 function createDropBlock(drop, t) {
     let statusClass = '';
     if (drop.is_claimed) statusClass = 'drop-claimed';
@@ -354,28 +343,8 @@ function createCampaignHeader(campaign) {
     return headerEl;
 }
 
-function createCampaignCard(campaign, t) {
-    let statusClass = '';
-    let statusText = '';
-
-    if (campaign.claimed_drops !== undefined && campaign.total_drops !== undefined && campaign.claimed_drops >= campaign.total_drops) {
-        statusClass = 'completed';
-        statusText = 'Completed'; 
-    } else if (campaign.active) {
-        statusClass = 'active';
-        statusText = t.gui?.inventory?.status?.active || 'Active';
-    } else if (campaign.upcoming) {
-        statusClass = 'upcoming';
-        statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
-    } else if (campaign.expired) {
-        statusClass = 'expired';
-        statusText = t.gui?.inventory?.status?.expired || 'Expired';
-    }
-
-    const card = makeElement('div', { class: `campaign-card ${statusClass}` });
-    const campaignInfo = makeElement('div', { class: 'campaign-info' });
-
-    // --- HLAVIČKA (Header) ---
+// 1. Vytvoření horní hlavičky karty (obrázek, název hry, link, badge)
+function createCardHeaderSection(campaign, statusClass, t) {
     const campaignHeader = makeElement('div', { class: 'campaign-header' });
 
     if (campaign.game_box_art_url) {
@@ -412,25 +381,28 @@ function createCampaignCard(campaign, t) {
         }, campaign.linked ? 'LINKED' : 'NOT LINKED'));
     }));
 
-    campaignInfo.appendChild(campaignHeader);
+    return campaignHeader;
+}
 
-	// --- Status řádek ---
-    const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
+// 2. Vytvoření stavového řádku a časů
+function createCardInfoSection(campaign, statusText, t) {
+    const infoSection = makeElement('div', { class: 'campaign-info' });
 
     const dropsList = campaign.drops || campaign.time_based_drops || [];
     const realClaimed = dropsList.length > 0 
         ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
         : (campaign.claimed_drops || 0);
     const realTotal = dropsList.length > 0 ? dropsList.length : (campaign.total_drops || 0);
+    const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
 
-    campaignInfo.appendChild(makeElement('div', { class: 'campaign-status', style: 'display: flex; justify-content: space-between;' }, '', el => {
+    infoSection.appendChild(makeElement('div', { class: 'campaign-status', style: 'display: flex; justify-content: space-between;' }, '', el => {
         el.appendChild(makeElement('span', {}, statusText));
         el.appendChild(makeElement('span', {}, `${realClaimed} / ${realTotal} ${claimedCountText}`));
     }));
     
-    // --- Tlačítko Link ---
+    // Tlačítko pro propojení účtu
     if (!campaign.linked && campaign.link_url) {
-        campaignInfo.appendChild(makeElement('button', { 
+        infoSection.appendChild(makeElement('button', { 
             class: 'link-account-btn', 
             style: 'width: 100%; margin: 10px 0; padding: 8px; cursor: pointer;' 
         }, 'Link Account', btn => {
@@ -441,31 +413,89 @@ function createCampaignCard(campaign, t) {
         }));
     }
 
-    // --- Timing (Starts/Ends) ---
+    // Časové údaje (Start / Konec)
     if (campaign.starts_at) {
         const startsLabel = t.gui?.inventory?.starts || 'Starts: {time}';
-        campaignInfo.appendChild(makeElement('div', { class: 'campaign-timing' }, 
+        infoSection.appendChild(makeElement('div', { class: 'campaign-timing' }, 
             startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())
         ));
     }
 
     if (campaign.ends_at) {
         const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
-        campaignInfo.appendChild(makeElement('div', { class: 'campaign-timing' }, 
+        infoSection.appendChild(makeElement('div', { class: 'campaign-timing' }, 
             endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())
         ));
     }
 
-	// --- DROPS BLOK ---
+    return infoSection;
+}
+
+// 3. Vytvoření kontejneru se všemi drop bloky a barvami
+function createCardDropsSection(campaign, t) {
     const dropsBox = makeElement('div', { class: 'campaign-drops' });
+    const currentDrop = (typeof state !== 'undefined' && state.currentDrop) || safeGetStorage('app_saved_current_drop');
 
     if (campaign.drops && campaign.drops.length > 0) {
         dropsBox.appendChild(makeElement('div', { class: 'campaign-drop-title' }, campaign.name));
         
         campaign.drops.forEach(drop => {
-            dropsBox.appendChild(createDropBlock(drop, t));
+            let isActivelyMining = false;
+            if (currentDrop) {
+                isActivelyMining = (
+                    (drop.id && currentDrop.id && String(drop.id) === String(currentDrop.id)) ||
+                    (drop.drop_id && currentDrop.drop_id && String(drop.drop_id) === String(currentDrop.drop_id))
+                );
+            }
+
+            const current = Math.round(drop.current_minutes || 0);
+            const required = drop.required_minutes || 0;
+            const isClaimed = drop.is_claimed === true || drop.is_claimed === 1 || drop.is_claimed === 'true' || drop.is_claimed === '1';
+            const canClaim = drop.can_claim === true || drop.can_claim === 1;
+            const isFinished = isClaimed || canClaim || (required > 0 && current >= required);
+
+            const hasProgress = !isActivelyMining && !isFinished && current > 0;
+
+            const dropBlock = createDropBlock(drop, t);
+
+            if (isActivelyMining) {
+                dropBlock.classList.add('active-mining');
+            } else if (hasProgress) {
+                dropBlock.classList.add('in-progress');
+            }
+
+            dropsBox.appendChild(dropBlock);
         });
     }
+
+    return dropsBox;
+}
+
+// Hlavní čistá funkce, která to pouze poskládá dohromady
+function createCampaignCard(campaign, t) {
+    let statusClass = '';
+    let statusText = '';
+
+    if (campaign.claimed_drops !== undefined && campaign.total_drops !== undefined && campaign.claimed_drops >= campaign.total_drops) {
+        statusClass = 'completed';
+        statusText = 'Completed'; 
+    } else if (campaign.active) {
+        statusClass = 'active';
+        statusText = t.gui?.inventory?.status?.active || 'Active';
+    } else if (campaign.upcoming) {
+        statusClass = 'upcoming';
+        statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
+    } else if (campaign.expired) {
+        statusClass = 'expired';
+        statusText = t.gui?.inventory?.status?.expired || 'Expired';
+    }
+
+    const card = makeElement('div', { class: `campaign-card ${statusClass}` });
+    
+    const campaignInfo = createCardInfoSection(campaign, statusText, t);
+    campaignInfo.prepend(createCardHeaderSection(campaign, statusClass, t));
+
+    const dropsBox = createCardDropsSection(campaign, t);
 
     card.replaceChildren(campaignInfo, dropsBox);
     return card;

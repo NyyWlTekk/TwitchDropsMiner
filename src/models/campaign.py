@@ -180,14 +180,38 @@ class DropsCampaign:
     def can_earn_within(self, stamp: datetime) -> bool:
         # Same as can_earn, but doesn't check the channel
         # and uses a future timestamp to see if we can earn this campaign later
-        return (
+        now_utc = datetime.now(timezone.utc)
+        
+        basic_checks = (
             self.eligible
             and self._valid
-            and self.ends_at > datetime.now(timezone.utc)
+            and self.ends_at > now_utc
             and self.starts_at < stamp
             and any(drop._can_earn_within(stamp) for drop in self.drops)
         )
+        
+        if not basic_checks:
+            return False
 
+        # [TIME CHECK] Verify if there is enough time left in the campaign to complete remaining drops
+        if self.ends_at:
+            remaining_drop_mins = sum(
+                max(0, getattr(d, "required_minutes", 0) - getattr(d, "current_minutes", 0))
+                for d in self.drops
+                if not getattr(d, "is_claimed", False)
+                and not (getattr(d, "current_minutes", 0) >= getattr(d, "required_minutes", 0))
+            )
+            
+            time_left_mins = (self.ends_at - now_utc).total_seconds() / 60
+            
+           # print(f"[CAMPAIGN_CHECK] Campaign '{self.name}': Time left: {time_left_mins:.1f}m, Required remaining: {remaining_drop_mins}m")
+            
+            if time_left_mins < remaining_drop_mins:
+               # print(f"[CAMPAIGN_CHECK] Skipping campaign '{self.name}': Not enough time left to complete remaining drops.")
+                return False
+
+        return True
+        
     def bump_minutes(self, channel: Channel) -> None:
         """
         Bump the minute counter for all earnable drops in this campaign.

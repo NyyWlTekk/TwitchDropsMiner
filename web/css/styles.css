@@ -15,8 +15,8 @@ html {
     --bg-panel: #ffffff;
     --text-primary: #333333;
     --text-secondary: #666666;
-    --border-color: #dddddd;
-    --accent-color: #9146ff;
+    --border-color: #9146ff;   /* old one #dddddd; */
+    --accent-color: #9146ff;    /* violet atm */
     --success-color: #00c853;
     --success-rgb: 0, 200, 83;
     --warning-color: #ffa726;
@@ -31,7 +31,7 @@ body.dark-mode {
     --bg-panel: #2a2a2a;
     --text-primary: #e0e0e0;
     --text-secondary: #a0a0a0;
-    --border-color: #444444;
+    --border-color: #9146ff; /* #444444; */
 }
 
 body {
@@ -1860,4 +1860,36 @@ header h1 {
     height: 12px;
 }
 
+/* Právě těžená kampaň – Zelená */
+.wanted-card.active-mining {
+    border-color: #2ecc71; 
+    box-shadow: 0 0 10px rgba(46, 204, 113, 0.3);
+}
+.wanted-card.active-mining .wanted-card-header {
+    background-color: rgba(46, 204, 113, 0.08);
+}
 
+/* Rozpracovaná kampaň s progressem – Žlutá */
+.wanted-card.in-progress {
+    border-color: #f1c40f; 
+    box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
+}
+.wanted-card.in-progress .wanted-card-header {
+    background-color: rgba(241, 196, 15, 0.08);
+}
+
+/* Vnitřní blok - právě těžený (zelený) */
+.drop-block.active-mining {
+    border-color: #2ecc71;
+}
+
+/* Vnitřní blok - rozpracovaný (žlutý jako na obrázku) */
+.drop-block.in-progress {
+    border-color: #f1c40f;
+}
+
+/* Automaticky obarví benefit-item, pokud je uvnitř aktivního/ready/claimed boxu */
+.drop-content-box.drop-active .benefit-item { border-left-color: var(--active-color); background-color: rgba(241, 196, 15, 0.05); }
+.drop-content-box.drop-ready .benefit-item { border-left-color: var(--warning-color); background-color: rgba(230, 126, 34, 0.05); }
+.drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
+.drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }

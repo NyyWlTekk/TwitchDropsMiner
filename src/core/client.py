@@ -274,7 +274,7 @@ class Twitch:
 
     async def get_live_streams(self, game: Game, *, drops_enabled: bool = False) -> list[Channel]:
         return await self._channel_service.get_live_streams(game, drops_enabled=drops_enabled)
-        
+
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
         return self._inventory_service.get_active_campaign(channel)
 
@@ -540,28 +540,53 @@ def get_filtered_inventory(client: Twitch) -> list[DropsCampaign]:
 
 
 def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
+    logger.info("[DEBUG] handle_auto_add_games spuštěna, inventář obsahuje %d položek.", len(filtered_inventory) if client.inventory else 0)
     if not getattr(client.settings, "auto_add_all_games", False) or not client.inventory:
         return
 
     if not isinstance(client.settings.games_to_watch, list):
         client.settings.games_to_watch = []
 
-    # Create a normalized set of current watched games for O(1) lookup
-    existing_games = {g.strip().lower() for g in client.settings.games_to_watch}
-    newly_added = []
-
+    # Zjistíme množinu všech her aktuálně dostupných v inventáři
+    inventory_games = set()
+    inventory_games_original = {}
     for c in filtered_inventory:
         c_game = getattr(c, "game", "")
         c_game_name = c_game.name if hasattr(c_game, "name") else str(c_game)
         c_game_name = c_game_name.strip()
+        if c_game_name:
+            inventory_games.add(c_game_name.lower())
+            inventory_games_original[c_game_name.lower()] = c_game_name
 
-        if c_game_name and c_game_name.lower() not in existing_games:
-            client.settings.games_to_watch.append(c_game_name)
-            existing_games.add(c_game_name.lower())
-            newly_added.append(c_game_name)
+    existing_games = {g.strip().lower(): g for g in client.settings.games_to_watch}
+    newly_added = []
 
-    if newly_added:
-        logger.info("Automatically added new games to watch list: %s", ", ".join(newly_added))
+    # 1. Přidání nových her
+    for c_lower, c_original in inventory_games_original.items():
+        if c_lower not in existing_games:
+            client.settings.games_to_watch.append(c_original)
+            existing_games[c_lower] = c_original
+            newly_added.append(c_original)
+
+    # 2. Odebrání her, které už v aktuálním inventáři nejsou
+    removed_games = []
+    updated_list = []
+    for g in client.settings.games_to_watch:
+        g_lower = g.strip().lower()
+        if g_lower in inventory_games:
+            updated_list.append(g)
+        else:
+            removed_games.append(g)
+
+    client.settings.games_to_watch = updated_list
+
+    # Uložení a notifikace v případě jakékoliv změny
+    if newly_added or removed_games:
+        if newly_added:
+            logger.info("Automatically added new games to watch list: %s", ", ".join(newly_added))
+        if removed_games:
+            logger.info("Automatically removed inactive games from watch list: %s", ", ".join(removed_games))
+            
         client.settings.save()
         if hasattr(client, "socketio"):
             client.socketio.emit("settings_updated", client.settings.__dict__)

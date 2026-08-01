@@ -150,8 +150,6 @@ function renderGameDropdown(searchTerm = '') {
     });
 }
 
-let inventorySaveTimeout = null;
-
 function toggleGameSelection(gameName) {
     const index = selectedInventoryGames.indexOf(gameName);
     if (index >= 0) {
@@ -162,21 +160,11 @@ function toggleGameSelection(gameName) {
 
     console.debug('[Game Filter] Toggled inventory game selection:', gameName, 'Active selection:', selectedInventoryGames);
 
-    // 1. Immediate local UI update (Optimistic UI)
     updateGameTagsDisplay();
     const searchInput = document.getElementById('inventory-game-search');
     renderGameDropdown(searchInput ? searchInput.value : '');
+    saveSettings();
     if (typeof renderInventory === 'function') renderInventory();
-
-    // 2. Buffer / Debounce for server save
-    if (inventorySaveTimeout) {
-        clearTimeout(inventorySaveTimeout);
-    }
-
-    inventorySaveTimeout = setTimeout(() => {
-        console.debug('[Game Filter] Flushing inventory selection to server...');
-        saveSettings();
-    }, 1000); // Wait 1 second before saving
 }
 
 function removeGameTag(gameName) {
@@ -430,6 +418,7 @@ function updateManualModeUI(manualModeInfo) {
 
 let renderGamesDebounceTimer = null;
 
+// Toto je hlavní funkce, kterou volá těch 17 míst – teď už je zcela „imunní“ proti spamování
 function renderGamesToWatch() {
     if (renderGamesDebounceTimer) {
         clearTimeout(renderGamesDebounceTimer);
@@ -438,9 +427,10 @@ function renderGamesToWatch() {
     renderGamesDebounceTimer = setTimeout(() => {
         renderGamesDebounceTimer = null;
         _performRenderGamesToWatch();
-    }, 150);
+    }, 150); // Počká 150 ms na zklidnění všech socketů/kliknutí
 }
 
+// Sem schovej celou původní logiku vykreslování
 function _performRenderGamesToWatch() {
     const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
     
@@ -519,6 +509,7 @@ function renderSelectedGames(games) {
         return;
     }
 
+    // Vytvoříme fragment pro hromadné vložení najednou
     const fragment = document.createDocumentFragment();
 
     games.forEach((game, index) => {
@@ -554,9 +545,11 @@ function renderSelectedGames(games) {
             });
         }
 
+        // Přidáme do fragmentu, nikoliv rovnou do DOMu
         fragment.appendChild(div);
     });
 
+    // Vložíme do DOMu naráz až na samém konci
     container.appendChild(fragment);
 }
 
@@ -690,8 +683,6 @@ function handleDragEnd(e) {
     console.debug('[Game List] Priority order updated via drag-and-drop.');
 }
 
-let watchSaveTimeout = null;
-
 function toggleGameWatch(gameName, checked) {
     const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
     if (isIgnoreMode) return;
@@ -711,19 +702,9 @@ function toggleGameWatch(gameName, checked) {
     state.settings.games_to_watch = games;
     console.debug('[Game List] Toggled watch status:', gameName, 'Checked:', checked);
 
-    // 1. Okamžitá lokální aktualizace rozhraní (Optimistic UI)
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
-
-    // 2. Buffer / Debounce pro uložení na server (počká 1 sekundu na případné další kliknutí)
-    if (watchSaveTimeout) {
-        clearTimeout(watchSaveTimeout);
-    }
-
-    watchSaveTimeout = setTimeout(() => {
-        console.debug('[Game List] Flushing watch settings to server...');
-        saveSettings();
-    }, 1000);
+    saveSettings();
 }
 
 function removeGameFromWatch(gameName) {
@@ -931,9 +912,6 @@ async function toggleGameIgnore(game, isIgnored) {
     }
 
     // 1. Okamžitá lokální aktualizace rozhraní (Optimistic UI)
-    if (typeof renderGamesToWatch === 'function') {
-        renderGamesToWatch();
-    }
     if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
         renderWantedItems(state.wantedItemsTree);
     }
@@ -946,11 +924,13 @@ async function toggleGameIgnore(game, isIgnored) {
 
     console.debug('[Game List] Updated game ignore status locally:', game, 'IsIgnored:', isIgnored);
 
-    // 2. Buffer / Debounce pro uložení na server (zkráceno na 1000ms pro svižnější odezvu)
+    // 2. Buffer / Debounce pro uložení na server
+    // Zrušíme předchozí běžící časovač, pokud uživatel zběsile kliká dál
     if (settingsSaveTimeout) {
         clearTimeout(settingsSaveTimeout);
     }
 
+    // Nastavíme zpoždění (např. 5 sekund klidu, případně lze prodloužit na minutu)
     settingsSaveTimeout = setTimeout(async () => {
         console.debug('[Game List] Flushing batched ignore settings to server...');
         await saveSettings();
@@ -958,7 +938,7 @@ async function toggleGameIgnore(game, isIgnored) {
         if (typeof startCombinedRotation === 'function') {
             startCombinedRotation(true);
         }
-    }, 1000); 
+    }, 5000); 
 }
 
 function applyAutoAddIfNeeded() {
@@ -1115,10 +1095,6 @@ async function saveSettings() {
     const getValue = (id, fallback = 0) => { const el = document.getElementById(id); return el ? parseInt(el.value) : fallback; };
     const getChecked = (id) => { const el = document.getElementById(id); return el ? el.checked : false; };
 
-    // Zajištění, že se aktuální vybrané hry v inventáři propíší do filtrů
-    const inventoryFilters = typeof getInventoryFilters === 'function' ? getInventoryFilters() : {};
-    inventoryFilters.game_name_search = selectedInventoryGames;
-
     const settings = {
         dark_mode: getChecked('dark-mode'),
         language: document.getElementById('language')?.value || '',
@@ -1126,7 +1102,7 @@ async function saveSettings() {
         minimum_refresh_interval_minutes: getValue('minimum-refresh-interval', 30),
         proxy: state.settings?.proxy || '',
         games_to_watch: state.settings?.games_to_watch || [],
-        inventory_filters: inventoryFilters,
+        inventory_filters: typeof getInventoryFilters === 'function' ? getInventoryFilters() : {},
         auto_sort_by_end: getChecked('auto-sort-by-end'),
         mine_badges_first: getChecked('mine-badges-first'),
         auto_add_all_games: getChecked('auto-add-all-games'),
@@ -1487,6 +1463,7 @@ async function reloadCampaigns() {
     }
 }
 
+
 // ==================== Tab and Button Management ====================
 
 function switchTab(tabName) {
@@ -1508,6 +1485,7 @@ function switchTab(tabName) {
 function updateUIState() {
     const isAutoAddEnabled = document.getElementById('auto-add-all-games')?.checked;
 
+    // 1. Disable bulk selection buttons
     const buttons = [
         document.getElementById('select-all-btn'), 
         document.getElementById('deselect-all-btn')
@@ -1517,6 +1495,7 @@ function updateUIState() {
         if (btn) btn.disabled = isAutoAddEnabled;
     });
 
+    // 2. Disable individual game checkboxes
     document.querySelectorAll('.game-checkbox').forEach(cb => {
         cb.disabled = isAutoAddEnabled;
     });
@@ -1527,18 +1506,21 @@ function updateUIState() {
 document.addEventListener('DOMContentLoaded', () => {
     fetchAndDisplayVersion();
 
+    // Tab switching
     document.querySelectorAll('.tab-button').forEach(button => {
         button.addEventListener('click', () => {
             switchTab(button.dataset.tab);
         });
     });
 
+    // Login form
     const loginBtn = document.getElementById('login-button');
     if (loginBtn) loginBtn.addEventListener('click', submitLogin);
 
     const oauthBtn = document.getElementById('oauth-confirm');
     if (oauthBtn) oauthBtn.addEventListener('click', confirmOAuth);
 
+    // Settings - auto-save on change
     const darkModeCb = document.getElementById('dark-mode');
     if (darkModeCb) {
         darkModeCb.addEventListener('change', (e) => {
@@ -1623,6 +1605,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Games to watch management
     const selectAllBtn = document.getElementById('select-all-btn');
     if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllGames);
 
@@ -1638,6 +1621,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const gamesFilterInput = document.getElementById('games-filter');
     if (gamesFilterInput) gamesFilterInput.addEventListener('input', renderGamesToWatch);
 
+    // Inventory filters
     const bindInvFilter = (id) => {
         const el = document.getElementById(id);
         if (el && typeof onInventoryFilterChange === 'function') {
@@ -1660,11 +1644,13 @@ document.addEventListener('DOMContentLoaded', () => {
         clearFiltersBtn.addEventListener('click', clearInventoryFilters);
     }
 
+    // Mining benefit settings
     bindSave('mining-benefit-item');
     bindSave('mining-benefit-badge');
     bindSave('mining-benefit-emote');
     bindSave('mining-benefit-unknown');
 
+    // Inventory game search dropdown
     const gameSearchInput = document.getElementById('inventory-game-search');
     if (gameSearchInput) {
         gameSearchInput.addEventListener('focus', () => {
@@ -1676,6 +1662,7 @@ document.addEventListener('DOMContentLoaded', () => {
         gameSearchInput.addEventListener('keydown', handleGameSearchKeydown);
     }
 
+    // Click outside to close dropdown
     document.addEventListener('click', (e) => {
         const container = document.querySelector('.game-dropdown-container');
         if (container && !container.contains(e.target) && gameDropdownVisible) {
@@ -1683,6 +1670,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Manual mode controls
     const exitManualBtn = document.getElementById('exit-manual-btn');
     if (exitManualBtn) {
         exitManualBtn.addEventListener('click', exitManualMode);
@@ -1700,6 +1688,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const TRUSTED_HELP_LINKS = new Set(['https://www.twitch.tv/drops/campaigns']);
 
+/**
+ * @param {string} tag
+ * @param {Record<string, string|number|boolean>} attrs
+ * @param {string|number|null} text
+ * @param {(el: HTMLElement) => void|null} callback
+ */
 function makeElement(tag, attrs = {}, text = null, callback = null) {
     const el = document.createElement(tag);
     Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
@@ -1761,12 +1755,17 @@ function appendTrustedHelpContent(parent, text) {
 
 function getStatusIconSVG(statusClass) {
     const icons = {
+        // Drops
         'completed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
         'ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
         'drop-claimed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
+        // Gift icon for "Ready"
         'drop-ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
+        // Circle cross icon for "Expired"
         'drop-expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`,
         'drop-active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
+        
+        // Campaigns
         'active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
         'upcoming': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
         'expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`

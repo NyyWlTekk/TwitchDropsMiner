@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+
 from contextlib import suppress
 from time import time
 from typing import TYPE_CHECKING, NoReturn
@@ -58,26 +60,28 @@ class WatchService:
         campaign requirements (ACL, account linking, completion state).
         """
         if not channel.online:
-            logger.debug("Cannot watch %s: Channel is offline.", channel.name)
+            logger.info("Cannot watch %s: Channel is offline.", channel.name)
             return False
 
         if not channel.drops_enabled:
-            logger.debug("Cannot watch %s: Drops are disabled on channel.", channel.name)
+            logger.info("Cannot watch %s: Drops are disabled on channel.", channel.name)
             return False
 
         if channel.game is None:
-            logger.debug("Cannot watch %s: Channel has no active game.", channel.name)
+            logger.info("Cannot watch %s: Channel has no active game.", channel.name)
             return False
 
         # Compare names/IDs to prevent typing mismatched bugs
         channel_game_name = channel.game.name if hasattr(channel.game, 'name') else str(channel.game)
         settings = getattr(self._twitch, "settings", None)
 
+     #   logger.info("-> Evaluating channel '%s' playing game '%s'", channel.name, channel_game_name)
+
         # Check game eligibility based on auto_add_all_games and ignored_games
         if settings and getattr(settings, "auto_add_all_games", False):
             ignored_games = getattr(settings, "ignored_games", [])
             if channel_game_name in ignored_games:
-                logger.debug(
+                logger.info(
                     "Cannot watch %s: Game '%s' is in ignored games list.",
                     channel.name,
                     channel_game_name,
@@ -85,15 +89,16 @@ class WatchService:
                 return False
         else:
             if not self._twitch.wanted_games:
-                logger.debug("Cannot watch %s: No wanted games configured.", channel.name)
+                logger.info("Cannot watch %s: No wanted games configured.", channel.name)
                 return False
 
             game_names = [g.name if hasattr(g, 'name') else str(g) for g in self._twitch.wanted_games]
             if channel_game_name not in game_names:
-                logger.debug(
-                    "Cannot watch %s: Game '%s' is not in wanted games list.",
+                logger.info(
+                    "Cannot watch %s: Game '%s' is NOT in wanted games list. Wanted list: %s",
                     channel.name,
                     channel_game_name,
+                    game_names,
                 )
                 return False
 
@@ -104,11 +109,11 @@ class WatchService:
                 can = campaign.can_earn(channel)
                 
                 if can:
-                    logger.debug(
-                        "Campaign '%s' is eligible for channel %s.",
-                        campaign.name,
-                        channel.name,
-                    )
+   #                 logger.info(
+   #                     " Campaign '%s' is eligible for channel %s.",
+    #                    campaign.name,
+    #                    channel.name,
+     #               )
                     matching_campaigns.append(campaign)
                 else:
                     # Build detailed explanation why can_earn returned False
@@ -123,14 +128,18 @@ class WatchService:
                             reasons.append("channel not in ACL list")
 
                     reason_msg = ", ".join(reasons) if reasons else "can_earn condition failed"
-                    logger.debug(
-                        "Campaign '%s' rejected for %s (Reason: %s).",
-                        campaign.name,
-                        channel.name,
-                        reason_msg,
-                    )
+           #         logger.info(
+            #            "❌ Campaign '%s' rejected for %s (Reason: %s).",
+             #           campaign.name,
+              #          channel.name,
+               #         reason_msg,
+                #    )
 
         if not matching_campaigns:
+            if not self._twitch.inventory:
+                logger.info("Inventory is currently empty during sync, waiting for campaigns update...")
+                time.sleep(1)  # Synchronous pause
+
             logger.info(
                 "Skipping channel %s for game '%s': No earnable campaigns active.",
                 channel.name,
@@ -233,39 +242,46 @@ class WatchService:
 
         This loop:
         1. Waits for a channel to watch
-        2. Sends watch payload to the channel
-        3. Waits ~20 seconds for websocket progress update
-        4. If no update received, queries drop progress via GQL or estimates it
-        5. Sleeps until next watch interval (~20 seconds)
-        6. Repeats
-
-        The loop handles cases where Twitch temporarily stops reporting progress
-        by falling back to GQL queries or minute bumping.
+        2. Validates if channel can still be watched
+        3. Sends watch payload to the channel
+        4. Waits ~20 seconds for websocket progress update
+        5. If no update received, queries drop progress via GQL or estimates it
+        6. Sleeps until next watch interval (~20 seconds)
+        7. Repeats
         """
         interval: float = WATCH_INTERVAL.total_seconds()
 
         while True:
             channel: Channel = await self._twitch.watching_channel.get()
 
+            # --- KONTROLA ELIGIBILITY KANÁLU/HRY ---
+            # Pokud hra padla do ignoru nebo kanál už nelze sledovat,
+            # okamžitě ukončíme sledování a přerušíme tuto vnitřní smyčku!
+            if not self.can_watch(channel):
+                logger.info("Channel %s is no longer watchable. Dropping current watch target.", channel.name)
+                self.stop_watching()
+                # Vyprázdníme sledovaný kanál, aby se smyčka vrátila k čekání na nový target
+                continue
+
             # --- POJISTKA: Debugování stavu ---
             channel_campaigns = [c for c in self._twitch.inventory if c.game == channel.game]
             active_campaign = self._twitch._inventory_service.get_active_campaign(channel)
             
-            logger.info(f"DEBUG: Checking {channel.name}. Active campaign found: {active_campaign is not None}")
+            logger.info("DEBUG: Checking %s. Active campaign found: %s", channel.name, active_campaign is not None)
             
             if active_campaign:
-                logger.info(f"DEBUG: Active campaign progress: {getattr(active_campaign, 'progress', 'N/A')}%")
+                logger.info("DEBUG: Active campaign progress: %s%%", getattr(active_campaign, 'progress', 'N/A'))
             
-            # Původní logika, ale přidáme kontrolu i pro případ, že kampaň už není "aktivní"
+            # Pokud je kampaň na 100 %, ukončíme sledování tohoto kanálu
             if active_campaign and active_campaign.progress >= 100:
-                logger.info(f"Skipping {channel.name}: Active campaign at 100%.")
+                logger.info("Skipping %s: Active campaign at 100%%.", channel.name)
                 self.stop_watching()
                 continue
 
             channel_drops = getattr(channel, 'drops', [])
             
             if channel_drops and not any(drop.can_earn() for drop in channel_drops):
-                logger.info(f"Stopping watch for {channel.name}: No drops left to earn.")
+                logger.info("Stopping watch for %s: No drops left to earn.", channel.name)
                 self.stop_watching()
                 continue
 
@@ -273,25 +289,26 @@ class WatchService:
                 self.stop_watching()
                 continue
 
-            # logger.log(CALL, f"Sending watch payload to: {channel.name}")
+            # Odeslání watch payloadu
             succeeded: bool = await channel.send_watch()
             last_sent: float = time()
 
             if not succeeded:
-                logger.log(CALL, f"Watch requested failed for channel: {channel.name}")
+                logger.log(CALL, "Watch request failed for channel: %s", channel.name)
 
-            # wait ~20 seconds for a progress update
+            # Počkáme ~20 sekund na websocket update
             await asyncio.sleep(20)
 
+            # Opětovná kontrola po 20s spánku (pokud někdo klikl v GUI na Ignore během spánku)
+            if not self.can_watch(channel):
+                logger.info("Channel %s became unwatchable during loop interval. Stopping watch.", channel.name)
+                self.stop_watching()
+                continue
+
             if self._twitch.gui.progress.minute_almost_done():
-                # If the previous update was more than ~60s ago, and the progress tracker
-                # isn't counting down anymore, that means Twitch has temporarily
-                # stopped reporting drop's progress. To ensure the timer keeps at least somewhat
-                # accurate time, we can use GQL to query for the current drop,
-                # or even "pretend" mining as a last resort option.
                 handled: bool = False
 
-                # Solution 1: use GQL to query for the currently mined drop status
+                # Solution 1: GQL dotaz na aktuální drop
                 try:
                     context = await self._twitch.gql_request(
                         GQL_OPERATIONS["CurrentDrop"].with_variables({"channelID": str(channel.id)})
@@ -310,16 +327,14 @@ class WatchService:
                             f"{gql_drop.name} ({gql_drop.campaign.game}, "
                             f"{gql_drop.current_minutes}/{gql_drop.required_minutes})"
                         )
-                        logger.log(CALL, f"Drop progress from GQL: {drop_text}")
+                        logger.log(CALL, "Drop progress from GQL: %s", drop_text)
                         handled = True
 
-                # Solution 2: If GQL fails, figure out which campaign we're most likely mining
-                # right now, and then bump up the minutes on it's drops
+                # Solution 2: Bumping minut při výpadku GQL
                 if not handled:
                     active_campaign = self._twitch._inventory_service.get_active_campaign(channel)
                     if active_campaign is not None:
                         active_campaign.bump_minutes(channel)
-                        # NOTE: This usually gets overwritten below
                         drop_text = f"Unknown drop ({active_campaign.game})"
                         if (active_drop := active_campaign.first_drop) is not None:
                             active_drop.display()
@@ -327,7 +342,7 @@ class WatchService:
                                 f"{active_drop.name} ({active_drop.campaign.game}, "
                                 f"{active_drop.current_minutes}/{active_drop.required_minutes})"
                             )
-                        logger.log(CALL, f"Drop progress from active search: {drop_text}")
+                        logger.log(CALL, "Drop progress from active search: %s", drop_text)
                         handled = True
                     else:
                         logger.log(CALL, "No active drop could be determined")

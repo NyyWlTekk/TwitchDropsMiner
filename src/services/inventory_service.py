@@ -130,8 +130,7 @@ class InventoryService:
             asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
             for campaigns_chunk in chunk(available_campaigns.items(), 20)
         ]
-        # DEBUG: Dump full JSON of the first campaign of each status to see the exact GQL schema
-        logger.info(f"Inventory fetched: {len(available_list)} total campaigns available from Twitch.")
+        logger.info("Inventory fetched: %d total campaigns available from Twitch.", len(available_list))
 
         try:
             for coro in asyncio.as_completed(fetch_campaigns_tasks):

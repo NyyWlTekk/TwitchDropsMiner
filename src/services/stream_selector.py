@@ -29,10 +29,8 @@ class StreamSelector:
                 g_name = campaign.game.name if hasattr(campaign.game, "name") else str(campaign.game)
                 if g_name.lower() not in ignored_games_lower and g_name not in target_game_names:
                     target_game_names.append(g_name)
-            logger.debug("Auto-add enabled: evaluated %d target games from active inventory.", len(target_game_names))
         else:
             target_game_names = settings.games_to_watch
-            logger.debug("Auto-add disabled: evaluating %d games from watch list.", len(target_game_names))
 
         for game_name in target_game_names:
             wanted_campaigns = []
@@ -48,7 +46,6 @@ class StreamSelector:
                     game_obj = campaign.game
 
                 if not campaign.can_earn_within(next_hour):
-                    logger.debug("Skipping campaign '%s' for game '%s': drops cannot be earned within time limit.", campaign.name, game_name)
                     continue
 
                 wanted_drops = []
@@ -130,8 +127,6 @@ class StreamSelector:
                     }
                 )
 
-        logger.info("Building wanted games list: found %d eligible games.", len(wanted_games))
-
         # --- SORT WANTED GAMES QUEUE ---
         def get_game_sort_key(game_item):
             end_times = []
@@ -161,7 +156,6 @@ class StreamSelector:
         if getattr(settings, "auto_sort_by_end", True):
             wanted_games.sort(key=get_game_sort_key)
 
-            # Log the sorted queue order and campaign end dates
             queue_log = []
             for g in wanted_games:
                 e_str = "N/A"
@@ -171,9 +165,7 @@ class StreamSelector:
                         e_str = min(e_times)
                 queue_log.append(f"{g['game_name']} (Ends: {e_str})")
 
-            logger.info("Wanted games queue sorted by ending time: %s", " -> ".join(queue_log))
-        else:
-            logger.info("Auto-sorting disabled. Using default game order: %s", ", ".join([g['game_name'] for g in wanted_games]))
+            logger.info("Wanted games queue: %s", " -> ".join(queue_log))
 
         # Clean up internal raw datetimes before returning payload
         for g in wanted_games:
@@ -190,6 +182,4 @@ class StreamSelector:
         ]
 
     def get_wanted_games(self, settings: Settings, campaigns: list[DropsCampaign]) -> list[Game]:
-        games = [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]
-        logger.debug("Retrieved %d wanted game objects for watching.", len(games))
-        return games
+        return [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]

@@ -431,21 +431,26 @@ function createCardInfoSection(campaign, statusText, t) {
     return infoSection;
 }
 
-// 3. Vytvoření kontejneru se všemi drop bloky a barvami
+/**
+ * [INFO] Clean rendering of campaign drops without storage cache hacks.
+ */
 function createCardDropsSection(campaign, t) {
     const dropsBox = makeElement('div', { class: 'campaign-drops' });
-    const currentDrop = (typeof state !== 'undefined' && state.currentDrop) || safeGetStorage('app_saved_current_drop');
+    
+    // Čistě aktuální stav ze state bez jakéhokoliv sahat do úložiště
+    const currentDrop = (typeof state !== 'undefined' && state.currentDrop) || null;
 
     if (campaign.drops && campaign.drops.length > 0) {
         dropsBox.appendChild(makeElement('div', { class: 'campaign-drop-title' }, campaign.name));
         
         campaign.drops.forEach(drop => {
+            // Sjednocené ID z dat serveru (podpora pro id i drop_id)
+            const dropId = drop.id || drop.drop_id || '';
             let isActivelyMining = false;
-            if (currentDrop) {
-                isActivelyMining = (
-                    (drop.id && currentDrop.id && String(drop.id) === String(currentDrop.id)) ||
-                    (drop.drop_id && currentDrop.drop_id && String(drop.drop_id) === String(currentDrop.drop_id))
-                );
+            
+            if (currentDrop && dropId) {
+                const currentId = currentDrop.id || currentDrop.drop_id || '';
+                isActivelyMining = currentId && String(dropId) === String(currentId);
             }
 
             const current = Math.round(drop.current_minutes || 0);
@@ -456,7 +461,13 @@ function createCardDropsSection(campaign, t) {
 
             const hasProgress = !isActivelyMining && !isFinished && current > 0;
 
+            // Vytvoření bloku dropu
             const dropBlock = createDropBlock(drop, t);
+            
+            // JISTOTA PRO DOM: Vynucení správného UUID v atributu, aby progress.js prvek vždy našel
+            if (dropId && dropBlock && typeof dropBlock.setAttribute === 'function') {
+                dropBlock.setAttribute('data-drop-id', String(dropId));
+            }
 
             if (isActivelyMining) {
                 dropBlock.classList.add('active-mining');

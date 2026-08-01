@@ -1,0 +1,1752 @@
+diff --git a/src/core/client.py b/src/core/client.py
+index a97201a..48df92f 100644
+--- a/src/core/client.py
++++ b/src/core/client.py
+@@ -494,159 +494,224 @@ async def handle_state_channel_switch(client: Twitch) -> None:
+         client.change_state(State.IDLE)
+ 
+ 
+-# ==============================================================================
++## ==============================================================================
+ # 4. STATE MACHINE AUXILIARY WORKERS (Flat module level - 0 Indentations)
+ # ==============================================================================
+ 
+ async def claim_eligible_drops(client: Twitch) -> None:
+-    logger.debug(f"DEBUG: Počet kampaní v inventory: {len(client.inventory)}")
++    logger.debug("Campaign count in inventory: %d", len(client.inventory))
+ 
+     for campaign in client.inventory:
+-        # Kontrola linknutí
+         if not getattr(campaign, "linked", True):
+             client.ignored_count += 1
+             continue
+ 
+         if not campaign.upcoming:
+             for drop in campaign.drops:
+-                # 1. Kontrola, zda je drop připraven k vyzvednutí
+                 if drop.can_claim:
+-                    logger.info(f"🚀 Pokus o claim dropu: {drop.name} (ID: {drop.id})")
++                    logger.info("Attempting to claim drop: %s (ID: %s)", drop.name, drop.id)
+ 
+-                    # 2. THROTTLING: Pauza mezi claimy, aby bot nespamoval API
+                     await asyncio.sleep(2)
+ 
+-                    # 3. Pokus o claim
+                     if await drop.claim():
+                         client.claimed_count += 1
+-                        logger.info(f"✅ Úspěšně claimnuto: {drop.name}! (Celkem v relaci: {client.claimed_count})")
++                        logger.info(
++                            "Successfully claimed drop: %s (Total session claims: %d)",
++                            drop.name,
++                            client.claimed_count,
++                        )
+                     else:
+-                        # Zde uvidíš varování, pokud se claim nezdařil
+-                        logger.warning(f"❌ Claim selhal pro drop: {drop.name} (ID: {drop.id}) - Twitch vrátil chybu nebo byl drop odmítnut.")
+-
+-                # 4. DEBUG: Pokud není drop připraven, vypíše proč
++                        logger.warning(
++                            "Claim failed for drop: %s (ID: %s)",
++                            drop.name,
++                            drop.id,
++                        )
+                 else:
+-                    # Pokud má drop atributy pro minuty, vypíšeme progress pro přehled
+                     if hasattr(drop, "current_minutes") and hasattr(drop, "required_minutes"):
+                         if drop.current_minutes < drop.required_minutes:
+                             progress = (drop.current_minutes / drop.required_minutes) * 100
+-                            logger.debug(f"⏳ Drop {drop.name} není hotový: {drop.current_minutes}/{drop.required_minutes} min ({progress:.1f}%)")
++                            logger.debug(
++                                "Drop %s in progress: %d/%d min (%.1f%%)",
++                                drop.name,
++                                drop.current_minutes,
++                                drop.required_minutes,
++                                progress,
++                            )
+                     else:
+-                        logger.debug(f"ℹ️ Drop {drop.name} zatím nelze claimovat (can_claim=False).")
++                        logger.debug("Drop %s cannot be claimed yet (can_claim=False)", drop.name)
+ 
+ 
+ def get_filtered_inventory(client: Twitch) -> list[DropsCampaign]:
+     return [c for c in client.inventory if getattr(c, "progress", 0) < 100]
+ 
+ 
++# ==========================================
++# Handlers for Ignored & Auto-Added Games
++# ==========================================
++
++def handle_ignored_games_update(client: Twitch, new_ignored_games: list[str]) -> None:
++    logger.info("==================================================")
++    logger.info("[DEBUG-IGN] Event received. New ignored games: %s", new_ignored_games)
++
++    normalized_ignored = [g.strip() for g in new_ignored_games if g]
++    client.settings.ignored_games = normalized_ignored
++    client.settings.save()
++
++    # 1. Rebuild wanted games in client
++    if hasattr(client, "build_wanted_games"):
++        client.build_wanted_games()
++        logger.info("[DEBUG-IGN] Client wanted_games rebuilt: %s", getattr(client, "wanted_games", "N/A"))
++
++    # 2. Check WatchService state
++    watch_service = getattr(client, "watch_service", None)
++    if watch_service:
++        current_stream = getattr(watch_service, "current_stream", None)
++        logger.info("[DEBUG-IGN] Current stream: %s", current_stream)
++        
++        ws_games = getattr(watch_service, "games", None) or getattr(watch_service, "_games", None)
++        logger.info("[DEBUG-IGN] WatchService games before reset: %s", ws_games)
++
++        # Synchronize ignored games directly to watch_service internal state
++        if hasattr(watch_service, "ignored_games"):
++            watch_service.ignored_games = client.settings.ignored_games
++            logger.info("[DEBUG-IGN] Synchronized watch_service.ignored_games: %s", watch_service.ignored_games)
++
++        # 3. Stop and clean WatchService internal state
++        if hasattr(watch_service, "stop_watching"):
++            logger.info("[DEBUG-IGN] Calling watch_service.stop_watching()")
++            watch_service.stop_watching()
++
++        if hasattr(watch_service, "games"):
++            watch_service.games = []
++        if hasattr(watch_service, "channels"):
++            watch_service.channels = []
++
++        # 4. Restart watching loop
++        if hasattr(watch_service, "restart_watching"):
++            logger.info("[DEBUG-IGN] Calling watch_service.restart_watching()")
++            watch_service.restart_watching()
++
++    logger.info("==================================================")
++def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
++    """
++    Sorts games_to_watch based on pending badges and campaign ending times.
++    Serves as the missing handler referenced during client state updates.
++    """
++    logger.info("Auto-sorting games by pending badges and ending time")
++    
++    # 1. Nejprve provést případné auto-přidání / odebrání
++    handle_auto_add_games(client, filtered_inventory)
++
++    if not client.settings.games_to_watch:
++        logger.debug("Skip auto-sorting: games_to_watch is empty.")
++        return
++
++    # Mapování kampaní podle hry
++    campaign_map: dict[str, list[DropsCampaign]] = {}
++    for c in filtered_inventory:
++        c_game = getattr(c, "game", "")
++        c_name = c_game.name if hasattr(c_game, "name") else str(c_game)
++        c_name_lower = c_name.strip().lower()
++        if c_name_lower not in campaign_map:
++            campaign_map[c_name_lower] = []
++        campaign_map[c_name_lower].append(c)
++
++    def sort_key(game_name: str):
++        g_lower = game_name.strip().lower()
++        campaigns = campaign_map.get(g_lower, [])
++        if not campaigns:
++            return (0, float('inf'))
++        
++        # Priorita podle nejbližšího konce kampaně
++        earliest_end = min(
++            (getattr(c, "end_time", float('inf')) for c in campaigns),
++            default=float('inf')
++        )
++        return (1, earliest_end)
++
++    client.settings.games_to_watch.sort(key=sort_key)
++    logger.debug("Games successfully auto-sorted.")
++
++
+ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
+-    logger.info("[DEBUG] handle_auto_add_games spuštěna, inventář obsahuje %d položek.", len(filtered_inventory) if client.inventory else 0)
++    logger.debug(
++        "handle_auto_add_games invoked. Auto-add setting: %s, Inventory count: %d",
++        getattr(client.settings, "auto_add_all_games", False),
++        len(filtered_inventory) if client.inventory else 0,
++    )
++    
+     if not getattr(client.settings, "auto_add_all_games", False) or not client.inventory:
++        logger.debug("Skipping handle_auto_add_games (auto_add_all_games is disabled or inventory empty).")
+         return
+ 
+     if not isinstance(client.settings.games_to_watch, list):
+         client.settings.games_to_watch = []
+ 
+-    # Zjistíme množinu ignorovaných her (v lowercase)
+     ignored_games = {g.strip().lower() for g in getattr(client.settings, "ignored_games", [])}
++    logger.debug("Active ignored_games filter (lowercase): %s", ignored_games)
+ 
+-    # Zjistíme množinu všech her aktuálně dostupných v inventáři (mimo ignorované)
+-    inventory_games = set()
+     inventory_games_original = {}
+     for c in filtered_inventory:
+         c_game = getattr(c, "game", "")
+         c_game_name = c_game.name if hasattr(c_game, "name") else str(c_game)
+         c_game_name = c_game_name.strip()
+         c_lower = c_game_name.lower()
+-        if c_game_name and c_lower not in ignored_games:
+-            inventory_games.add(c_lower)
+-            inventory_games_original[c_lower] = c_game_name
++        
++        if c_game_name:
++            if c_lower in ignored_games:
++                logger.debug("Ignoring campaign game: '%s' (matched ignore list)", c_game_name)
++            else:
++                inventory_games_original[c_lower] = c_game_name
++
++    logger.debug("Filtered inventory games available to watch: %s", list(inventory_games_original.values()))
+ 
+     existing_games = {g.strip().lower(): g for g in client.settings.games_to_watch}
+     newly_added = []
+ 
+-    # 1. Přidání nových her (pouze pokud nejsou ignorované)
++    # 1. Přidání nových her
+     for c_lower, c_original in inventory_games_original.items():
+         if c_lower not in existing_games:
+             client.settings.games_to_watch.append(c_original)
+             existing_games[c_lower] = c_original
+             newly_added.append(c_original)
+ 
+-    # 2. Odebrání her, které už v aktuálním inventáři nejsou NEBO byly přidány do Ignore Listu
++    # 2. Odebrání neaktivních nebo ignorovaných her
+     removed_games = []
+     updated_list = []
+     for g in client.settings.games_to_watch:
+         g_lower = g.strip().lower()
+-        if g_lower in inventory_games and g_lower not in ignored_games:
++        if g_lower in inventory_games_original and g_lower not in ignored_games:
+             updated_list.append(g)
+         else:
+             removed_games.append(g)
+ 
+     client.settings.games_to_watch = updated_list
+ 
+-    # Uložení a notifikace v případě jakékoliv změny
++    # Uložení a reakce na změny
+     if newly_added or removed_games:
+         if newly_added:
+             logger.info("Automatically added new games to watch list: %s", ", ".join(newly_added))
+         if removed_games:
+             logger.info("Automatically removed inactive/ignored games from watch list: %s", ", ".join(removed_games))
+-            
++
+         client.settings.save()
+         if hasattr(client, "socketio"):
+             client.socketio.emit("settings_updated", client.settings.__dict__)
+ 
+-def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
+-    auto_sort = getattr(client.settings, "auto_sort_by_end", False)
+-    mine_badges_first = getattr(client.settings, "mine_badges_first", False)
+-
+-    if (auto_sort or mine_badges_first) and client.inventory:
+-        logger.info("Auto-sorting games by pending badges and ending time")
+-        now_utc = datetime.now(timezone.utc)
+-
+-        # Uložíme si původní indexy pro případ, že auto_sort je vypnutý (zachová ruční pořadí)
+-        original_indices = {game: idx for idx, game in enumerate(client.settings.games_to_watch)}
+-
+-        def get_game_sort_key(game_name: str):
+-            game_campaigns = [
+-                c for c in filtered_inventory
+-                if (c.game.name if hasattr(c.game, "name") else str(c.game)) == game_name
+-            ]
+-            active_c = [c for c in game_campaigns if c.active]
+-            upcoming_c = [c for c in game_campaigns if c.upcoming]
+-            expired_c = [c for c in game_campaigns if c.expired]
+-
+-            # 1. Kontrola, zda aktivní kampaň obsahuje NEDOTĚŽENOU badge
+-            has_pending_badge = False
+-            if mine_badges_first:
+-                for c in active_c:
+-                    for drop in getattr(c, "drops", []):
+-                        is_badge = getattr(drop, "is_badge", False) or "badge" in getattr(drop, "name", "").lower()
+-                        is_claimed = getattr(drop, "claimed", False) or getattr(drop, "completed", False)
+-
+-                        if is_badge and not is_claimed:
+-                            has_pending_badge = True
+-                            break
+-                    if has_pending_badge:
+-                        break
+-
+-            # Priority tier: 0 = Nedotěžená badge (první), 1 = Ostatní
+-            badge_tier = 0 if (mine_badges_first and has_pending_badge) else 1
+-
+-            # 2A. Pokud je ZAPNUTÝ auto_sort podle času:
+-            if auto_sort:
+-                if active_c:
+-                    return (badge_tier, 0, min(c.ends_at for c in active_c))
+-                elif upcoming_c:
+-                    return (badge_tier, 1, min(c.starts_at for c in upcoming_c))
+-                elif expired_c:
+-                    return (badge_tier, 2, max(c.ends_at for c in expired_c))
+-                else:
+-                    return (badge_tier, 3, now_utc)
+-
+-            # 2B. Pokud NENÍ zapnutý auto_sort: zachováme ruční pořadí u her bez badge
+-            return (badge_tier, original_indices.get(game_name, 999))
+-
+-        client.settings.games_to_watch.sort(key=get_game_sort_key)
++        current_watched_game = getattr(client, "current_game", None)
++        if current_watched_game and current_watched_game.strip().lower() in {
++            g.strip().lower() for g in removed_games
++        }:
++            logger.info(
++                "Currently watched game '%s' was removed/ignored during auto-sync. Stopping stream and switching...",
++                current_watched_game,
++            )
++            if hasattr(client, "stop_watching") and callable(client.stop_watching):
++                client.stop_watching()
++            if hasattr(client, "trigger_stream_selection") and callable(client.trigger_stream_selection):
++                client.trigger_stream_selection(force=True)
++    else:
++        logger.debug("No changes in games_to_watch after auto-add sync.")
+ 
+ def prioritize_badge_games(client: Twitch, filtered_inventory: list[DropsCampaign] | None = None) -> None:
+     """
+diff --git a/src/models/campaign.py b/src/models/campaign.py
+index 20f623f..d9c3c6a 100644
+--- a/src/models/campaign.py
++++ b/src/models/campaign.py
+@@ -193,7 +193,7 @@ class DropsCampaign:
+         if not basic_checks:
+             return False
+ 
+-        # [TIME CHECK] Verify if there is enough time left in the campaign to complete remaining drops
++        # Verify if there is enough time left in the campaign to complete remaining drops
+         if self.ends_at:
+             remaining_drop_mins = sum(
+                 max(0, getattr(d, "required_minutes", 0) - getattr(d, "current_minutes", 0))
+@@ -204,10 +204,7 @@ class DropsCampaign:
+             
+             time_left_mins = (self.ends_at - now_utc).total_seconds() / 60
+             
+-           # print(f"[CAMPAIGN_CHECK] Campaign '{self.name}': Time left: {time_left_mins:.1f}m, Required remaining: {remaining_drop_mins}m")
+-            
+             if time_left_mins < remaining_drop_mins:
+-               # print(f"[CAMPAIGN_CHECK] Skipping campaign '{self.name}': Not enough time left to complete remaining drops.")
+                 return False
+ 
+         return True
+@@ -217,13 +214,11 @@ class DropsCampaign:
+         Bump the minute counter for all earnable drops in this campaign.
+         Used when websocket updates aren't available.
+         """
+-        # NOTE: Use a temporary list to ensure all drops are bumped before checking
+         if any(drop._bump_minutes(channel) for drop in self.drops):
+-            # Executes if any drop's extra_current_minutes reach MAX_ESTIMATED_MINUTES
+-            # TODO: Figure out a better way to handle this case
+             logger.warning(
+-                f'At least one of the drops in campaign "{self.name}({self.game.name})" '
+-                "has reached the maximum extra minutes limit!"
++                'At least one drop in campaign "%s (%s)" reached maximum extra minutes limit.',
++                self.name,
++                self.game.name,
+             )
+             self._twitch.change_state(State.CHANNEL_SWITCH)
+         if (first_drop := self.first_drop) is not None:
+diff --git a/src/models/channel.py b/src/models/channel.py
+index cda5f59..8e57cd4 100644
+--- a/src/models/channel.py
++++ b/src/models/channel.py
+@@ -345,7 +345,12 @@ class Channel:
+         try:
+             response: JsonType = await self._twitch.gql_request(self.stream_gql)
+         except MinerException as exc:
++            # [FIX] Handle Twitch GQL PersistedQueryNotFound gracefully without crashing the task
++            if "PersistedQueryNotFound" in str(exc):
++                logger.warning(f"GQL PersistedQueryNotFound encountered for channel {self._login}. Twitch changed query hash.")
++                return None
+             raise MinerException(f"Channel: {self._login}") from exc
++        
+         channel_data: JsonType | None = response["data"]["user"]
+         if not channel_data:
+             return None
+@@ -367,7 +372,7 @@ class Channel:
+                     available_drops_campaigns["data"]["channel"]["viewerDropCampaigns"] or []
+                 )
+         return stream
+-
++        
+     async def update_stream(self) -> bool:
+         """
+         Fetches the current channel stream, and if one exists,
+diff --git a/src/services/inventory_service.py b/src/services/inventory_service.py
+index 37fc3c9..d574384 100644
+--- a/src/services/inventory_service.py
++++ b/src/services/inventory_service.py
+@@ -130,8 +130,7 @@ class InventoryService:
+             asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
+             for campaigns_chunk in chunk(available_campaigns.items(), 20)
+         ]
+-        # DEBUG: Dump full JSON of the first campaign of each status to see the exact GQL schema
+-        logger.info(f"Inventory fetched: {len(available_list)} total campaigns available from Twitch.")
++        logger.info("Inventory fetched: %d total campaigns available from Twitch.", len(available_list))
+ 
+         try:
+             for coro in asyncio.as_completed(fetch_campaigns_tasks):
+diff --git a/src/services/stream_selector.py b/src/services/stream_selector.py
+index 0cfc7f5..b78b565 100644
+--- a/src/services/stream_selector.py
++++ b/src/services/stream_selector.py
+@@ -29,10 +29,8 @@ class StreamSelector:
+                 g_name = campaign.game.name if hasattr(campaign.game, "name") else str(campaign.game)
+                 if g_name.lower() not in ignored_games_lower and g_name not in target_game_names:
+                     target_game_names.append(g_name)
+-            logger.debug("Auto-add enabled: evaluated %d target games from active inventory.", len(target_game_names))
+         else:
+             target_game_names = settings.games_to_watch
+-            logger.debug("Auto-add disabled: evaluating %d games from watch list.", len(target_game_names))
+ 
+         for game_name in target_game_names:
+             wanted_campaigns = []
+@@ -48,7 +46,6 @@ class StreamSelector:
+                     game_obj = campaign.game
+ 
+                 if not campaign.can_earn_within(next_hour):
+-                    logger.debug("Skipping campaign '%s' for game '%s': drops cannot be earned within time limit.", campaign.name, game_name)
+                     continue
+ 
+                 wanted_drops = []
+@@ -130,8 +127,6 @@ class StreamSelector:
+                     }
+                 )
+ 
+-        logger.info("Building wanted games list: found %d eligible games.", len(wanted_games))
+-
+         # --- SORT WANTED GAMES QUEUE ---
+         def get_game_sort_key(game_item):
+             end_times = []
+@@ -161,7 +156,6 @@ class StreamSelector:
+         if getattr(settings, "auto_sort_by_end", True):
+             wanted_games.sort(key=get_game_sort_key)
+ 
+-            # Log the sorted queue order and campaign end dates
+             queue_log = []
+             for g in wanted_games:
+                 e_str = "N/A"
+@@ -171,9 +165,7 @@ class StreamSelector:
+                         e_str = min(e_times)
+                 queue_log.append(f"{g['game_name']} (Ends: {e_str})")
+ 
+-            logger.info("Wanted games queue sorted by ending time: %s", " -> ".join(queue_log))
+-        else:
+-            logger.info("Auto-sorting disabled. Using default game order: %s", ", ".join([g['game_name'] for g in wanted_games]))
++            logger.info("Wanted games queue: %s", " -> ".join(queue_log))
+ 
+         # Clean up internal raw datetimes before returning payload
+         for g in wanted_games:
+@@ -190,6 +182,4 @@ class StreamSelector:
+         ]
+ 
+     def get_wanted_games(self, settings: Settings, campaigns: list[DropsCampaign]) -> list[Game]:
+-        games = [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]
+-        logger.debug("Retrieved %d wanted game objects for watching.", len(games))
+-        return games
++        return [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]
+diff --git a/src/services/watch_service.py b/src/services/watch_service.py
+index e39e13f..e90c82d 100644
+--- a/src/services/watch_service.py
++++ b/src/services/watch_service.py
+@@ -9,6 +9,8 @@ from __future__ import annotations
+ 
+ import asyncio
+ import logging
++import time
++
+ from contextlib import suppress
+ from time import time
+ from typing import TYPE_CHECKING, NoReturn
+@@ -58,26 +60,28 @@ class WatchService:
+         campaign requirements (ACL, account linking, completion state).
+         """
+         if not channel.online:
+-            logger.debug("Cannot watch %s: Channel is offline.", channel.name)
++            logger.info("Cannot watch %s: Channel is offline.", channel.name)
+             return False
+ 
+         if not channel.drops_enabled:
+-            logger.debug("Cannot watch %s: Drops are disabled on channel.", channel.name)
++            logger.info("Cannot watch %s: Drops are disabled on channel.", channel.name)
+             return False
+ 
+         if channel.game is None:
+-            logger.debug("Cannot watch %s: Channel has no active game.", channel.name)
++            logger.info("Cannot watch %s: Channel has no active game.", channel.name)
+             return False
+ 
+         # Compare names/IDs to prevent typing mismatched bugs
+         channel_game_name = channel.game.name if hasattr(channel.game, 'name') else str(channel.game)
+         settings = getattr(self._twitch, "settings", None)
+ 
++     #   logger.info("-> Evaluating channel '%s' playing game '%s'", channel.name, channel_game_name)
++
+         # Check game eligibility based on auto_add_all_games and ignored_games
+         if settings and getattr(settings, "auto_add_all_games", False):
+             ignored_games = getattr(settings, "ignored_games", [])
+             if channel_game_name in ignored_games:
+-                logger.debug(
++                logger.info(
+                     "Cannot watch %s: Game '%s' is in ignored games list.",
+                     channel.name,
+                     channel_game_name,
+@@ -85,15 +89,16 @@ class WatchService:
+                 return False
+         else:
+             if not self._twitch.wanted_games:
+-                logger.debug("Cannot watch %s: No wanted games configured.", channel.name)
++                logger.info("Cannot watch %s: No wanted games configured.", channel.name)
+                 return False
+ 
+             game_names = [g.name if hasattr(g, 'name') else str(g) for g in self._twitch.wanted_games]
+             if channel_game_name not in game_names:
+-                logger.debug(
+-                    "Cannot watch %s: Game '%s' is not in wanted games list.",
++                logger.info(
++                    "Cannot watch %s: Game '%s' is NOT in wanted games list. Wanted list: %s",
+                     channel.name,
+                     channel_game_name,
++                    game_names,
+                 )
+                 return False
+ 
+@@ -104,11 +109,11 @@ class WatchService:
+                 can = campaign.can_earn(channel)
+                 
+                 if can:
+-                    logger.debug(
+-                        "Campaign '%s' is eligible for channel %s.",
+-                        campaign.name,
+-                        channel.name,
+-                    )
++   #                 logger.info(
++   #                     " Campaign '%s' is eligible for channel %s.",
++    #                    campaign.name,
++    #                    channel.name,
++     #               )
+                     matching_campaigns.append(campaign)
+                 else:
+                     # Build detailed explanation why can_earn returned False
+@@ -123,14 +128,18 @@ class WatchService:
+                             reasons.append("channel not in ACL list")
+ 
+                     reason_msg = ", ".join(reasons) if reasons else "can_earn condition failed"
+-                    logger.debug(
+-                        "Campaign '%s' rejected for %s (Reason: %s).",
+-                        campaign.name,
+-                        channel.name,
+-                        reason_msg,
+-                    )
++           #         logger.info(
++            #            "❌ Campaign '%s' rejected for %s (Reason: %s).",
++             #           campaign.name,
++              #          channel.name,
++               #         reason_msg,
++                #    )
+ 
+         if not matching_campaigns:
++            if not self._twitch.inventory:
++                logger.info("Inventory is currently empty during sync, waiting for campaigns update...")
++                time.sleep(1)  # Synchronous pause
++
+             logger.info(
+                 "Skipping channel %s for game '%s': No earnable campaigns active.",
+                 channel.name,
+@@ -233,39 +242,46 @@ class WatchService:
+ 
+         This loop:
+         1. Waits for a channel to watch
+-        2. Sends watch payload to the channel
+-        3. Waits ~20 seconds for websocket progress update
+-        4. If no update received, queries drop progress via GQL or estimates it
+-        5. Sleeps until next watch interval (~20 seconds)
+-        6. Repeats
+-
+-        The loop handles cases where Twitch temporarily stops reporting progress
+-        by falling back to GQL queries or minute bumping.
++        2. Validates if channel can still be watched
++        3. Sends watch payload to the channel
++        4. Waits ~20 seconds for websocket progress update
++        5. If no update received, queries drop progress via GQL or estimates it
++        6. Sleeps until next watch interval (~20 seconds)
++        7. Repeats
+         """
+         interval: float = WATCH_INTERVAL.total_seconds()
+ 
+         while True:
+             channel: Channel = await self._twitch.watching_channel.get()
+ 
++            # --- KONTROLA ELIGIBILITY KANÁLU/HRY ---
++            # Pokud hra padla do ignoru nebo kanál už nelze sledovat,
++            # okamžitě ukončíme sledování a přerušíme tuto vnitřní smyčku!
++            if not self.can_watch(channel):
++                logger.info("Channel %s is no longer watchable. Dropping current watch target.", channel.name)
++                self.stop_watching()
++                # Vyprázdníme sledovaný kanál, aby se smyčka vrátila k čekání na nový target
++                continue
++
+             # --- POJISTKA: Debugování stavu ---
+             channel_campaigns = [c for c in self._twitch.inventory if c.game == channel.game]
+             active_campaign = self._twitch._inventory_service.get_active_campaign(channel)
+             
+-            logger.info(f"DEBUG: Checking {channel.name}. Active campaign found: {active_campaign is not None}")
++            logger.info("DEBUG: Checking %s. Active campaign found: %s", channel.name, active_campaign is not None)
+             
+             if active_campaign:
+-                logger.info(f"DEBUG: Active campaign progress: {getattr(active_campaign, 'progress', 'N/A')}%")
++                logger.info("DEBUG: Active campaign progress: %s%%", getattr(active_campaign, 'progress', 'N/A'))
+             
+-            # Původní logika, ale přidáme kontrolu i pro případ, že kampaň už není "aktivní"
++            # Pokud je kampaň na 100 %, ukončíme sledování tohoto kanálu
+             if active_campaign and active_campaign.progress >= 100:
+-                logger.info(f"Skipping {channel.name}: Active campaign at 100%.")
++                logger.info("Skipping %s: Active campaign at 100%%.", channel.name)
+                 self.stop_watching()
+                 continue
+ 
+             channel_drops = getattr(channel, 'drops', [])
+             
+             if channel_drops and not any(drop.can_earn() for drop in channel_drops):
+-                logger.info(f"Stopping watch for {channel.name}: No drops left to earn.")
++                logger.info("Stopping watch for %s: No drops left to earn.", channel.name)
+                 self.stop_watching()
+                 continue
+ 
+@@ -273,25 +289,26 @@ class WatchService:
+                 self.stop_watching()
+                 continue
+ 
+-            # logger.log(CALL, f"Sending watch payload to: {channel.name}")
++            # Odeslání watch payloadu
+             succeeded: bool = await channel.send_watch()
+             last_sent: float = time()
+ 
+             if not succeeded:
+-                logger.log(CALL, f"Watch requested failed for channel: {channel.name}")
++                logger.log(CALL, "Watch request failed for channel: %s", channel.name)
+ 
+-            # wait ~20 seconds for a progress update
++            # Počkáme ~20 sekund na websocket update
+             await asyncio.sleep(20)
+ 
++            # Opětovná kontrola po 20s spánku (pokud někdo klikl v GUI na Ignore během spánku)
++            if not self.can_watch(channel):
++                logger.info("Channel %s became unwatchable during loop interval. Stopping watch.", channel.name)
++                self.stop_watching()
++                continue
++
+             if self._twitch.gui.progress.minute_almost_done():
+-                # If the previous update was more than ~60s ago, and the progress tracker
+-                # isn't counting down anymore, that means Twitch has temporarily
+-                # stopped reporting drop's progress. To ensure the timer keeps at least somewhat
+-                # accurate time, we can use GQL to query for the current drop,
+-                # or even "pretend" mining as a last resort option.
+                 handled: bool = False
+ 
+-                # Solution 1: use GQL to query for the currently mined drop status
++                # Solution 1: GQL dotaz na aktuální drop
+                 try:
+                     context = await self._twitch.gql_request(
+                         GQL_OPERATIONS["CurrentDrop"].with_variables({"channelID": str(channel.id)})
+@@ -310,16 +327,14 @@ class WatchService:
+                             f"{gql_drop.name} ({gql_drop.campaign.game}, "
+                             f"{gql_drop.current_minutes}/{gql_drop.required_minutes})"
+                         )
+-                        logger.log(CALL, f"Drop progress from GQL: {drop_text}")
++                        logger.log(CALL, "Drop progress from GQL: %s", drop_text)
+                         handled = True
+ 
+-                # Solution 2: If GQL fails, figure out which campaign we're most likely mining
+-                # right now, and then bump up the minutes on it's drops
++                # Solution 2: Bumping minut při výpadku GQL
+                 if not handled:
+                     active_campaign = self._twitch._inventory_service.get_active_campaign(channel)
+                     if active_campaign is not None:
+                         active_campaign.bump_minutes(channel)
+-                        # NOTE: This usually gets overwritten below
+                         drop_text = f"Unknown drop ({active_campaign.game})"
+                         if (active_drop := active_campaign.first_drop) is not None:
+                             active_drop.display()
+@@ -327,7 +342,7 @@ class WatchService:
+                                 f"{active_drop.name} ({active_drop.campaign.game}, "
+                                 f"{active_drop.current_minutes}/{active_drop.required_minutes})"
+                             )
+-                        logger.log(CALL, f"Drop progress from active search: {drop_text}")
++                        logger.log(CALL, "Drop progress from active search: %s", drop_text)
+                         handled = True
+                     else:
+                         logger.log(CALL, "No active drop could be determined")
+diff --git a/src/web/managers/settings.py b/src/web/managers/settings.py
+index f1ecd8b..f700f7f 100644
+--- a/src/web/managers/settings.py
++++ b/src/web/managers/settings.py
+@@ -7,6 +7,8 @@ import logging
+ from collections.abc import Callable
+ from typing import TYPE_CHECKING, Any
+ 
++from src.core.client import handle_ignored_games_update
++
+ from src.i18n.translator import _
+ from src.models.game import Game
+ 
+@@ -111,6 +113,10 @@ def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) ->
+     should_trigger_update |= check_and_update_setting(
+         manager, "games_to_watch", settings_data.get("games_to_watch"), True
+     )
++    # Zde přidáme chybějící zpracování pro ignored_games
++    should_trigger_update |= check_and_update_setting(
++        manager, "ignored_games", settings_data.get("ignored_games"), True
++    )
+     should_trigger_update |= check_and_update_setting(
+         manager, "dark_mode", settings_data.get("dark_mode")
+     )
+@@ -158,7 +164,6 @@ def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) ->
+     if should_trigger_update and manager._on_change:
+         manager._on_change()
+ 
+-
+ def check_and_update_setting(
+     manager: SettingsManager,
+     key: str,
+@@ -187,9 +192,27 @@ def check_and_update_setting(
+             manager._log_change(f"Games added: {', '.join(added_games)}")
+         if removed_games:
+             manager._log_change(f"Games removed: {', '.join(removed_games)}")
+-            
++
+         manager._last_logged_games_count = len(new_value)
+ 
++    # 1.5. Log added and removed games for ignored_games and execute central handler
++    elif key == "ignored_games" and isinstance(new_value, list):
++        old_list = old_value if isinstance(old_value, list) else []
++        old_set = {g.strip().lower() for g in old_list}
++        new_set = {g.strip().lower() for g in new_value}
++
++        added_ignored = [g for g in new_value if g.strip().lower() not in old_set]
++        removed_ignored = [g for g in old_list if g.strip().lower() not in new_set]
++
++        if added_ignored:
++            manager._log_change(f"Ignored games added: {', '.join(added_ignored)}")
++        if removed_ignored:
++            manager._log_change(f"Ignored games removed: {', '.join(removed_ignored)}")
++
++        # Delegate stream interruption, switching, and socket emission to central handler
++        if (added_ignored or removed_ignored) and hasattr(manager, "_twitch") and manager._twitch:
++            handle_ignored_games_update(manager._twitch, new_value)
++
+     # 2. Log changes in inventory filters
+     elif key == "inventory_filters" and isinstance(old_value, dict) and isinstance(new_value, dict):
+         changes = []
+diff --git a/web/index.html b/web/index.html
+index 1974147..a8b830e 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -297,18 +297,19 @@
+                             <button id="sort-by-end-btn" class="small-btn">Sort by end time</button>
+                         </div>
+                     </div>
+-
+-                    <div class="games-container">
+-                        <div class="available-games">
+-                            <h3>Available Games</h3>
+-                            <div id="available-games-list" class="checkbox-list"></div>
+-                        </div>
+-                        
+-                        <div class="selected-games">
+-                            <h3>Selected Games (drag to reorder)</h3>
+-                            <div id="selected-games-list" class="sortable-list"></div>
+-                        </div>
+-                    </div>
++                    
++					<div class="games-container">
++						<div class="available-games">
++							<!-- Přidáno explicitní ID pro spolehlivý JS výběr -->
++							<h3 id="games-heading">Available Games</h3>
++							<div id="available-games-list" class="checkbox-list"></div>
++						</div>
++						
++						<div class="selected-games">
++							<h3>Selected Games (drag to reorder)</h3>
++							<div id="selected-games-list" class="sortable-list"></div>
++						</div>
++					</div>
+ 
+                     <!-- Integrated reload action directly inside the games panel -->
+                     <div class="games-integrated-actions" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color, #333);">
+diff --git a/web/js/index.js b/web/js/index.js
+index 37bc92b..b92ba76 100644
+--- a/web/js/index.js
++++ b/web/js/index.js
+@@ -420,7 +420,7 @@ function updateManualModeUI(manualModeInfo) {
+     }
+ }
+ 
+-// ==================== Games to Watch Management ====================
++// ==================== Games to Watch / Ignore Management ====================
+ 
+ socket.on('games_available', (data) => {
+     availableGames = new Set(data.games || []);
+@@ -429,23 +429,63 @@ socket.on('games_available', (data) => {
+ });
+ 
+ function renderGamesToWatch() {
+-    // Only get data, do not mutate state here
+-    let selectedGames = state.settings.games_to_watch || [];
++    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
++    
++    const leftHeading = document.querySelector('.available-games h3');
++    const rightHeading = document.querySelector('.selected-games h3');
++
++    // Update headings and colors based on active mode
++    if (isIgnoreMode) {
++        if (leftHeading) {
++            leftHeading.textContent = 'Active / Auto-Mined Games';
++            leftHeading.style.color = '#2ecc71';
++        }
++        if (rightHeading) {
++            rightHeading.textContent = 'Ignore List (Blacklisted)';
++            rightHeading.style.color = '#ff4d4d';
++        }
++    } else {
++        if (leftHeading) {
++            leftHeading.textContent = 'Available Games';
++            leftHeading.style.color = '';
++        }
++        if (rightHeading) {
++            rightHeading.textContent = 'Selected Games (Priority Order)';
++            rightHeading.style.color = '#2ecc71';
++        }
++    }
++
+     const filterText = document.getElementById('games-filter')?.value.toLowerCase() || '';
+ 
+-    // Safeguard: Force all watched games into the pool to prevent them from disappearing
+-    selectedGames.forEach(game => availableGames.add(game));
++    if (isIgnoreMode) {
++        const ignoredGames = state?.settings?.ignored_games || [];
++        ignoredGames.forEach(game => availableGames.add(game));
+ 
+-    // Render left side
+-    renderSelectedGames(selectedGames);
++        // Active games (all available MINUS ignored ones)
++        const activeGames = Array.from(availableGames)
++            .filter(game => !ignoredGames.some(ig => ig.toLowerCase() === game.toLowerCase()))
++            .filter(game => game.toLowerCase().includes(filterText))
++            .sort((a, b) => a.localeCompare(b));
+ 
+-    // Render right side
+-    const unselectedGames = Array.from(availableGames)
+-        .filter(game => !selectedGames.includes(game))
+-        .filter(game => game.toLowerCase().includes(filterText))
+-        .sort((a, b) => a.localeCompare(b));
++        const blacklistedGames = ignoredGames
++            .filter(game => game.toLowerCase().includes(filterText))
++            .sort((a, b) => a.localeCompare(b));
++
++        renderAvailableGames(activeGames, filterText);
++        renderSelectedGames(blacklistedGames);
++    } else {
++        const watchedGames = state?.settings?.games_to_watch || [];
++        watchedGames.forEach(game => availableGames.add(game));
++
++        const availableList = Array.from(availableGames)
++            .filter(game => !watchedGames.includes(game))
++            .filter(game => game.toLowerCase().includes(filterText))
++            .sort((a, b) => a.localeCompare(b));
++
++        renderAvailableGames(availableList, filterText);
++        renderSelectedGames(watchedGames);
++    }
+ 
+-    renderAvailableGames(unselectedGames, filterText);
+     updateUIState();
+ }
+ 
+@@ -454,10 +494,14 @@ function renderSelectedGames(games) {
+     if (!container) return;
+ 
+     const t = state.translations;
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
++    
+     container.innerHTML = '';
+ 
+     if (games.length === 0) {
+-        const emptyMsg = t.gui?.settings?.no_games_selected || 'No games selected. Check games below to add them.';
++        const emptyMsg = isIgnoreMode
++            ? (t.gui?.settings?.no_games_ignored || 'No games on ignore list.')
++            : (t.gui?.settings?.no_games_selected || 'No games selected. Check games below to add them.');
+         container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
+         return;
+     }
+@@ -465,24 +509,35 @@ function renderSelectedGames(games) {
+     games.forEach((game, index) => {
+         const div = document.createElement('div');
+         div.className = 'sortable-item';
+-        div.draggable = true;
+         div.dataset.game = game;
+-        div.replaceChildren(
+-            makeElement('span', { class: 'drag-handle' }, '☰'),
+-            makeElement('span', { class: 'priority-number' }, String(index + 1)),
+-            makeElement('span', { class: 'game-name' }, game),
+-            makeElement('button', { class: 'remove-btn' }, '✕'),
+-        );
+-
+-        // Event listener for the delete button
+-        const removeBtn = div.querySelector('.remove-btn');
+-        removeBtn.addEventListener('click', () => removeGameFromWatch(game));
+ 
+-        // Drag event handlers
+-        div.addEventListener('dragstart', handleDragStart);
+-        div.addEventListener('dragover', handleDragOver);
+-        div.addEventListener('drop', handleDrop);
+-        div.addEventListener('dragend', handleDragEnd);
++        if (isIgnoreMode) {
++            // In Ignore Mode, priority and dragging are disabled
++            div.draggable = false;
++            div.replaceChildren(
++                makeElement('span', { class: 'game-name', style: 'flex-grow: 1;' }, game),
++                makeElement('button', { class: 'remove-btn', title: 'Remove from Ignore List' }, '✕')
++            );
++        } else {
++            // Whitelist mode supports drag-and-drop reordering
++            div.draggable = true;
++            div.replaceChildren(
++                makeElement('span', { class: 'drag-handle' }, '☰'),
++                makeElement('span', { class: 'priority-number' }, String(index + 1)),
++                makeElement('span', { class: 'game-name' }, game),
++                makeElement('button', { class: 'remove-btn', title: 'Remove from Watch List' }, '✕')
++            );
++
++            div.addEventListener('dragstart', handleDragStart);
++            div.addEventListener('dragover', handleDragOver);
++            div.addEventListener('drop', handleDrop);
++            div.addEventListener('dragend', handleDragEnd);
++        }
++
++        const removeBtn = div.querySelector('.remove-btn');
++        removeBtn.addEventListener('click', () => {
++            removeGameFromWatch(game);
++        });
+ 
+         container.appendChild(div);
+     });
+@@ -493,9 +548,7 @@ function renderAvailableGames(games, filterText) {
+     if (!container) return;
+ 
+     const t = state.translations;
+-    const isAutoAdd = state.settings?.auto_add_all_games || false;
+-    const ignoredGames = state.settings?.ignored_games || [];
+-    const gamesToWatch = state.settings?.games_to_watch || [];
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+ 
+     container.innerHTML = '';
+ 
+@@ -505,8 +558,8 @@ function renderAvailableGames(games, filterText) {
+             const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
+             container.replaceChildren(makeElement('p', { class: 'empty-message' }, `${emptyMsg}${addHint}`));
+         } else {
+-            const emptyMsg = isAutoAdd 
+-                ? (t.gui?.settings?.no_games_ignored || 'No games on ignore list.')
++            const emptyMsg = isIgnoreMode 
++                ? (t.gui?.settings?.no_active_games || 'No active games available.')
+                 : (t.gui?.settings?.all_games_selected || 'All games are selected or no games available.');
+             container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
+         }
+@@ -514,33 +567,46 @@ function renderAvailableGames(games, filterText) {
+     }
+ 
+     games.forEach(game => {
+-        // Zjistíme, zda má být checkbox zaškrtnutý (v závislosti na režimu Auto-add)
+-        const isChecked = isAutoAdd 
+-            ? ignoredGames.includes(game) 
+-            : gamesToWatch.includes(game);
+-
+         const label = document.createElement('label');
+         label.className = 'game-checkbox';
+-        
+-        const input = makeElement('input', { type: 'checkbox', value: game });
+-        input.checked = isChecked;
+ 
+-        label.replaceChildren(
+-            input,
+-            makeElement('span', {}, game),
+-        );
+-
+-        input.addEventListener('change', (e) => {
+-            if (isAutoAdd) {
+-                // Pokud je zapnutý Auto-add, přepínáme Ignore List
++        if (isIgnoreMode) {
++            // Active games get a block button to add them to the ignore list
++            const ignoreBtn = makeElement('button', { class: 'remove-btn', style: 'margin-right: 8px;', title: 'Add to Ignore List' }, '🚫');
++            ignoreBtn.addEventListener('click', (e) => {
++                e.preventDefault();
++                // Call dedicated handler to ensure instant UI render and Socket.IO emission
+                 if (typeof toggleGameIgnore === 'function') {
+-                    toggleGameIgnore(game, e.target.checked);
++                    toggleGameIgnore(game, true);
++                } else {
++                    // Fallback in case handler is unavailable
++                    if (!state.settings.ignored_games) state.settings.ignored_games = [];
++                    if (!state.settings.ignored_games.some(g => g.toLowerCase() === game.toLowerCase())) {
++                        state.settings.ignored_games.push(game);
++                    }
++                    renderGamesToWatch();
++                    saveSettings();
+                 }
+-            } else {
+-                // Jinak standardní sledování
++            });
++
++            label.replaceChildren(
++                ignoreBtn,
++                makeElement('span', {}, game)
++            );
++        } else {
++            const isChecked = (state.settings?.games_to_watch || []).includes(game);
++            const input = makeElement('input', { type: 'checkbox', value: game });
++            input.checked = isChecked;
++
++            input.addEventListener('change', (e) => {
+                 toggleGameWatch(game, e.target.checked);
+-            }
+-        });
++            });
++
++            label.replaceChildren(
++                input,
++                makeElement('span', {}, game)
++            );
++        }
+ 
+         container.appendChild(label);
+     });
+@@ -586,24 +652,25 @@ function handleDrop(e) {
+ function handleDragEnd(e) {
+     e.target.classList.remove('dragging');
+ 
+-    // Update the order in state
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
++    if (isIgnoreMode) return; // Order does not matter for Ignore List
++
+     const container = document.getElementById('selected-games-list');
+     const items = container.querySelectorAll('.sortable-item');
+     const newOrder = Array.from(items).map(item => item.dataset.game);
+ 
+     state.settings.games_to_watch = newOrder;
+ 
+-    // Re-render to update priority numbers
+     renderSelectedGames(newOrder);
+-
+-    // Re-render channels list to apply updated filter
+-    renderChannels();
+-
+-    // Save settings
++    if (typeof renderChannels === 'function') renderChannels();
+     saveSettings();
+ }
+ 
++// Helper state modification functions
+ function toggleGameWatch(gameName, checked) {
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
++    if (isIgnoreMode) return;
++
+     const games = state.settings.games_to_watch || [];
+ 
+     if (checked && !games.includes(gameName)) {
+@@ -617,33 +684,59 @@ function toggleGameWatch(gameName, checked) {
+ 
+     state.settings.games_to_watch = games;
+     renderGamesToWatch();
+-    renderChannels();
++    if (typeof renderChannels === 'function') renderChannels();
+     saveSettings();
+ }
+ 
+ function removeGameFromWatch(gameName) {
+-    const games = state.settings.games_to_watch || [];
+-    const index = games.indexOf(gameName);
+-    if (index > -1) {
+-        games.splice(index, 1);
+-        state.settings.games_to_watch = games;
+-        renderGamesToWatch();
+-        renderChannels();
+-        saveSettings();
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
++
++    if (isIgnoreMode) {
++        if (typeof toggleGameIgnore === 'function') {
++            toggleGameIgnore(gameName, false);
++            return;
++        }
++    } else {
++        const games = state.settings.games_to_watch || [];
++        const index = games.indexOf(gameName);
++        if (index > -1) {
++            games.splice(index, 1);
++            state.settings.games_to_watch = games;
++        }
+     }
++
++    renderGamesToWatch();
++    if (typeof renderChannels === 'function') renderChannels();
++    saveSettings();
+ }
+ 
+ function selectAllGames() {
+-    state.settings.games_to_watch = Array.from(availableGames).sort();
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
++
++    if (isIgnoreMode) {
++        // Clear ignore list to mine all available games
++        state.settings.ignored_games = [];
++    } else {
++        state.settings.games_to_watch = Array.from(availableGames).sort();
++    }
++
+     renderGamesToWatch();
+-    renderChannels();
++    if (typeof renderChannels === 'function') renderChannels();
+     saveSettings();
+ }
+ 
+ function deselectAllGames() {
+-    state.settings.games_to_watch = [];
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
++
++    if (isIgnoreMode) {
++        // Ignore all available games
++        state.settings.ignored_games = Array.from(availableGames).sort();
++    } else {
++        state.settings.games_to_watch = [];
++    }
++
+     renderGamesToWatch();
+-    renderChannels();
++    if (typeof renderChannels === 'function') renderChannels();
+     saveSettings();
+ }
+ 
+@@ -651,30 +744,29 @@ function addGameFromSearch() {
+     const searchInput = document.getElementById('games-filter');
+     const gameName = searchInput.value.trim();
+ 
+-    if (!gameName) {
+-        return;
+-    }
++    if (!gameName) return;
+ 
+-    const games = state.settings.games_to_watch || [];
+-    
+-    // Check if already selected
+-    if (games.includes(gameName)) {
+-        searchInput.value = ''; // Clear input if already added
+-        renderGamesToWatch(); // Just re-render to clear any filtering state if needed
+-        return;
+-    }
++    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+ 
+-    // Add to selected games
+-    games.push(gameName);
+-    state.settings.games_to_watch = games;
++    if (isIgnoreMode) {
++        // Adding a game manually in ignore mode removes it from ignored_games
++        if (state.settings.ignored_games) {
++            state.settings.ignored_games = state.settings.ignored_games.filter(
++                g => g.toLowerCase() !== gameName.toLowerCase()
++            );
++        }
++    } else {
++        const games = state.settings.games_to_watch || [];
++        if (!games.includes(gameName)) {
++            games.push(gameName);
++            state.settings.games_to_watch = games;
++        }
++    }
+ 
+-    // Add to available games set so it shows up in lists
+     availableGames.add(gameName);
+-
+-    // Clear search and update UI
+     searchInput.value = '';
+     renderGamesToWatch();
+-    renderChannels();
++    if (typeof renderChannels === 'function') renderChannels();
+     saveSettings();
+ }
+ 
+@@ -767,12 +859,34 @@ async function toggleGameIgnore(game, isIgnored) {
+         state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
+     }
+ 
++    // 🚀 OKAMŽITÝ LOKÁLNÍ RE-RENDER UI (zabrání prodlevě)
++    if (typeof renderWantedQueue === 'function') {
++        renderWantedQueue();
++    }
++    if (typeof refreshUI === 'function') {
++        refreshUI(); // Aktualizuje progress bary a seznamy kampaní
++    }
++
+     // Save updated settings to backend
+     await saveSettings();
++
++    // Vynucení aktualizace fronty a kampaní přes socket
++    console.log('[WANTED] Ignore list updated. Requesting queue refresh.');
++    socket.emit('get_wanted_items');
++    socket.emit('get_campaigns');
++
++    if (typeof startCombinedRotation === 'function') {
++        startCombinedRotation(true);
++    }
+ }
+ 
+ // Standalone function to handle auto-adding games based on user settings
+ function applyAutoAddIfNeeded() {
++    // Guard: Do not auto-add games to games_to_watch if Ignore List mode is active
++    if (state?.settings?.auto_add_all_games) {
++        return;
++    }
++
+     const autoaddEl = document.getElementById('auto-add-all-games');
+     if (autoaddEl && autoaddEl.checked) {
+         let hasChanges = false;
+@@ -1397,51 +1511,40 @@ document.addEventListener('DOMContentLoaded', () => {
+         saveSettings();
+     });
+     
+-	// Auto-sort checkbox management
+-	const autoSortEl = document.getElementById('auto-sort-by-end');
+-	if (autoSortEl) {
+-		autoSortEl.addEventListener('change', (e) => {
+-			// Save the updated auto-sort state to the API
+-			saveSettings();
+-			
+-			// If the user enabled auto-sort, trigger the sorting function immediately
+-			if (e.target.checked) {
+-				sortGamesByEnding();
+-			}
+-		});
+-	}
+-    
++    // Auto-sort checkbox management
++    const autoSortEl = document.getElementById('auto-sort-by-end');
++    if (autoSortEl) {
++        autoSortEl.addEventListener('change', (e) => {
++            // Save the updated auto-sort state to the API
++            saveSettings();
++            
++            // If the user enabled auto-sort, trigger the sorting function immediately
++            if (e.target.checked) {
++                sortGamesByEnding();
++            }
++        });
++    }
++
++	// Auto-add / Ignore List toggle management
+ 	document.getElementById('auto-add-all-games')?.addEventListener('change', async (e) => {
+ 		const isChecked = e.target.checked;
+ 
+-		// 1. Aktualizace lokalního stavu
+ 		if (state && state.settings) {
+ 			state.settings.auto_add_all_games = isChecked;
+ 		}
+-		
+-		// 2. Změna nadpisu (Available Games <-> Ignore List)
+-		const gamesHeading = document.querySelector('.available-games h3');
+-		if (gamesHeading) {
+-			gamesHeading.textContent = isChecked ? 'Ignore List' : 'Available Games';
++
++		if (typeof renderGamesToWatch === 'function') {
++			renderGamesToWatch();
+ 		}
+ 
+-		// 3. Okamžité přerendrování seznamu her
+-		renderGamesToWatch();
+-		
+-		// 4. Uložení na backend
+ 		await saveSettings();
+-		
+-		if (isChecked) {
+-			applyAutoAddIfNeeded();
+-		} else {
+-			updateUIState();
+-		}
+ 	});
+-	
+-	document.getElementById('mine-badges-first').addEventListener('change', saveSettings);
++		
++    document.getElementById('mine-badges-first').addEventListener('change', saveSettings);
+     document.getElementById('language').addEventListener('change', saveSettings);
+     document.getElementById('connection-quality').addEventListener('change', saveSettings);
+     document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);
++
+     // Proxy uses a manual "Set Proxy" button instead of auto-save
+     document.getElementById('set-proxy-btn').addEventListener('click', () => {
+         const proxyInput = document.getElementById('proxy-url');
+@@ -1458,7 +1561,6 @@ document.addEventListener('DOMContentLoaded', () => {
+     document.getElementById('verify-proxy-btn').addEventListener('click', verifyProxy);
+     document.getElementById('reload-btn').addEventListener('click', reloadCampaigns);
+ 
+-
+     // Games to watch management
+     document.getElementById('select-all-btn').addEventListener('click', selectAllGames);
+     document.getElementById('deselect-all-btn').addEventListener('click', deselectAllGames);
+@@ -1472,6 +1574,7 @@ document.addEventListener('DOMContentLoaded', () => {
+     document.getElementById('filter-upcoming').addEventListener('change', onInventoryFilterChange);
+     document.getElementById('filter-expired').addEventListener('change', onInventoryFilterChange);
+     document.getElementById('filter-finished').addEventListener('change', onInventoryFilterChange);
++
+     // Benefit type filters
+     document.getElementById('filter-benefit-item').addEventListener('change', onInventoryFilterChange);
+     document.getElementById('filter-benefit-badge').addEventListener('change', onInventoryFilterChange);
+@@ -1485,16 +1588,17 @@ document.addEventListener('DOMContentLoaded', () => {
+     document.getElementById('mining-benefit-emote').addEventListener('change', saveSettings);
+     document.getElementById('mining-benefit-unknown').addEventListener('change', saveSettings);
+ 
+-
+     // Inventory game search dropdown
+     const gameSearchInput = document.getElementById('inventory-game-search');
+-    gameSearchInput.addEventListener('focus', () => {
+-        showGameDropdown();
+-    });
+-    gameSearchInput.addEventListener('input', (e) => {
+-        renderGameDropdown(e.target.value);
+-    });
+-    gameSearchInput.addEventListener('keydown', handleGameSearchKeydown);
++    if (gameSearchInput) {
++        gameSearchInput.addEventListener('focus', () => {
++            showGameDropdown();
++        });
++        gameSearchInput.addEventListener('input', (e) => {
++            renderGameDropdown(e.target.value);
++        });
++        gameSearchInput.addEventListener('keydown', handleGameSearchKeydown);
++    }
+ 
+     // Click outside to close dropdown
+     document.addEventListener('click', (e) => {
+@@ -1520,6 +1624,31 @@ document.addEventListener('DOMContentLoaded', () => {
+     if ('Notification' in window && Notification.permission === 'default') {
+         Notification.requestPermission();
+     }
++    
++    // Instant cache restore on DOM load (before WebSocket connection completes)
++    console.log("[CACHE] Instant recovery sequence started...");
++
++    // 1. Restore current drop progress immediately
++    const cachedDrop = safeGetStorage('app_saved_current_drop');
++    if (cachedDrop && Object.keys(cachedDrop).length > 0) {
++        if (typeof updateDropProgress === 'function') {
++            updateDropProgress(cachedDrop);
++        }
++    }
++
++    // 2. Restore channels
++    const cachedChannels = safeGetStorage('app_saved_channels');
++    if (cachedChannels && Object.keys(cachedChannels).length > 0) {
++        state.channels = cachedChannels;
++        if (typeof renderChannels === 'function') renderChannels();
++    }
++
++    // 3. Restore wanted tree
++    const cachedWanted = safeGetStorage('app_saved_wanted_tree');
++    if (Array.isArray(cachedWanted) && cachedWanted.length > 0) {
++        state.wantedItemsTree = cachedWanted;
++        if (typeof renderWantedItems === 'function') renderWantedItems(cachedWanted);
++    }
+ });
+ 
+ // ==================== DOM Utilities ====================
+diff --git a/web/js/main.js b/web/js/main.js
+index 33aef17..4e418bd 100644
+--- a/web/js/main.js
++++ b/web/js/main.js
+@@ -17,3 +17,86 @@ function addConsoleLineRaw(line) {
+         console.removeChild(console.firstChild);
+     }
+ }
++
++
++// CACHE HELPERS
++
++/**
++ * Zpracuje a uloží kanály přijaté ze serveru
++ */
++function handleInitialChannels(channelsData) {
++    state.channels = {};
++    let channelsList = [];
++    
++    if (Array.isArray(channelsData)) {
++        channelsList = channelsData;
++    } else if (channelsData && typeof channelsData === 'object') {
++        channelsList = Object.values(channelsData);
++    }
++
++    channelsList.forEach(ch => {
++        if (ch && ch.id) {
++            state.channels[ch.id] = ch;
++        }
++    });
++
++    if (Object.keys(state.channels).length > 0) {
++        safeSetStorage('app_saved_channels', state.channels);
++    }
++
++    if (typeof renderChannels === 'function') {
++        renderChannels();
++    }
++}
++
++/**
++ * Zpracuje a uloží wanted položky přijaté ze serveru
++ */
++function handleInitialWantedItems(wantedData) {
++    let treeToRender = wantedData;
++
++    if (treeToRender && !Array.isArray(treeToRender) && typeof treeToRender === 'object') {
++        treeToRender = Object.values(treeToRender);
++    }
++
++    if (Array.isArray(treeToRender) && treeToRender.length > 0) {
++        state.wantedItemsTree = treeToRender;
++        safeSetStorage('app_saved_wanted_tree', treeToRender);
++        if (typeof renderWantedItems === 'function') {
++            renderWantedItems(treeToRender);
++        }
++    }
++}
++
++/**
++ * Zpracuje aktuální drop přijatý ze serveru
++ */
++function handleInitialCurrentDrop(dropData) {
++    const hasValidDrop = dropData && typeof dropData === 'object' && Object.keys(dropData).length > 0;
++
++    if (hasValidDrop) {
++        state.currentDrop = dropData;
++        if (typeof safeSetStorage === 'function') {
++            safeSetStorage('app_saved_current_drop', dropData);
++        } else {
++            localStorage.setItem('app_saved_current_drop', JSON.stringify(dropData));
++        }
++        
++        if (typeof updateDropProgress === 'function') {
++            updateDropProgress(dropData);
++        }
++    } else {
++        state.currentDrop = null;
++        
++        // Bezpečné smazání klíče z localStorage bez závislosti na safeRemoveStorage
++        try {
++            localStorage.removeItem('app_saved_current_drop');
++        } catch (e) {
++            console.error("[STORAGE_ERR] Failed to remove drop from storage:", e);
++        }
++
++        if (typeof clearDropProgress === 'function') {
++            clearDropProgress(true); // Vynucený úklid
++        }
++    }
++}
+diff --git a/web/js/progress.js b/web/js/progress.js
+index bb4f0a1..42e66e0 100644
+--- a/web/js/progress.js
++++ b/web/js/progress.js
+@@ -209,11 +209,20 @@ function syncAnyDropProgress(incomingIdStr, data) {
+  * [INFO] Professional update drop in DOM helper with layout protection
+  */
+ function updateDropInDOM(dropId, current, required, isItemClaimedFlag) {
+-    const selector = `.wanted-drop-item[data-drop-id="${dropId}"]`;
+-    const dropEl = document.querySelector(selector);
++    // 1. Pokus: Přesná shoda s data-drop-id
++    let dropEl = document.querySelector(`.wanted-drop-item[data-drop-id="${dropId}"]`);
++    
++    // 2. Pokus: Hledání podle klasického id elementu
++    if (!dropEl && typeof dropId === 'string') {
++        dropEl = document.getElementById(dropId);
++    }
++    
++    // 3. Pokus: Pokud je ID UUID, zkusíme částečnou shodu v data-drop-id
++    if (!dropEl && typeof dropId === 'string' && dropId.length > 10) {
++        dropEl = document.querySelector(`.wanted-drop-item[data-drop-id*="${dropId}"]`);
++    }
+     
+     // Strict guard clause: If the element isn't in DOM, abort silently. 
+-    // Do NOT trigger full tree renders from a leaf-node update function.
+     if (!dropEl) {
+         console.warn(`[DOM_WARN] Target element missing for drop ID [${dropId}]. Skipping update to prevent layout trashing.`);
+         return;
+@@ -1084,7 +1093,7 @@ function executeRotationStep() {
+ }
+ 
+ /**
+- * Initializes drop rotation interval
++ * [INFO] Initializes drop rotation interval safely
+  */
+ function startCombinedRotation(forceRestart = true) {
+     if (state.rotationTimer && !forceRestart) return; 
+@@ -1095,6 +1104,11 @@ function startCombinedRotation(forceRestart = true) {
+     }
+ 
+     state.rotationTimer = setInterval(executeRotationStep, 4000);
+-    executeRotationStep();
++    
++    // Spustit okamžitý krok jen v případě, že už máme co rotovat (elementy existují v DOM)
++    if (document.querySelectorAll('.wanted-drop-item').length > 0) {
++        executeRotationStep();
++    } else {
++        console.log("[ROTATION] Deferred initial rotation step until DOM elements are rendered.");
++    }
+ }
+-
+diff --git a/web/js/sockets.js b/web/js/sockets.js
+index 5dc5991..e576732 100644
+--- a/web/js/sockets.js
++++ b/web/js/sockets.js
+@@ -83,124 +83,79 @@ function safeGetStorage(key) {
+     }
+ }
+ 
+-/**
+- * [CHANNELS_CACHE] Handles initial channel loading with cache fallback
+- */
+-function handleInitialChannels(channelsData) {
+-    state.channels = {};
+-
+-    let channelsList = [];
+-    if (Array.isArray(channelsData)) {
+-        channelsList = channelsData;
+-    } else if (channelsData && typeof channelsData === 'object') {
+-        channelsList = Object.values(channelsData);
++function updateStatus(status) {
++    const statusEl = document.getElementById('status-text');
++    if (statusEl) {
++        statusEl.textContent = status;
+     }
+ 
+-    if (channelsList.length === 0) {
+-        const cached = safeGetStorage('app_saved_channels');
+-        if (cached && typeof cached === 'object') {
+-            state.channels = cached;
+-            console.log("[CHANNELS_CACHE] Restored channels from localStorage.");
++    // Force visual and cache cleanup if status indicates waiting or no available channels
++    if (status && (status.toLowerCase().includes('no available channels') || status.toLowerCase().includes('waiting'))) {
++        if (typeof clearDropProgress === 'function') {
++            clearDropProgress(true); // Force cleanup ignoring cache protection
+         }
+-    } else {
+-        channelsList.forEach(ch => {
+-            if (ch && ch.id) {
+-                state.channels[ch.id] = ch;
+-            }
+-        });
+-        safeSetStorage('app_saved_channels', state.channels);
+-    }
+-
+-    if (typeof renderChannels === 'function') {
+-        renderChannels();
+-    }
+-}
+-
+-/**
+- * [WANTED_CACHE] Handles wanted items tree loading with cache fallback
+- */
+-function handleInitialWantedItems(wantedData) {
+-    let treeToRender = wantedData;
+-
+-    if (treeToRender && !Array.isArray(treeToRender) && typeof treeToRender === 'object') {
+-        treeToRender = Object.values(treeToRender);
+-    }
+-
+-    if (!Array.isArray(treeToRender) || treeToRender.length === 0) {
+-        const cached = safeGetStorage('app_saved_wanted_tree');
+-        if (Array.isArray(cached) && cached.length > 0) {
+-            treeToRender = cached;
+-            console.log("[WANTED_CACHE] Restored wanted tree from localStorage.");
++        
++        // Clear persistent cache safely to prevent restoring stale data
++        try {
++            localStorage.removeItem('app_saved_current_drop');
++        } catch (e) {
++            console.error("[STORAGE_ERR] Failed to remove drop from storage:", e);
+         }
+-    }
+-
+-    if (Array.isArray(treeToRender) && treeToRender.length > 0) {
+-        state.wantedItemsTree = treeToRender;
+-        safeSetStorage('app_saved_wanted_tree', treeToRender);
+-        if (typeof renderWantedItems === 'function') {
+-            renderWantedItems(treeToRender);
++        
++        if (typeof clearWatchingChannel === 'function') {
++            clearWatchingChannel();
+         }
+-    }
+-}
+-
+-/**
+- * [DROP_CACHE] Drží progress bar z keše, dokud nepřijdou nová platná data
+- */
+-function handleInitialCurrentDrop(dropData) {
+-    const hasValidDrop = dropData && typeof dropData === 'object' && Object.keys(dropData).length > 0;
+-
+-    if (hasValidDrop) {
+-        // Přišla nová platná data z backendu -> uložíme a vykreslíme
+-        safeSetStorage('app_saved_current_drop', dropData);
+-        if (typeof updateDropProgress === 'function') {
+-            updateDropProgress(dropData);
++        if (typeof clearWantedActiveState === 'function') {
++            clearWantedActiveState();
+         }
+     } else {
+-        // Backend neposlal drop (např. při gathering channels) -> VŽDY držíme keš!
+-        const cached = safeGetStorage('app_saved_current_drop');
+-        if (cached && typeof cached === 'object' && Object.keys(cached).length > 0) {
+-            console.log("[DROP_CACHE] Backend nezaslal drop (gathering). Držím progress bar z keše.");
+-            if (typeof updateDropProgress === 'function') {
+-                updateDropProgress(cached);
+-            }
+-        } else if (typeof clearDropProgress === 'function') {
+-            // Provedeme clear JEN v případě, že nemáme vůbec nic v keši
+-            clearDropProgress();
++        // Force immediate re-render of queue and campaigns when a new state/game starts
++        if (typeof renderWantedQueue === 'function') {
++            renderWantedQueue();
++        }
++        if (typeof refreshUI === 'function') {
++            refreshUI();
+         }
+     }
+ }
+ 
+-// Instant cache restore on DOM load (before WebSocket connection completes)
+-document.addEventListener('DOMContentLoaded', () => {
+-    console.log("[CACHE] Instant recovery sequence started...");
+-
+-    // 1. Restore current drop progress immediately
+-    const cachedDrop = safeGetStorage('app_saved_current_drop');
+-    if (cachedDrop && Object.keys(cachedDrop).length > 0) {
+-        if (typeof updateDropProgress === 'function') {
+-            updateDropProgress(cachedDrop);
++// Ensure status_update socket event also uses safe removal
++socket.on('status_update', (data) => {
++    updateStatus(data.status);
++    const statusText = (data.status || '').toLowerCase();
++    
++    // Safely clear progress during transitional or gathering states
++    if (statusText.includes('no available channels') || statusText.includes('gathering')) {
++        if (typeof clearDropProgress === 'function') {
++            clearDropProgress(true);
++        }
++        try {
++            localStorage.removeItem('app_saved_current_drop');
++        } catch (e) {
++            console.error("[STORAGE_ERR] Failed to remove drop from storage:", e);
+         }
+     }
++});
+ 
+-    // 2. Restore channels
+-    const cachedChannels = safeGetStorage('app_saved_channels');
+-    if (cachedChannels && Object.keys(cachedChannels).length > 0) {
+-        state.channels = cachedChannels;
+-        if (typeof renderChannels === 'function') renderChannels();
+-    }
++function loadInitialStateFromStorage() {
++    state.channels = safeGetStorage('app_saved_channels') || {};
++    state.wantedItemsTree = safeGetStorage('app_saved_wanted_tree') || [];
++    state.currentDrop = safeGetStorage('app_saved_current_drop') || null;
++}
+ 
+-    // 3. Restore wanted tree
+-    const cachedWanted = safeGetStorage('app_saved_wanted_tree');
+-    if (Array.isArray(cachedWanted) && cachedWanted.length > 0) {
+-        state.wantedItemsTree = cachedWanted;
+-        if (typeof renderWantedItems === 'function') renderWantedItems(cachedWanted);
++/**
++ * Synchronizes the auto-add/ignore mode checkbox and UI elements with settings.
++ */
++function syncAutoAddUI(settings) {
++    if (!settings) return;
++    
++    const autoaddEl = document.getElementById('auto-add-all-games');
++    if (autoaddEl) {
++        autoaddEl.checked = Boolean(settings.auto_add_all_games);
+     }
+-});
+ 
+-function updateStatus(status) {
+-    const statusEl = document.getElementById('status-text');
+-    if (statusEl) {
+-        statusEl.textContent = status;
++    if (typeof renderGamesToWatch === 'function') {
++        renderGamesToWatch();
+     }
+ }
+ 
+@@ -208,6 +163,11 @@ function updateStatus(status) {
+ socket.on('initial_state', (data) => {
+     console.log('[SOCKET] Received initial state', data);
+ 
++    // Store received settings into global state
++    if (data.settings && typeof state !== 'undefined') {
++        state.settings = { ...state.settings, ...data.settings };
++    }
++
+     try { if (data.status && typeof updateStatus === 'function') updateStatus(data.status); } catch (e) { console.error("[INIT_ERR] Status:", e); }
+     try { handleInitialWantedItems(data.wanted_items); } catch (e) { console.error("[INIT_ERR] Wanted:", e); }
+     try { handleInitialChannels(data.channels); } catch (e) { console.error("[INIT_ERR] Channels:", e); }
+@@ -255,10 +215,9 @@ socket.on('initial_state', (data) => {
+             if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
+         }
+ 
+-        const autoaddEl = document.getElementById('auto-add-all-games');
+-        if (autoaddEl && data.settings) {
+-            autoaddEl.checked = !!data.settings.auto_add_all_games;
+-            if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
++        // Synchronize auto-add UI state, heading text/color, and list rendering
++        if (data.settings && typeof syncAutoAddUI === 'function') {
++            syncAutoAddUI(data.settings);
+         }
+ 
+         if (typeof startCombinedRotation === 'function') {
+@@ -267,10 +226,6 @@ socket.on('initial_state', (data) => {
+     } catch (e) { console.error("[INIT_ERR] Rotation:", e); }
+ });
+ 
+-socket.on('status_update', (data) => {
+-    updateStatus(data.status);
+-});
+-
+ socket.on('console_output', (data) => {
+     addConsoleLine(data.message);
+ });
+diff --git a/web/js/wanted.js b/web/js/wanted.js
+index 3f7707d..03f08f7 100644
+--- a/web/js/wanted.js
++++ b/web/js/wanted.js
+@@ -499,3 +499,23 @@ function syncWantedItemsProgress(data) {
+     console.groupEnd();
+     return treeUpdated;
+ }
++
++/**
++ * Clears active states and borders from Wanted Queue items without resetting the queue itself.
++ */
++function clearWantedActiveState() {
++    console.group("[UI] clearWantedActiveState() called");
++
++    // Hledáme prvky s třídou wanted-card a odebíráme jim aktivní stavy
++    const activeWantedElements = document.querySelectorAll('.wanted-card.active-mining, .wanted-card.in-progress');
++    if (activeWantedElements.length > 0) {
++        activeWantedElements.forEach(el => {
++            el.classList.remove('active-mining', 'in-progress');
++        });
++        console.log("[UI] Removed active-mining and in-progress classes from Wanted queue items.");
++    } else {
++        console.log("[UI] No active Wanted elements found to clear.");
++    }
++
++    console.groupEnd();
++}

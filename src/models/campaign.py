@@ -193,7 +193,7 @@ class DropsCampaign:
         if not basic_checks:
             return False
 
-        # [TIME CHECK] Verify if there is enough time left in the campaign to complete remaining drops
+        # Verify if there is enough time left in the campaign to complete remaining drops
         if self.ends_at:
             remaining_drop_mins = sum(
                 max(0, getattr(d, "required_minutes", 0) - getattr(d, "current_minutes", 0))
@@ -204,10 +204,7 @@ class DropsCampaign:
             
             time_left_mins = (self.ends_at - now_utc).total_seconds() / 60
             
-           # print(f"[CAMPAIGN_CHECK] Campaign '{self.name}': Time left: {time_left_mins:.1f}m, Required remaining: {remaining_drop_mins}m")
-            
             if time_left_mins < remaining_drop_mins:
-               # print(f"[CAMPAIGN_CHECK] Skipping campaign '{self.name}': Not enough time left to complete remaining drops.")
                 return False
 
         return True
@@ -217,13 +214,11 @@ class DropsCampaign:
         Bump the minute counter for all earnable drops in this campaign.
         Used when websocket updates aren't available.
         """
-        # NOTE: Use a temporary list to ensure all drops are bumped before checking
         if any(drop._bump_minutes(channel) for drop in self.drops):
-            # Executes if any drop's extra_current_minutes reach MAX_ESTIMATED_MINUTES
-            # TODO: Figure out a better way to handle this case
             logger.warning(
-                f'At least one of the drops in campaign "{self.name}({self.game.name})" '
-                "has reached the maximum extra minutes limit!"
+                'At least one drop in campaign "%s (%s)" reached maximum extra minutes limit.',
+                self.name,
+                self.game.name,
             )
             self._twitch.change_state(State.CHANNEL_SWITCH)
         if (first_drop := self.first_drop) is not None:

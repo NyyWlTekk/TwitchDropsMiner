@@ -7,6 +7,8 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from src.core.client import handle_ignored_games_update
+
 from src.i18n.translator import _
 from src.models.game import Game
 
@@ -111,6 +113,10 @@ def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) -> 
     should_trigger_update |= check_and_update_setting(
         manager, "games_to_watch", settings_data.get("games_to_watch"), True
     )
+    # Zde přidáme chybějící zpracování pro ignored_games
+    should_trigger_update |= check_and_update_setting(
+        manager, "ignored_games", settings_data.get("ignored_games"), True
+    )
     should_trigger_update |= check_and_update_setting(
         manager, "dark_mode", settings_data.get("dark_mode")
     )
@@ -158,7 +164,6 @@ def update_settings(manager: SettingsManager, settings_data: dict[str, Any]) -> 
     if should_trigger_update and manager._on_change:
         manager._on_change()
 
-
 def check_and_update_setting(
     manager: SettingsManager,
     key: str,
@@ -187,8 +192,26 @@ def check_and_update_setting(
             manager._log_change(f"Games added: {', '.join(added_games)}")
         if removed_games:
             manager._log_change(f"Games removed: {', '.join(removed_games)}")
-            
+
         manager._last_logged_games_count = len(new_value)
+
+    # 1.5. Log added and removed games for ignored_games and execute central handler
+    elif key == "ignored_games" and isinstance(new_value, list):
+        old_list = old_value if isinstance(old_value, list) else []
+        old_set = {g.strip().lower() for g in old_list}
+        new_set = {g.strip().lower() for g in new_value}
+
+        added_ignored = [g for g in new_value if g.strip().lower() not in old_set]
+        removed_ignored = [g for g in old_list if g.strip().lower() not in new_set]
+
+        if added_ignored:
+            manager._log_change(f"Ignored games added: {', '.join(added_ignored)}")
+        if removed_ignored:
+            manager._log_change(f"Ignored games removed: {', '.join(removed_ignored)}")
+
+        # Delegate stream interruption, switching, and socket emission to central handler
+        if (added_ignored or removed_ignored) and hasattr(manager, "_twitch") and manager._twitch:
+            handle_ignored_games_update(manager._twitch, new_value)
 
     # 2. Log changes in inventory filters
     elif key == "inventory_filters" and isinstance(old_value, dict) and isinstance(new_value, dict):

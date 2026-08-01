@@ -1,4 +1,6 @@
+////////////////////////////////////////////////////////////////////////////
 // ==================== Active Drop & Campaign Rotation ====================
+////////////////////////////////////////////////////////////////////////////
 
 // --- 1. State Initialization ---
 if (typeof state === 'undefined') {
@@ -137,40 +139,18 @@ function preloadQueueImages(queue) {
 // ==========================================
 
 /**
- * Syncs progress for the active drop queue panel at the top.
- * Acts as a bridge between the main dispatcher and the display renderer.
- */
-function syncActiveQueueProgress(data) {
-    console.group("[SYNC_ACTIVE_PROGRESS]");
-    console.log("[PROGRESS_MODULE] Processing active drop update:", data.drop_name || data.drop_id);
-
-    // Call the core display updater function
-    updateSingleDropDisplay(data, false);
-
-    console.groupEnd();
-    return true;
-}
-
-/**
- * [INFO] Unified entry point for updating drop progress in active queue and wanted tree simultaneously
+ * Unified entry point for updating drop progress in active queue and wanted tree simultaneously
  */
 function syncAnyDropProgress(incomingIdStr, data) {
     if (!state) return;
 
-    // [GUARD_CLAUSE] Ošetření zvrchu – pokud data chybí, jsou neplatná nebo jde o stav gathering, rovnou skončíme
     if (!data || typeof data !== 'object' || data.gathering || data.current_minutes === undefined) {
-        console.warn(`[SYNC_ANY_DROP] Ignored incomplete, missing or gathering payload for ID: ${incomingIdStr}`, data);
         return;
     }
 
-    console.group(`[SYNC_ANY_DROP] ID: ${incomingIdStr}`);
-    console.log("Payload data:", data);
-
-    // 1. Update active queue (top progress bars)
-	if (Array.isArray(state.activeDropsQueue)) {
+    if (Array.isArray(state.activeDropsQueue)) {
         const activeQueueDrop = state.activeDropsQueue.find(d => String(d.drop_id || d.id) === incomingIdStr);
         if (activeQueueDrop) {
-            console.log("[SYNC_ACTIVE] Drop located in active queue:", activeQueueDrop);
             if (data.current_minutes !== undefined) activeQueueDrop.current_minutes = data.current_minutes;
             if (data.required_minutes !== undefined) activeQueueDrop.required_minutes = data.required_minutes;
             if (data.remaining_seconds !== undefined) activeQueueDrop.remaining_seconds = data.remaining_seconds;
@@ -187,56 +167,19 @@ function syncAnyDropProgress(incomingIdStr, data) {
             if (typeof renderAllProgressBars === 'function') {
                 renderAllProgressBars(currMins, activeQueueDrop);
             }
-        } else {
-            console.log("[SYNC_ACTIVE] Drop NOT found in active queue.");
         }
     }
 
-	// 2. Update wanted tree
     if (Array.isArray(state.wantedItemsTree)) {
-        console.log("[SYNC_WANTED] Initializing syncWantedItemsProgress...");
-        // [FIX] Pass a single object containing both the ID and the update data
-        syncWantedItemsProgress({
-            drop_id: incomingIdStr,
-            ...data
-        });
+        if (typeof syncWantedItemsProgress === 'function') {
+            syncWantedItemsProgress({
+                drop_id: incomingIdStr,
+                ...data
+            });
+        } else {
+            console.warn("[SYNC_WANTED] syncWantedItemsProgress function is not defined yet, skipping update.");
+        }
     }
-    
-    console.groupEnd();
-}
-
-/**
- * [INFO] Professional update drop in DOM helper with layout protection
- */
-function updateDropInDOM(dropId, current, required, isItemClaimedFlag) {
-    const selector = `.wanted-drop-item[data-drop-id="${dropId}"]`;
-    const dropEl = document.querySelector(selector);
-    
-    // Strict guard clause: If the element isn't in DOM, abort silently. 
-    // Do NOT trigger full tree renders from a leaf-node update function.
-    if (!dropEl) {
-        console.warn(`[DOM_WARN] Target element missing for drop ID [${dropId}]. Skipping update to prevent layout trashing.`);
-        return;
-    }
-
-    const statusEl = dropEl.querySelector('.wanted-drop-status');
-    if (!statusEl) {
-        console.warn(`[DOM_WARN] Status sub-element missing within drop ID [${dropId}]. Validation failed.`);
-        return;
-    }
-
-    // Process valid updates
-    if (isItemClaimedFlag) {
-        const label = state.translations?.gui?.wanted?.claimed || 'Claimed';
-        statusEl.innerHTML = `<span class="status-tag tag-claimed">${typeof getStatusIconSVG === 'function' ? getStatusIconSVG('drop-claimed') : ''} ${label}</span>`;
-    } else if (current >= required && required > 0) {
-        const label = state.translations?.gui?.wanted?.ready || 'Ready to claim!';
-        statusEl.innerHTML = `<span class="status-tag tag-ready">${typeof getStatusIconSVG === 'function' ? getStatusIconSVG('drop-ready') : ''} ${label}</span>`;
-    } else if (required > 0) {
-        statusEl.innerHTML = `<span class="status-tag tag-progress">${typeof getStatusIconSVG === 'function' ? getStatusIconSVG('drop-active') : ''} ${Math.round(current)} / ${required} min</span>`;
-    }
-    
-    console.log(`[DOM_SUCCESS] Visual status synchronized correctly for drop ID: [${dropId}]`);
 }
 
 /**
@@ -254,13 +197,11 @@ function calculateOverallStats() {
 
     if (campaignsList.length === 0) return stats;
 
-    // Seskupíme kampaně podle her (game_name), aby zachovaly logiku jako queueTree
     const gamesMap = {};
 
     campaignsList.forEach(campaign => {
         if (!campaign) return;
         
-        // Přeskočíme unlinked kampaně
         if (campaign.is_unlinked || campaign.status === 'unlinked' || campaign.linked === false) {
             return;
         }
@@ -272,7 +213,6 @@ function calculateOverallStats() {
         gamesMap[gameKey].campaigns.push(campaign);
     });
 
-    // Aplikujeme původní logiku výběru maxReq v rámci každé hrací skupiny
     Object.values(gamesMap).forEach(gameGroup => {
         if (!gameGroup.campaigns || !Array.isArray(gameGroup.campaigns)) return;
         let maxReq = 0, maxCur = 0, maxRemSecs = 0;
@@ -360,71 +300,62 @@ function addCampaign(campaignData) {
 }
 
 /**
- * Clears the current drop progress UI and resets related state.
- * @param {boolean} force - If true, bypasses cache checks and forces UI clearing.
+ * Clears active states and borders from Wanted Queue items without resetting the queue itself.
  */
-function clearDropProgress(force = false) {
-    console.group("[UI] clearDropProgress() called");
-    console.log(`[UI] Force parameter: ${force}`);
+function clearWantedActiveState() {
+    const activeWantedElements = document.querySelectorAll(
+        '.wanted-card.active-mining, .wanted-card.in-progress, .wanted-card.active, .wanted-card.is-active, ' +
+        '.wanted-item.active-mining, .wanted-item.in-progress, .wanted-item.active, .wanted-item.is-active'
+    );
 
-    // Check if we have cached drop data before hiding UI
-    if (!force) {
-        const cached = safeGetStorage('app_saved_current_drop');
-        if (cached && typeof cached === 'object' && Object.keys(cached).length > 0) {
-            console.log("[UI] Cached drop found. Blocking clearDropProgress() to preserve cached drop display.");
-            console.groupEnd();
-            return;
-        }
-    } else {
-        console.log("[UI] Force flag active. Removing cached drop from storage.");
-        if (typeof safeRemoveStorage === 'function') {
-            safeRemoveStorage('app_saved_current_drop');
-        }
+    if (activeWantedElements.length > 0) {
+        activeWantedElements.forEach(el => {
+            el.classList.remove('active-mining', 'in-progress', 'active', 'is-active', 'mining');
+        });
     }
+}
 
-    console.log("[UI] Resetting current drop state and UI elements.");
+/**
+ * Clears the current drop progress UI and resets related state.
+ */
+function clearDropProgress() {
+    // 1. Reset stavu v RAM
     state.currentDrop = null;
     dropTotalSeconds = 0;
     
     if (state.countdownTimer) {
-        console.log("[UI] Clearing active countdown timer.");
         clearInterval(state.countdownTimer);
         state.countdownTimer = null;
     }
 
+    // 2. Reset UI prvků pro progress bar
     const noDropMessage = document.getElementById('no-drop-message');
     const dropInfo = document.getElementById('drop-info');
     
-    if (noDropMessage) {
-        noDropMessage.style.display = 'block';
-        console.log("[UI] Displaying 'no-drop-message' element.");
-    }
-    if (dropInfo) {
-        dropInfo.style.display = 'none';
-        console.log("[UI] Hiding 'drop-info' element.");
-    }
+    if (noDropMessage) noDropMessage.style.display = 'block';
+    if (dropInfo) dropInfo.style.display = 'none';
 
     const fill = document.getElementById('progress-fill');
     if (fill) {
         fill.style.width = '0%';
         fill.textContent = '0%';
-        console.log("[UI] Progress fill reset to 0%.");
     }
 
     const progressText = document.getElementById('progress-text');
-    if (progressText) {
-        progressText.textContent = '0 / 0 min';
-        console.log("[UI] Progress text reset to '0 / 0 min'.");
-    }
+    if (progressText) progressText.textContent = '0 / 0 min';
 
     const timeEl = document.getElementById('progress-time');
-    if (timeEl) {
-        timeEl.textContent = 'Time remaining: 0:00';
-        console.log("[UI] Time remaining reset to '0:00'.");
+    if (timeEl) timeEl.textContent = 'Time remaining: 0:00';
+
+    // 3. Vyčištění aktivních vizuálních tříd
+    if (typeof clearWantedActiveState === 'function') {
+        clearWantedActiveState();
     }
 
-    console.log("[UI] Drop progress successfully cleared.");
-    console.groupEnd();
+    // 4. Překreslení stromu fronty Wanted na základě aktuálního objektu state
+    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
+        renderWantedItems(state.wantedItemsTree);
+    }
 }
 
 function updateRemainingTime(initialSeconds, currentData = null) {
@@ -451,14 +382,11 @@ function updateDropTitle(data) {
     const dropNameEl = document.getElementById('drop-name');
     if (!dropNameEl) return;
 
-    // Zobrazení se nyní řídí chráněným názvem hry z kroku 2
     const displayGameName = data.game_name || 'Drop';
 
-    // Vycházíme striktně z běžící fronty (live items)
     const validCampaigns = (state.activeCampaignsQueue || []).filter(c => {
         if (!c || isClaimed(c)) return false;
         
-        // [OPRAVA] Vyfiltrujeme POUZE kampaně pro aktuální hru, aby po přepnutí zmizely staré!
         const cGameName = c.game_name || c.gameName || 'Drop';
         if (cGameName !== displayGameName) return false;
         
@@ -468,8 +396,6 @@ function updateDropTitle(data) {
 
     const queueLength = validCampaigns.length > 0 ? validCampaigns.length : 1;
     
-    // [OPRAVA] Získáme reálnou pozici (např. 1 nebo 2) aktuální kampaně v rámci této hry, 
-    // místo spoléhání se na globální index rotace.
     let displayIndex = 1;
     if (data.campaign_id) {
         const foundIndex = validCampaigns.findIndex(c => (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
@@ -484,7 +410,7 @@ function updateDropTitle(data) {
 function getCachedImage(url, alt, className, styles = {}) {
     if (!url) return null;
     
-    if (imageCache.has(url)) {
+    if (typeof imageCache !== 'undefined' && imageCache.has(url)) {
         const cachedImg = imageCache.get(url).cloneNode(true);
         Object.assign(cachedImg.style, styles);
         return cachedImg;
@@ -496,7 +422,9 @@ function getCachedImage(url, alt, className, styles = {}) {
     if (className) imgEl.className = className;
     Object.assign(imgEl.style, styles);
 
-    imageCache.set(url, imgEl);
+    if (typeof imageCache !== 'undefined') {
+        imageCache.set(url, imgEl);
+    }
     return imgEl.cloneNode(true);
 }
 
@@ -676,35 +604,13 @@ function updateGameHeaderTimeBadge(groupIdx, remainingMinutes) {
 }
 
 // ==========================================
-// 5. CORE LOGIC & ROTATION (WITH MEMORY FALLBACK & LOGS)
+// 5. CORE LOGIC & ROTATION
 // ==========================================
 
 /**
  * Updates the single active drop display with caching, queue matching, and DOM rendering.
  */
 function updateSingleDropDisplay(data, isFromRotation = false) {
-    console.group("[UPDATE_SINGLE_DROP]");
-    console.log("Raw incoming drop data:", data);
-
-    // [CACHE_FALLBACK] Prevent blinking if data is temporarily missing during sync/fetching
-    if (!data) {
-        if (window._lastValidCurrentDrop) {
-            console.warn("[CACHE_FALLBACK] Incoming drop data is empty. Restoring last valid drop from cache memory:", window._lastValidCurrentDrop);
-            data = window._lastValidCurrentDrop;
-        } else {
-            console.warn("[CACHE_FALLBACK] No incoming drop data and no cached fallback available in memory.");
-        }
-    } else {
-        window._lastValidCurrentDrop = data;
-        console.log("[CACHE_MEMORY] Updated persistent cache memory with active drop:", data);
-    }
-
-    if (!data) {
-        console.warn("[UPDATE_SINGLE_DROP] No data available to render. Aborting.");
-        console.groupEnd();
-        return;
-    }
-
     const targetId = data.drop_id || data.id;
 
     if (state.currentDrop && (state.currentDrop.drop_id || state.currentDrop.id) === targetId) {
@@ -715,8 +621,6 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
     }
 
     if (!isFromRotation && state.rotationTimer) {
-        console.log("[UPDATE_SINGLE_DROP] Rotation timer active and not forced, skipping single drop refresh.");
-        console.groupEnd();
         return;
     }
 
@@ -724,13 +628,11 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
     const curMins = Number(data.current_minutes ?? 0);
 
     if (isClaimed(data) || (reqMins > 0 && curMins >= reqMins)) {
-        console.log("[UPDATE_SINGLE_DROP] Drop is already claimed or completed, cleaning up and rotating.");
         if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
             const dropIdToClean = data.drop_id || data.id;
             state.activeDropsQueue = state.activeDropsQueue.filter(d => (d.drop_id || d.id) !== dropIdToClean);
         }
         startCombinedRotation(true);
-        console.groupEnd();
         return;
     }
 
@@ -752,37 +654,23 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
     renderDropCardLayout(data, rewardImgUrl);
     renderAllProgressBars(curMins, data);
     updateRemainingTime(remSecs, data);
-
-    console.log("[UPDATE_SINGLE_DROP] Successfully updated display for drop:", targetId);
-    console.groupEnd();
 }
 
-
 function switchCampaignDisplay(data, isManualSwitch = true) {
-    console.group("[SWITCH_CAMPAIGN]");
-    console.log("Switching campaign data:", data);
-
-    // [EXPIRATION & COMPLETION SAFETY CHECK]
     if (data) {
         const now = Date.now();
         
-        // 1. Kontrola, jestli data/kampaň/drop neexpiroval (podle ends_at)
         if (data.ends_at) {
             const endTime = new Date(data.ends_at).getTime();
             if (endTime <= now) {
-                console.log("[UI] Campaign/Drop has expired. Forcing clearDropProgress().");
                 clearDropProgress(true);
-                console.groupEnd();
                 return;
             }
         }
 
-        // 2. Kontrola, jestli už není drop plně odtěžený
         if (data.current_minutes !== undefined && data.required_minutes !== undefined) {
             if (data.current_minutes >= data.required_minutes && data.required_minutes > 0) {
-                console.log("[UI] Drop is already fully completed. Forcing clearDropProgress().");
                 clearDropProgress(true);
-                console.groupEnd();
                 return;
             }
         }
@@ -790,10 +678,8 @@ function switchCampaignDisplay(data, isManualSwitch = true) {
 
     cleanupClaimedCampaigns();
 
-    // [CACHE_FALLBACK] Protect queue against temporary empty states
     if (!state.activeCampaignsQueue || state.activeCampaignsQueue.length === 0) {
         if (window._lastValidActiveCampaignsQueue && window._lastValidActiveCampaignsQueue.length > 0) {
-            console.warn("[CACHE_FALLBACK] activeCampaignsQueue is empty. Restoring from cache memory.");
             state.activeCampaignsQueue = window._lastValidActiveCampaignsQueue;
         }
     } else {
@@ -834,25 +720,17 @@ function switchCampaignDisplay(data, isManualSwitch = true) {
     const dropChanged = !previousDropId || !newDropId || previousDropId !== newDropId;
 
     updateSingleDropDisplay(initialActiveDrop, dropChanged);
-    console.groupEnd();
 }
 
 function updateDropProgress(dropData) {
-    let validDrop = dropData;
-
-    if (!validDrop || typeof validDrop !== 'object' || Object.keys(validDrop).length === 0) {
-        const cached = safeGetStorage('app_saved_current_drop');
-        if (cached && typeof cached === 'object' && Object.keys(cached).length > 0) {
-            validDrop = cached;
-        } else {
-            if (typeof clearDropProgress === 'function') clearDropProgress();
-            return;
-        }
-    } else {
-        safeSetStorage('app_saved_current_drop', validDrop);
+    // Pokud nemáme platná data o dropu, rovnou vyčistíme UI a končíme
+    if (!dropData || typeof dropData !== 'object' || Object.keys(dropData).length === 0) {
+        if (typeof clearDropProgress === 'function') clearDropProgress();
+        return;
     }
 
-    // Track live mining campaigns for rotation
+    const validDrop = dropData;
+
     if (!state.liveMiningQueue) state.liveMiningQueue = [];
     const activeCampId = validDrop.campaign_id;
     
@@ -878,11 +756,9 @@ function updateDropProgress(dropData) {
 
     syncAnyDropProgress(incomingIdStr, validDrop);
 
-    // Strictly update visually using only this single drop
     updateSingleDropDisplay(validDrop, false);
     updateCampaignProgressData(validDrop, validDrop.current_minutes || 0);
 
-	// [FIX] Pass a single object containing both the ID and the validDrop data
     const treeUpdated = syncWantedItemsProgress({
         drop_id: incomingIdStr,
         ...validDrop
@@ -913,30 +789,24 @@ function updateCampaignProgressData(data, liveCurrentMins) {
             const drops = extractCampaignDrops(campaign);
             const campName = campaign.name || campaign.campaign_name || 'Campaign';
             
-            // 1. Nejprve aktualizujeme aktivní drop a zjistíme maximální / současný čas
             drops.forEach((d) => {
                 if ((d.drop_id || d.id) === targetDropId) {
                     d.current_minutes = currentDropCurrent;
                 }
             });
 
-            // Spočítáme maximální čas napříč dropy v této kampani
             const maxCampaignCurrent = drops.length > 0 ? Math.max(...drops.map(d => Number(d.current_minutes) || 0)) : currentDropCurrent;
             totalCampaignRequired = drops.length > 0 ? Math.max(...drops.map(d => Number(d.required_minutes) || 0)) : 0;
             totalCampaignCurrent = maxCampaignCurrent;
 
-            // 2. KLÍČOVÝ KROK: Přidělíme tento nejvyšší čas VŠEM položkám kampaně a okamžitě překreslíme jejich DOM!
             drops.forEach(d => {
                 d.current_minutes = maxCampaignCurrent;
                 const dId = d.drop_id || d.id;
                 if (dId) {
                     const reqMins = Number(d.required_minutes || d.duration || 0);
-                    // Zavoláme DOM aktualizaci pro každou položku zvlášť, aby se překreslilo rozhraní
-                    updateDropInDOM(dId, maxCampaignCurrent, reqMins, isClaimed(d));
                 }
             });
 
-            // Spočítáme index pro nadpis
             let dropVisualIndex = 1;
             const foundIdx = drops.findIndex(d => (d.drop_id || d.id) === targetDropId);
             if (foundIdx !== -1) dropVisualIndex = foundIdx + 1;
@@ -947,7 +817,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         }
     }
 
-    // Fallback pokud kampaň nebyla nalezena ve state.campaigns
     if (totalCampaignRequired === 0) {
         totalCampaignCurrent = currentDropCurrent;
         totalCampaignRequired = Number(data.required_minutes) || 0;
@@ -964,7 +833,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         campaignText.textContent = `${totalCampaignCurrent} / 0 min`;
     }
 
-    // 3. Pojistka pro kompletní překreslení wanted stromu, pokud je k dispozici
     if (typeof state.wantedItemsTree !== 'undefined' && typeof renderWantedItems === 'function') {
         renderWantedItems(state.wantedItemsTree);
     }
@@ -1026,10 +894,8 @@ function updateOverallProgress() {
  * Executes a single tick of rotation process
  */
 function executeRotationStep() {
-    // Používáme POUZE dynamicky vybudovanou frontu (už žádných 1/25)
     let validCampaigns = state.activeCampaignsQueue || [];
 
-    // Fallback pokud se fronta ještě nestihla naplnit
     if (validCampaigns.length === 0 && state.currentDrop && state.currentDrop.campaign_id && state.campaigns) {
         const fallbackCamp = state.campaigns[state.currentDrop.campaign_id];
         if (fallbackCamp) validCampaigns = [fallbackCamp];
@@ -1061,8 +927,6 @@ function executeRotationStep() {
         
         const currentDrop = activeDrops[state.dropRotationIndex];
         
-        // KRITICKÝ FIX: Napevno svážeme data dropu s daty právě rotující kampaně.
-        // Tím zabráníme tomu, aby SMITE drop načetl Overwatch progress bar.
         currentDrop.campaign_id = currentCampaign.id || currentCampaign.campaign_id;
         currentDrop.campaign_name = currentCampaign.name || currentCampaign.campaign_name;
         currentDrop.game_name = currentCampaign.game_name || currentCampaign.gameName;
@@ -1084,7 +948,7 @@ function executeRotationStep() {
 }
 
 /**
- * Initializes drop rotation interval
+ * Initializes drop rotation interval safely
  */
 function startCombinedRotation(forceRestart = true) {
     if (state.rotationTimer && !forceRestart) return; 
@@ -1095,6 +959,8 @@ function startCombinedRotation(forceRestart = true) {
     }
 
     state.rotationTimer = setInterval(executeRotationStep, 4000);
-    executeRotationStep();
+    
+    if (document.querySelectorAll('.wanted-drop-item').length > 0) {
+        executeRotationStep();
+    }
 }
-

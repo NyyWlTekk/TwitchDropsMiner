@@ -345,7 +345,12 @@ class Channel:
         try:
             response: JsonType = await self._twitch.gql_request(self.stream_gql)
         except MinerException as exc:
+            # [FIX] Handle Twitch GQL PersistedQueryNotFound gracefully without crashing the task
+            if "PersistedQueryNotFound" in str(exc):
+                logger.warning(f"GQL PersistedQueryNotFound encountered for channel {self._login}. Twitch changed query hash.")
+                return None
             raise MinerException(f"Channel: {self._login}") from exc
+        
         channel_data: JsonType | None = response["data"]["user"]
         if not channel_data:
             return None
@@ -367,7 +372,7 @@ class Channel:
                     available_drops_campaigns["data"]["channel"]["viewerDropCampaigns"] or []
                 )
         return stream
-
+        
     async def update_stream(self) -> bool:
         """
         Fetches the current channel stream, and if one exists,

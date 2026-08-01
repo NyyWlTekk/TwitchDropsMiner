@@ -71,7 +71,7 @@ async function fetchAndDisplayVersion() {
                 }
 
                 // Log to console
-                console.log(`Update available: ${data.latest_version} (current: ${data.current_version})`);
+//                console.log(`Update available: ${data.latest_version} (current: ${data.current_version})`);
             }
         }
     } catch (error) {
@@ -420,32 +420,66 @@ function updateManualModeUI(manualModeInfo) {
     }
 }
 
-// ==================== Games to Watch Management ====================
-
-socket.on('games_available', (data) => {
-    availableGames = new Set(data.games || []);
-    renderGamesToWatch();
-    applyAutoAddIfNeeded();
-});
+// ==================== Games to Watch / Ignore Management ====================
 
 function renderGamesToWatch() {
-    // Only get data, do not mutate state here
-    let selectedGames = state.settings.games_to_watch || [];
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
+    
+    const leftHeading = document.querySelector('.available-games h3');
+    const rightHeading = document.querySelector('.selected-games h3');
+
+    // Update headings and colors based on active mode
+    if (isIgnoreMode) {
+        if (leftHeading) {
+            leftHeading.textContent = 'Active / Auto-Mined Games';
+            leftHeading.style.color = '#2ecc71';
+        }
+        if (rightHeading) {
+            rightHeading.textContent = 'Ignore List (Blacklisted)';
+            rightHeading.style.color = '#ff4d4d';
+        }
+    } else {
+        if (leftHeading) {
+            leftHeading.textContent = 'Available Games';
+            leftHeading.style.color = '';
+        }
+        if (rightHeading) {
+            rightHeading.textContent = 'Selected Games (Priority Order)';
+            rightHeading.style.color = '#2ecc71';
+        }
+    }
+
     const filterText = document.getElementById('games-filter')?.value.toLowerCase() || '';
 
-    // Safeguard: Force all watched games into the pool to prevent them from disappearing
-    selectedGames.forEach(game => availableGames.add(game));
+    if (isIgnoreMode) {
+        const ignoredGames = state?.settings?.ignored_games || [];
+        ignoredGames.forEach(game => availableGames.add(game));
 
-    // Render left side
-    renderSelectedGames(selectedGames);
+        // Active games (all available MINUS ignored ones)
+        const activeGames = Array.from(availableGames)
+            .filter(game => !ignoredGames.some(ig => ig.toLowerCase() === game.toLowerCase()))
+            .filter(game => game.toLowerCase().includes(filterText))
+            .sort((a, b) => a.localeCompare(b));
 
-    // Render right side
-    const unselectedGames = Array.from(availableGames)
-        .filter(game => !selectedGames.includes(game))
-        .filter(game => game.toLowerCase().includes(filterText))
-        .sort((a, b) => a.localeCompare(b));
+        const blacklistedGames = ignoredGames
+            .filter(game => game.toLowerCase().includes(filterText))
+            .sort((a, b) => a.localeCompare(b));
 
-    renderAvailableGames(unselectedGames, filterText);
+        renderAvailableGames(activeGames, filterText);
+        renderSelectedGames(blacklistedGames);
+    } else {
+        const watchedGames = state?.settings?.games_to_watch || [];
+        watchedGames.forEach(game => availableGames.add(game));
+
+        const availableList = Array.from(availableGames)
+            .filter(game => !watchedGames.includes(game))
+            .filter(game => game.toLowerCase().includes(filterText))
+            .sort((a, b) => a.localeCompare(b));
+
+        renderAvailableGames(availableList, filterText);
+        renderSelectedGames(watchedGames);
+    }
+
     updateUIState();
 }
 
@@ -454,10 +488,14 @@ function renderSelectedGames(games) {
     if (!container) return;
 
     const t = state.translations;
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    
     container.innerHTML = '';
 
     if (games.length === 0) {
-        const emptyMsg = t.gui?.settings?.no_games_selected || 'No games selected. Check games below to add them.';
+        const emptyMsg = isIgnoreMode
+            ? (t.gui?.settings?.no_games_ignored || 'No games on ignore list.')
+            : (t.gui?.settings?.no_games_selected || 'No games selected. Check games below to add them.');
         container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
         return;
     }
@@ -465,24 +503,35 @@ function renderSelectedGames(games) {
     games.forEach((game, index) => {
         const div = document.createElement('div');
         div.className = 'sortable-item';
-        div.draggable = true;
         div.dataset.game = game;
-        div.replaceChildren(
-            makeElement('span', { class: 'drag-handle' }, '☰'),
-            makeElement('span', { class: 'priority-number' }, String(index + 1)),
-            makeElement('span', { class: 'game-name' }, game),
-            makeElement('button', { class: 'remove-btn' }, '✕'),
-        );
 
-        // Event listener for the delete button
+        if (isIgnoreMode) {
+            // In Ignore Mode, priority and dragging are disabled
+            div.draggable = false;
+            div.replaceChildren(
+                makeElement('span', { class: 'game-name', style: 'flex-grow: 1;' }, game),
+                makeElement('button', { class: 'remove-btn', title: 'Remove from Ignore List' }, '✕')
+            );
+        } else {
+            // Whitelist mode supports drag-and-drop reordering
+            div.draggable = true;
+            div.replaceChildren(
+                makeElement('span', { class: 'drag-handle' }, '☰'),
+                makeElement('span', { class: 'priority-number' }, String(index + 1)),
+                makeElement('span', { class: 'game-name' }, game),
+                makeElement('button', { class: 'remove-btn', title: 'Remove from Watch List' }, '✕')
+            );
+
+            div.addEventListener('dragstart', handleDragStart);
+            div.addEventListener('dragover', handleDragOver);
+            div.addEventListener('drop', handleDrop);
+            div.addEventListener('dragend', handleDragEnd);
+        }
+
         const removeBtn = div.querySelector('.remove-btn');
-        removeBtn.addEventListener('click', () => removeGameFromWatch(game));
-
-        // Drag event handlers
-        div.addEventListener('dragstart', handleDragStart);
-        div.addEventListener('dragover', handleDragOver);
-        div.addEventListener('drop', handleDrop);
-        div.addEventListener('dragend', handleDragEnd);
+        removeBtn.addEventListener('click', () => {
+            removeGameFromWatch(game);
+        });
 
         container.appendChild(div);
     });
@@ -493,9 +542,7 @@ function renderAvailableGames(games, filterText) {
     if (!container) return;
 
     const t = state.translations;
-    const isAutoAdd = state.settings?.auto_add_all_games || false;
-    const ignoredGames = state.settings?.ignored_games || [];
-    const gamesToWatch = state.settings?.games_to_watch || [];
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
 
     container.innerHTML = '';
 
@@ -505,8 +552,8 @@ function renderAvailableGames(games, filterText) {
             const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, `${emptyMsg}${addHint}`));
         } else {
-            const emptyMsg = isAutoAdd 
-                ? (t.gui?.settings?.no_games_ignored || 'No games on ignore list.')
+            const emptyMsg = isIgnoreMode 
+                ? (t.gui?.settings?.no_active_games || 'No active games available.')
                 : (t.gui?.settings?.all_games_selected || 'All games are selected or no games available.');
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
         }
@@ -514,33 +561,46 @@ function renderAvailableGames(games, filterText) {
     }
 
     games.forEach(game => {
-        // Zjistíme, zda má být checkbox zaškrtnutý (v závislosti na režimu Auto-add)
-        const isChecked = isAutoAdd 
-            ? ignoredGames.includes(game) 
-            : gamesToWatch.includes(game);
-
         const label = document.createElement('label');
         label.className = 'game-checkbox';
-        
-        const input = makeElement('input', { type: 'checkbox', value: game });
-        input.checked = isChecked;
 
-        label.replaceChildren(
-            input,
-            makeElement('span', {}, game),
-        );
-
-        input.addEventListener('change', (e) => {
-            if (isAutoAdd) {
-                // Pokud je zapnutý Auto-add, přepínáme Ignore List
+        if (isIgnoreMode) {
+            // Active games get a block button to add them to the ignore list
+            const ignoreBtn = makeElement('button', { class: 'remove-btn', style: 'margin-right: 8px;', title: 'Add to Ignore List' }, '🚫');
+            ignoreBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                // Call dedicated handler to ensure instant UI render and Socket.IO emission
                 if (typeof toggleGameIgnore === 'function') {
-                    toggleGameIgnore(game, e.target.checked);
+                    toggleGameIgnore(game, true);
+                } else {
+                    // Fallback in case handler is unavailable
+                    if (!state.settings.ignored_games) state.settings.ignored_games = [];
+                    if (!state.settings.ignored_games.some(g => g.toLowerCase() === game.toLowerCase())) {
+                        state.settings.ignored_games.push(game);
+                    }
+                    renderGamesToWatch();
+                    saveSettings();
                 }
-            } else {
-                // Jinak standardní sledování
+            });
+
+            label.replaceChildren(
+                ignoreBtn,
+                makeElement('span', {}, game)
+            );
+        } else {
+            const isChecked = (state.settings?.games_to_watch || []).includes(game);
+            const input = makeElement('input', { type: 'checkbox', value: game });
+            input.checked = isChecked;
+
+            input.addEventListener('change', (e) => {
                 toggleGameWatch(game, e.target.checked);
-            }
-        });
+            });
+
+            label.replaceChildren(
+                input,
+                makeElement('span', {}, game)
+            );
+        }
 
         container.appendChild(label);
     });
@@ -586,24 +646,25 @@ function handleDrop(e) {
 function handleDragEnd(e) {
     e.target.classList.remove('dragging');
 
-    // Update the order in state
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    if (isIgnoreMode) return; // Order does not matter for Ignore List
+
     const container = document.getElementById('selected-games-list');
     const items = container.querySelectorAll('.sortable-item');
     const newOrder = Array.from(items).map(item => item.dataset.game);
 
     state.settings.games_to_watch = newOrder;
 
-    // Re-render to update priority numbers
     renderSelectedGames(newOrder);
-
-    // Re-render channels list to apply updated filter
-    renderChannels();
-
-    // Save settings
+    if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
+// Helper state modification functions
 function toggleGameWatch(gameName, checked) {
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    if (isIgnoreMode) return;
+
     const games = state.settings.games_to_watch || [];
 
     if (checked && !games.includes(gameName)) {
@@ -617,33 +678,59 @@ function toggleGameWatch(gameName, checked) {
 
     state.settings.games_to_watch = games;
     renderGamesToWatch();
-    renderChannels();
+    if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
 function removeGameFromWatch(gameName) {
-    const games = state.settings.games_to_watch || [];
-    const index = games.indexOf(gameName);
-    if (index > -1) {
-        games.splice(index, 1);
-        state.settings.games_to_watch = games;
-        renderGamesToWatch();
-        renderChannels();
-        saveSettings();
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+
+    if (isIgnoreMode) {
+        if (typeof toggleGameIgnore === 'function') {
+            toggleGameIgnore(gameName, false);
+            return;
+        }
+    } else {
+        const games = state.settings.games_to_watch || [];
+        const index = games.indexOf(gameName);
+        if (index > -1) {
+            games.splice(index, 1);
+            state.settings.games_to_watch = games;
+        }
     }
+
+    renderGamesToWatch();
+    if (typeof renderChannels === 'function') renderChannels();
+    saveSettings();
 }
 
 function selectAllGames() {
-    state.settings.games_to_watch = Array.from(availableGames).sort();
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+
+    if (isIgnoreMode) {
+        // Clear ignore list to mine all available games
+        state.settings.ignored_games = [];
+    } else {
+        state.settings.games_to_watch = Array.from(availableGames).sort();
+    }
+
     renderGamesToWatch();
-    renderChannels();
+    if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
 function deselectAllGames() {
-    state.settings.games_to_watch = [];
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+
+    if (isIgnoreMode) {
+        // Ignore all available games
+        state.settings.ignored_games = Array.from(availableGames).sort();
+    } else {
+        state.settings.games_to_watch = [];
+    }
+
     renderGamesToWatch();
-    renderChannels();
+    if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
@@ -651,30 +738,29 @@ function addGameFromSearch() {
     const searchInput = document.getElementById('games-filter');
     const gameName = searchInput.value.trim();
 
-    if (!gameName) {
-        return;
+    if (!gameName) return;
+
+    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+
+    if (isIgnoreMode) {
+        // Adding a game manually in ignore mode removes it from ignored_games
+        if (state.settings.ignored_games) {
+            state.settings.ignored_games = state.settings.ignored_games.filter(
+                g => g.toLowerCase() !== gameName.toLowerCase()
+            );
+        }
+    } else {
+        const games = state.settings.games_to_watch || [];
+        if (!games.includes(gameName)) {
+            games.push(gameName);
+            state.settings.games_to_watch = games;
+        }
     }
 
-    const games = state.settings.games_to_watch || [];
-    
-    // Check if already selected
-    if (games.includes(gameName)) {
-        searchInput.value = ''; // Clear input if already added
-        renderGamesToWatch(); // Just re-render to clear any filtering state if needed
-        return;
-    }
-
-    // Add to selected games
-    games.push(gameName);
-    state.settings.games_to_watch = games;
-
-    // Add to available games set so it shows up in lists
     availableGames.add(gameName);
-
-    // Clear search and update UI
     searchInput.value = '';
     renderGamesToWatch();
-    renderChannels();
+    if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
@@ -707,7 +793,7 @@ function sortGamesByEnding() {
         renderGamesToWatch();
         renderChannels(); // Channels rely on watch priority, they must update too
         saveSettings();
-        console.log("Game list sorted by ending date and changes saved.");
+//        console.log("Game list sorted by ending date and changes saved.");
     }
 }
 
@@ -743,11 +829,11 @@ function getSortedGamesArray(games) {
 }
 
 function applyAutoSortIfNeeded() {
-	console.log('Spouštím auto-sort ...');
+//	console.log('Spouštím auto-sort ...');
     const autoSortCb = document.getElementById('auto-sort-by-end');
     // Check if the checkbox exists and is checked
     if (autoSortCb && autoSortCb.checked) {
-        console.log('Auto-sort enabled: Triggering sort automatically.');
+//        console.log('Auto-sort enabled: Triggering sort automatically.');
         sortGamesByEnding();
     }
 }
@@ -758,21 +844,82 @@ async function toggleGameIgnore(game, isIgnored) {
     }
 
     if (isIgnored) {
-        // Add game to ignore list if not present
+        // Přidání do seznamu ignorovaných
         if (!state.settings.ignored_games.includes(game)) {
             state.settings.ignored_games.push(game);
         }
+
+        // 🧹 1. DROPY & PROGRESS: Vyčištění aktuálně těženého dropu
+        if (state.currentDrop) {
+            const dropGame = state.currentDrop.game_name || state.currentDrop.game || state.currentDrop.game_title;
+            if (dropGame === game) {
+                if (typeof clearDropProgress === 'function') {
+                    clearDropProgress();
+                } else {
+                    state.currentDrop = null;
+                }
+            }
+        }
+
+        // 🧹 2. FRONTY V RAM: Odstranění z aktivních front
+        if (Array.isArray(state.activeCampaignsQueue)) {
+            state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => (c.game_name || c.game) !== game);
+        }
+        if (Array.isArray(state.activeDropsQueue)) {
+            state.activeDropsQueue = state.activeDropsQueue.filter(ad => (ad.game_name || ad.game) !== game);
+        }
+        if (Array.isArray(state.liveMiningQueue)) {
+            state.liveMiningQueue = state.liveMiningQueue.filter(cid => {
+                const camp = state.campaigns ? state.campaigns[cid] : null;
+                return camp ? (camp.game_name || camp.game) !== game : true;
+            });
+        }
+
+        // 🧹 3. WANTED STROM: Okamžitý vyhazov ze stromu Chci/Wanted
+        if (Array.isArray(state.wantedItemsTree)) {
+            state.wantedItemsTree = state.wantedItemsTree.filter(group => group.game_name !== game);
+        }
+
+        // 🧹 4. VIZUÁLNÍ RESET: Shodíme svítící třídy z karet
+        if (typeof clearWantedActiveState === 'function') {
+            clearWantedActiveState();
+        }
+
     } else {
-        // Remove game from ignore list
+        // Odebrání ze seznamu ignorovaných
         state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
     }
 
-    // Save updated settings to backend
+    // 🚀 BLESKOVÝ RE-RENDER Z ČISTÉ PAMĚTI
+    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
+        renderWantedItems(state.wantedItemsTree);
+    }
+    if (typeof renderWantedQueue === 'function') {
+        renderWantedQueue();
+    }
+    if (typeof refreshUI === 'function') {
+        refreshUI();
+    }
+
+    // Uložení nastavení a žádost o synchronizaci se serverem
     await saveSettings();
+
+    console.log('[WANTED] Ignore list updated. Requesting queue refresh.');
+    socket.emit('get_wanted_items');
+    socket.emit('get_campaigns');
+
+    if (typeof startCombinedRotation === 'function') {
+        startCombinedRotation(true);
+    }
 }
 
 // Standalone function to handle auto-adding games based on user settings
 function applyAutoAddIfNeeded() {
+    // Guard: Do not auto-add games to games_to_watch if Ignore List mode is active
+    if (state?.settings?.auto_add_all_games) {
+        return;
+    }
+
     const autoaddEl = document.getElementById('auto-add-all-games');
     if (autoaddEl && autoaddEl.checked) {
         let hasChanges = false;
@@ -987,7 +1134,7 @@ async function fetchAndApplyTranslations() {
 
         state.translations = data;
         applyTranslations(data);
-        console.log('Translations applied for language:', data.language_name);
+//        console.log('Translations applied for language:', data.language_name);
     } catch (error) {
         console.error('Failed to fetch translations:', error);
     }
@@ -1397,51 +1544,40 @@ document.addEventListener('DOMContentLoaded', () => {
         saveSettings();
     });
     
-	// Auto-sort checkbox management
-	const autoSortEl = document.getElementById('auto-sort-by-end');
-	if (autoSortEl) {
-		autoSortEl.addEventListener('change', (e) => {
-			// Save the updated auto-sort state to the API
-			saveSettings();
-			
-			// If the user enabled auto-sort, trigger the sorting function immediately
-			if (e.target.checked) {
-				sortGamesByEnding();
-			}
-		});
-	}
-    
+    // Auto-sort checkbox management
+    const autoSortEl = document.getElementById('auto-sort-by-end');
+    if (autoSortEl) {
+        autoSortEl.addEventListener('change', (e) => {
+            // Save the updated auto-sort state to the API
+            saveSettings();
+            
+            // If the user enabled auto-sort, trigger the sorting function immediately
+            if (e.target.checked) {
+                sortGamesByEnding();
+            }
+        });
+    }
+
+	// Auto-add / Ignore List toggle management
 	document.getElementById('auto-add-all-games')?.addEventListener('change', async (e) => {
 		const isChecked = e.target.checked;
 
-		// 1. Aktualizace lokalního stavu
 		if (state && state.settings) {
 			state.settings.auto_add_all_games = isChecked;
 		}
-		
-		// 2. Změna nadpisu (Available Games <-> Ignore List)
-		const gamesHeading = document.querySelector('.available-games h3');
-		if (gamesHeading) {
-			gamesHeading.textContent = isChecked ? 'Ignore List' : 'Available Games';
+
+		if (typeof renderGamesToWatch === 'function') {
+			renderGamesToWatch();
 		}
 
-		// 3. Okamžité přerendrování seznamu her
-		renderGamesToWatch();
-		
-		// 4. Uložení na backend
 		await saveSettings();
-		
-		if (isChecked) {
-			applyAutoAddIfNeeded();
-		} else {
-			updateUIState();
-		}
 	});
-	
-	document.getElementById('mine-badges-first').addEventListener('change', saveSettings);
+		
+    document.getElementById('mine-badges-first').addEventListener('change', saveSettings);
     document.getElementById('language').addEventListener('change', saveSettings);
     document.getElementById('connection-quality').addEventListener('change', saveSettings);
     document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);
+
     // Proxy uses a manual "Set Proxy" button instead of auto-save
     document.getElementById('set-proxy-btn').addEventListener('click', () => {
         const proxyInput = document.getElementById('proxy-url');
@@ -1458,7 +1594,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('verify-proxy-btn').addEventListener('click', verifyProxy);
     document.getElementById('reload-btn').addEventListener('click', reloadCampaigns);
 
-
     // Games to watch management
     document.getElementById('select-all-btn').addEventListener('click', selectAllGames);
     document.getElementById('deselect-all-btn').addEventListener('click', deselectAllGames);
@@ -1472,6 +1607,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('filter-upcoming').addEventListener('change', onInventoryFilterChange);
     document.getElementById('filter-expired').addEventListener('change', onInventoryFilterChange);
     document.getElementById('filter-finished').addEventListener('change', onInventoryFilterChange);
+
     // Benefit type filters
     document.getElementById('filter-benefit-item').addEventListener('change', onInventoryFilterChange);
     document.getElementById('filter-benefit-badge').addEventListener('change', onInventoryFilterChange);
@@ -1485,16 +1621,17 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('mining-benefit-emote').addEventListener('change', saveSettings);
     document.getElementById('mining-benefit-unknown').addEventListener('change', saveSettings);
 
-
     // Inventory game search dropdown
     const gameSearchInput = document.getElementById('inventory-game-search');
-    gameSearchInput.addEventListener('focus', () => {
-        showGameDropdown();
-    });
-    gameSearchInput.addEventListener('input', (e) => {
-        renderGameDropdown(e.target.value);
-    });
-    gameSearchInput.addEventListener('keydown', handleGameSearchKeydown);
+    if (gameSearchInput) {
+        gameSearchInput.addEventListener('focus', () => {
+            showGameDropdown();
+        });
+        gameSearchInput.addEventListener('input', (e) => {
+            renderGameDropdown(e.target.value);
+        });
+        gameSearchInput.addEventListener('keydown', handleGameSearchKeydown);
+    }
 
     // Click outside to close dropdown
     document.addEventListener('click', (e) => {

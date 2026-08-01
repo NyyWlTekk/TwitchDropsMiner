@@ -1,4 +1,7 @@
-// Initialize Socket.IO connection
+// ============================================================================
+// 1. SOCKET INITIALIZATION & DEBUG SETUP//////////////////////////////////////
+// ============================================================================
+
 const socket = io({
     transports: ['websocket', 'polling'],
     reconnection: true,
@@ -7,20 +10,17 @@ const socket = io({
     reconnectionAttempts: Infinity
 });
 
-// ==================== Socket.IO Debug & Event Handlers ====================
-
-// Check if debug mode is enabled (via window.DEBUG, state.debug, localStorage or URL query param)
+// Helper check for debug mode (window.DEBUG, state.debug, or URL query param ?debug)
 const isDebugEnabled = () => {
     if (typeof window !== 'undefined') {
         if (window.DEBUG || (typeof state !== 'undefined' && state.debug)) return true;
-        if (localStorage.getItem('debug') === 'true') return true;
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.has('debug')) return true;
     }
     return false;
 };
 
-// Catch-all debug listener for all incoming socket events
+// Global debug listener for incoming socket events
 if (typeof socket.onAny === 'function') {
     socket.onAny((eventName, ...args) => {
         if (isDebugEnabled()) {
@@ -29,7 +29,83 @@ if (typeof socket.onAny === 'function') {
     });
 }
 
-socket.on('connect', () => {
+
+// ============================================================================
+// 2. SOCKET EVENT HANDLERS
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 🟢 Connection & Status Events
+// ----------------------------------------------------------------------------
+
+socket.on('connect', () => handleConnect());
+socket.on('disconnect', (reason) => handleDisconnect(reason));
+socket.on('connect_error', (error) => handleConnectError(error));
+socket.on('status_update', (data) => handleStatusUpdate(data));
+
+
+// ----------------------------------------------------------------------------
+// 📦 Core Data & Campaign Sync Events
+// ----------------------------------------------------------------------------
+
+socket.on('initial_state', (data) => handleInitialState(data));
+socket.on('wanted_items_update', (data) => handleWantedItemsUpdate(data));
+socket.on('drop_progress', (data) => handleDropProgress(data));
+socket.on('drop_progress_stop', () => clearDropProgress());
+socket.on('campaign_add', (data) => handleCampaignAdd(data));
+socket.on('inventory_clear', () => clearInventory());
+socket.on('inventory_batch_update', (data) => handleInventoryBatchUpdate(data));
+socket.on('games_available', (data) => handleGamesAvailable(data));
+
+
+// ----------------------------------------------------------------------------
+// 📺 Channels & Console Events
+// ----------------------------------------------------------------------------
+
+socket.on('console_output', (data) => addConsoleLine(data.message));
+socket.on('channel_add', (data) => updateChannel(data));
+socket.on('channel_update', (data) => updateChannel(data));
+socket.on('channel_remove', (data) => removeChannel(data.id));
+socket.on('channels_clear', () => clearChannels());
+socket.on('channels_batch_update', (data) => handleChannelsBatchUpdate(data));
+socket.on('channel_watching', (data) => setWatchingChannel(data.id));
+socket.on('channel_watching_clear', () => clearWatchingChannel());
+
+
+// ----------------------------------------------------------------------------
+// ⚙️ Settings, Auth & Language Events
+// ----------------------------------------------------------------------------
+
+socket.on('login_required', () => showLoginForm());
+socket.on('oauth_code_required', (data) => showOAuthCode(data.url, data.code));
+socket.on('login_status', (data) => updateLoginStatus(data));
+socket.on('login_clear', (data) => handleLoginClear(data));
+socket.on('settings_updated', (data) => handleSettingsUpdated(data));
+socket.on('manual_mode_update', (data) => updateManualModeUI(data));
+socket.on('language_changed', (data) => handleLanguageChanged(data));
+
+
+// ----------------------------------------------------------------------------
+// 🎨 Theme & Notification Events
+// ----------------------------------------------------------------------------
+
+socket.on('theme_change', (data) => handleThemeChange(data));
+socket.on('notification', (data) => handleNotification(data));
+socket.on('attention_required', (data) => handleAttentionRequired(data));
+
+
+// ============================================================================
+// 3. HELPER & UTILITY FUNCTIONS
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 🟢 Connection & Status Handlers
+// ----------------------------------------------------------------------------
+
+/**
+ * Handles successful socket connection.
+ */
+function handleConnect() {
     if (isDebugEnabled()) {
         console.log('[Socket DEBUG] Connected with socket ID:', socket.id);
     } else {
@@ -39,9 +115,12 @@ socket.on('connect', () => {
     const connText = state.translations.gui?.websocket?.connected || 'Connected';
     document.getElementById('connection-indicator').textContent = '● ' + connText;
     document.getElementById('connection-indicator').className = 'connected';
-});
+}
 
-socket.on('disconnect', (reason) => {
+/**
+ * Handles socket disconnection.
+ */
+function handleDisconnect(reason) {
     if (isDebugEnabled()) {
         console.warn('[Socket DEBUG] Disconnected reason:', reason);
     } else {
@@ -51,162 +130,42 @@ socket.on('disconnect', (reason) => {
     const disconnText = state.translations.gui?.websocket?.disconnected || 'Disconnected';
     document.getElementById('connection-indicator').textContent = '● ' + disconnText;
     document.getElementById('connection-indicator').className = 'disconnected';
-});
+}
 
-socket.on('connect_error', (error) => {
+/**
+ * Handles socket connection errors.
+ */
+function handleConnectError(error) {
     if (isDebugEnabled()) {
         console.error('[Socket DEBUG] Connection error:', error);
     }
-});
-
-/**
- * [CACHE_HELPER] Safely set item in localStorage
- */
-function safeSetStorage(key, value) {
-    try {
-        localStorage.setItem(key, JSON.stringify(value));
-    } catch (e) {
-        console.error(`[CACHE_ERROR] Failed to save ${key}:`, e);
-    }
 }
 
 /**
- * [CACHE_HELPER] Safely get item from localStorage
+ * Handles status update payload from server.
  */
-function safeGetStorage(key) {
-    try {
-        const data = localStorage.getItem(key);
-        return data ? JSON.parse(data) : null;
-    } catch (e) {
-        console.error(`[CACHE_ERROR] Failed to read ${key}:`, e);
-        return null;
+function handleStatusUpdate(data) {
+    if (data && data.status) {
+        updateStatus(data.status);
     }
 }
+
+
+// ----------------------------------------------------------------------------
+// 📦 Core Data & Campaign Sync Handlers
+// ----------------------------------------------------------------------------
 
 /**
- * [CHANNELS_CACHE] Handles initial channel loading with cache fallback
+ * Handles initial state payload received from server.
  */
-function handleInitialChannels(channelsData) {
-    state.channels = {};
-
-    let channelsList = [];
-    if (Array.isArray(channelsData)) {
-        channelsList = channelsData;
-    } else if (channelsData && typeof channelsData === 'object') {
-        channelsList = Object.values(channelsData);
-    }
-
-    if (channelsList.length === 0) {
-        const cached = safeGetStorage('app_saved_channels');
-        if (cached && typeof cached === 'object') {
-            state.channels = cached;
-            console.log("[CHANNELS_CACHE] Restored channels from localStorage.");
-        }
-    } else {
-        channelsList.forEach(ch => {
-            if (ch && ch.id) {
-                state.channels[ch.id] = ch;
-            }
-        });
-        safeSetStorage('app_saved_channels', state.channels);
-    }
-
-    if (typeof renderChannels === 'function') {
-        renderChannels();
-    }
-}
-
-/**
- * [WANTED_CACHE] Handles wanted items tree loading with cache fallback
- */
-function handleInitialWantedItems(wantedData) {
-    let treeToRender = wantedData;
-
-    if (treeToRender && !Array.isArray(treeToRender) && typeof treeToRender === 'object') {
-        treeToRender = Object.values(treeToRender);
-    }
-
-    if (!Array.isArray(treeToRender) || treeToRender.length === 0) {
-        const cached = safeGetStorage('app_saved_wanted_tree');
-        if (Array.isArray(cached) && cached.length > 0) {
-            treeToRender = cached;
-            console.log("[WANTED_CACHE] Restored wanted tree from localStorage.");
-        }
-    }
-
-    if (Array.isArray(treeToRender) && treeToRender.length > 0) {
-        state.wantedItemsTree = treeToRender;
-        safeSetStorage('app_saved_wanted_tree', treeToRender);
-        if (typeof renderWantedItems === 'function') {
-            renderWantedItems(treeToRender);
-        }
-    }
-}
-
-/**
- * [DROP_CACHE] Drží progress bar z keše, dokud nepřijdou nová platná data
- */
-function handleInitialCurrentDrop(dropData) {
-    const hasValidDrop = dropData && typeof dropData === 'object' && Object.keys(dropData).length > 0;
-
-    if (hasValidDrop) {
-        // Přišla nová platná data z backendu -> uložíme a vykreslíme
-        safeSetStorage('app_saved_current_drop', dropData);
-        if (typeof updateDropProgress === 'function') {
-            updateDropProgress(dropData);
-        }
-    } else {
-        // Backend neposlal drop (např. při gathering channels) -> VŽDY držíme keš!
-        const cached = safeGetStorage('app_saved_current_drop');
-        if (cached && typeof cached === 'object' && Object.keys(cached).length > 0) {
-            console.log("[DROP_CACHE] Backend nezaslal drop (gathering). Držím progress bar z keše.");
-            if (typeof updateDropProgress === 'function') {
-                updateDropProgress(cached);
-            }
-        } else if (typeof clearDropProgress === 'function') {
-            // Provedeme clear JEN v případě, že nemáme vůbec nic v keši
-            clearDropProgress();
-        }
-    }
-}
-
-// Instant cache restore on DOM load (before WebSocket connection completes)
-document.addEventListener('DOMContentLoaded', () => {
-    console.log("[CACHE] Instant recovery sequence started...");
-
-    // 1. Restore current drop progress immediately
-    const cachedDrop = safeGetStorage('app_saved_current_drop');
-    if (cachedDrop && Object.keys(cachedDrop).length > 0) {
-        if (typeof updateDropProgress === 'function') {
-            updateDropProgress(cachedDrop);
-        }
-    }
-
-    // 2. Restore channels
-    const cachedChannels = safeGetStorage('app_saved_channels');
-    if (cachedChannels && Object.keys(cachedChannels).length > 0) {
-        state.channels = cachedChannels;
-        if (typeof renderChannels === 'function') renderChannels();
-    }
-
-    // 3. Restore wanted tree
-    const cachedWanted = safeGetStorage('app_saved_wanted_tree');
-    if (Array.isArray(cachedWanted) && cachedWanted.length > 0) {
-        state.wantedItemsTree = cachedWanted;
-        if (typeof renderWantedItems === 'function') renderWantedItems(cachedWanted);
-    }
-});
-
-function updateStatus(status) {
-    const statusEl = document.getElementById('status-text');
-    if (statusEl) {
-        statusEl.textContent = status;
-    }
-}
-
-// Main socket event listener with fail-safe blocks
-socket.on('initial_state', (data) => {
+function handleInitialState(data) {
     console.log('[SOCKET] Received initial state', data);
+
+    if (data.settings && typeof state !== 'undefined') {
+        state.settings = { ...state.settings, ...data.settings };
+    }
+
+    data = filterIgnoredData(data);
 
     try { if (data.status && typeof updateStatus === 'function') updateStatus(data.status); } catch (e) { console.error("[INIT_ERR] Status:", e); }
     try { handleInitialWantedItems(data.wanted_items); } catch (e) { console.error("[INIT_ERR] Wanted:", e); }
@@ -255,166 +214,253 @@ socket.on('initial_state', (data) => {
             if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
         }
 
-        const autoaddEl = document.getElementById('auto-add-all-games');
-        if (autoaddEl && data.settings) {
-            autoaddEl.checked = !!data.settings.auto_add_all_games;
-            if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
+        if (data.settings && typeof syncAutoAddUI === 'function') {
+            syncAutoAddUI(data.settings);
         }
 
         if (typeof startCombinedRotation === 'function') {
             startCombinedRotation(true);
         }
     } catch (e) { console.error("[INIT_ERR] Rotation:", e); }
-});
+}
 
-socket.on('status_update', (data) => {
-    updateStatus(data.status);
-});
+/**
+ * Handles wanted items update filtering out ignored games.
+ */
+function handleWantedItemsUpdate(data) {
+    let filteredData = data;
+    if (Array.isArray(data)) {
+        filteredData = data.filter(item => !isGameIgnored(item.game_name || item.game));
+    }
+    renderWantedItems(filteredData);
+}
 
-socket.on('console_output', (data) => {
-    addConsoleLine(data.message);
-});
+/**
+ * Handles live drop progress updates.
+ */
+function handleDropProgress(data) {
+    const gameName = data.game_name || data.game || data.game_title;
+    if (isGameIgnored(gameName)) {
+        if (typeof clearDropProgress === 'function') clearDropProgress();
+        return;
+    }
 
-socket.on('channel_add', (data) => {
-    updateChannel(data);
-});
-
-socket.on('channel_update', (data) => {
-    updateChannel(data);
-});
-
-socket.on('channel_remove', (data) => {
-    removeChannel(data.id);
-});
-
-socket.on('channels_clear', () => {
-    clearChannels();
-});
-
-socket.on('channels_batch_update', (data) => {
-    // Replace all channels atomically to prevent flickering
-    state.channels = {};
-    data.channels.forEach(ch => {
-        state.channels[ch.id] = ch;
-    });
-    renderChannels();
-});
-
-socket.on('channel_watching', (data) => {
-    setWatchingChannel(data.id);
-});
-
-socket.on('channel_watching_clear', () => {
-    clearWatchingChannel();
-});
-
-socket.on('drop_progress', (data) => {
-    // Získáme ID dropu (server může posílat drop_id nebo id)
     const dropId = data.drop_id || data.id;
     if (dropId) {
-        // Okamžitě synchronizujeme obě místa na hlavní stránce
         syncAnyDropProgress(String(dropId), data);
     }
-    
-    // Původní funkce pro jistotu zůstane zachovaná
+
     if (typeof updateDropProgress === 'function') {
         updateDropProgress(data);
     }
-});
-
-socket.on('drop_progress_stop', () => {
-    clearDropProgress();
-});
-
-socket.on('campaign_add', (data) => {
-    addCampaign(data);
-});
-
-
-function clearInventory() {
-    state.campaigns = {};
-    if (typeof renderInventory === 'function') renderInventory();
 }
 
-socket.on('inventory_clear', () => {
-    clearInventory();
-});
+/**
+ * Handles adding a single campaign.
+ */
+function handleCampaignAdd(data) {
+    const gameName = data.game_name || data.game;
+    if (!isGameIgnored(gameName)) {
+        addCampaign(data);
+    }
+}
 
-socket.on('inventory_batch_update', (data) => {
-    // Replace all campaigns atomically to prevent flickering
+/**
+ * Handles batch inventory updates.
+ */
+function handleInventoryBatchUpdate(data) {
     state.campaigns = {};
-    data.campaigns.forEach(camp => {
+    const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
+    filtered.forEach(camp => {
         state.campaigns[camp.id] = camp;
     });
     renderInventory();
-    
-    // Apply auto-sort after new campaigns are loaded
-    applyAutoSortIfNeeded(); 
-});
+    applyAutoSortIfNeeded();
+}
 
-socket.on('login_required', () => {
-    showLoginForm();
-});
+/**
+ * Handles available games payload.
+ */
+function handleGamesAvailable(data) {
+    availableGames = new Set(data.games || []);
+    renderGamesToWatch();
+    applyAutoAddIfNeeded();
+}
 
-socket.on('oauth_code_required', (data) => {
-    showOAuthCode(data.url, data.code);
-});
 
-socket.on('login_status', (data) => {
-    updateLoginStatus(data);
-});
+// ----------------------------------------------------------------------------
+// 📺 Channels & UI Handlers
+// ----------------------------------------------------------------------------
 
-socket.on('login_clear', (data) => {
+/**
+ * Handles batch channels updates.
+ */
+function handleChannelsBatchUpdate(data) {
+    state.channels = {};
+    if (Array.isArray(data.channels)) {
+        data.channels.forEach(ch => {
+            state.channels[ch.id] = ch;
+        });
+    }
+    renderChannels();
+}
+
+
+// ----------------------------------------------------------------------------
+// ⚙️ Settings, Auth & Theme Handlers
+// ----------------------------------------------------------------------------
+
+/**
+ * Handles login credentials reset in UI.
+ */
+function handleLoginClear(data) {
     if (data.login) document.getElementById('username').value = '';
     if (data.password) document.getElementById('password').value = '';
     if (data.token) document.getElementById('2fa-token').value = '';
-});
+}
 
-socket.on('settings_updated', (data) => {
-    updateSettingsUI(data);
-    
-    // If the server confirmed auto-sort is enabled, trigger sorting immediately
-    if (data.auto_sort_by_end) {        
-        sortGamesByEnding(); 
+/**
+ * Handles settings update confirmation from server.
+ */
+function handleSettingsUpdated(data) {
+    if (typeof state !== 'undefined') {
+        state.settings = { ...state.settings, ...data };
     }
-});
+    updateSettingsUI(data);
 
-socket.on('theme_change', (data) => {
+    if (data.auto_sort_by_end) {
+        sortGamesByEnding();
+    }
+}
+
+/**
+ * Handles UI language change.
+ */
+function handleLanguageChanged(data) {
+    console.log('Language changed to:', data.language);
+    fetchAndApplyTranslations();
+}
+
+/**
+ * Handles theme toggle.
+ */
+function handleThemeChange(data) {
     if (data.dark_mode) {
         document.body.classList.add('dark-mode');
     } else {
         document.body.classList.remove('dark-mode');
     }
-});
+}
 
-socket.on('notification', (data) => {
+/**
+ * Handles browser desktop notification.
+ */
+function handleNotification(data) {
     if ('Notification' in window && Notification.permission === 'granted') {
         new Notification(data.title, {
             body: data.message,
             icon: '/static/icon.png'
         });
     }
-});
+}
 
-socket.on('attention_required', (data) => {
+/**
+ * Handles visual/audio attention requests.
+ */
+function handleAttentionRequired(data) {
     if (data.sound) {
-        // Play notification sound
         const audio = new Audio('/static/notification.mp3');
         audio.play().catch(() => { });
     }
-    // Flash title
     flashTitle();
-});
+}
 
-socket.on('manual_mode_update', (data) => {
-    updateManualModeUI(data);
-});
 
-socket.on('language_changed', (data) => {
-    console.log('Language changed to:', data.language);
-    fetchAndApplyTranslations();
-});
+// ----------------------------------------------------------------------------
+// 🛠️ Ignore List & State Utilities
+// ----------------------------------------------------------------------------
 
-socket.on('wanted_items_update', (data) => {
-    renderWantedItems(data);
-});
+/**
+ * Checks whether a game is present in the ignore list.
+ */
+function isGameIgnored(gameName) {
+    if (!gameName || typeof state === 'undefined' || !state.settings || !Array.isArray(state.settings.ignored_games)) {
+        return false;
+    }
+    return state.settings.ignored_games.includes(gameName);
+}
+
+/**
+ * Filters out ignored games from incoming socket data payloads.
+ */
+function filterIgnoredData(data) {
+    if (!data || typeof state === 'undefined' || !state.settings || !Array.isArray(state.settings.ignored_games)) {
+        return data;
+    }
+    const ignored = state.settings.ignored_games;
+    if (ignored.length === 0) return data;
+
+    if (data.current_drop) {
+        const dropGame = data.current_drop.game_name || data.current_drop.game || data.current_drop.game_title;
+        if (ignored.includes(dropGame)) {
+            data.current_drop = null;
+        }
+    }
+
+    if (Array.isArray(data.campaigns)) {
+        data.campaigns = data.campaigns.filter(c => {
+            const cGame = c.game_name || c.game || c.game_title;
+            return !ignored.includes(cGame);
+        });
+    }
+
+    if (Array.isArray(data.wanted_items)) {
+        data.wanted_items = data.wanted_items.filter(item => {
+            const gName = item.game_name || item.game;
+            return !ignored.includes(gName);
+        });
+    }
+
+    return data;
+}
+
+/**
+ * Updates status display and triggers UI refreshes.
+ */
+function updateStatus(status) {
+    const statusEl = document.getElementById('status-text');
+    if (statusEl) {
+        statusEl.textContent = status;
+    }
+
+    if (typeof renderWantedQueue === 'function') {
+        renderWantedQueue();
+    }
+    if (typeof refreshUI === 'function') {
+        refreshUI();
+    }
+}
+
+/**
+ * Synchronizes auto-add UI state and settings checkboxes.
+ */
+function syncAutoAddUI(settings) {
+    if (!settings) return;
+
+    const autoaddEl = document.getElementById('auto-add-all-games');
+    if (autoaddEl) {
+        autoaddEl.checked = Boolean(settings.auto_add_all_games);
+    }
+
+    if (typeof renderGamesToWatch === 'function') {
+        renderGamesToWatch();
+    }
+}
+
+/**
+ * Clears campaigns from global state and re-renders inventory.
+ */
+function clearInventory() {
+    state.campaigns = {};
+    if (typeof renderInventory === 'function') renderInventory();
+}

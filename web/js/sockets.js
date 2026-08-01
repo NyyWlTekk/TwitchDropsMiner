@@ -1,5 +1,5 @@
 // ============================================================================
-// 1. SOCKET INITIALIZATION & DEBUG SETUP//////////////////////////////////////
+// 1. SOCKET INITIALIZATION & DEBUG SETUP
 // ============================================================================
 
 const socket = io({
@@ -68,8 +68,42 @@ socket.on('channel_update', (data) => updateChannel(data));
 socket.on('channel_remove', (data) => removeChannel(data.id));
 socket.on('channels_clear', () => clearChannels());
 socket.on('channels_batch_update', (data) => handleChannelsBatchUpdate(data));
-socket.on('channel_watching', (data) => setWatchingChannel(data.id));
-socket.on('channel_watching_clear', () => clearWatchingChannel());
+
+socket.on('channel_watching', (data) => {
+    const channelId = (typeof data === 'object' && data !== null) ? data.id : data;
+    if (typeof state !== 'undefined') {
+        state.watching_channel = channelId;
+
+        // Okamžitá kontrola po přepnutí kanálu
+        const watchedChannelObj = getWatchedChannelObject();
+        const watchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game) : null;
+
+        if (state.currentDrop) {
+            const currentDropGame = getDropGameName(state.currentDrop);
+            if (watchedGame && currentDropGame && watchedGame !== currentDropGame) {
+                console.log(`[CHANNEL SWITCH] Clearing stale drop '${currentDropGame}' (Channel plays '${watchedGame}')`);
+                safeClearDrop();
+            }
+        }
+    }
+
+    if (typeof setWatchingChannel === 'function') {
+        setWatchingChannel(channelId);
+    }
+});
+
+socket.on('channel_watching_clear', () => {
+    if (typeof state !== 'undefined') {
+        state.watching_channel = null;
+    }
+    if (typeof clearWatchingChannel === 'function') {
+        clearWatchingChannel();
+    }
+    // Clean progress UI when watching state is cleared
+    if (typeof clearDropProgress === 'function') {
+        clearDropProgress();
+    }
+});
 
 
 // ----------------------------------------------------------------------------
@@ -147,6 +181,14 @@ function handleConnectError(error) {
 function handleStatusUpdate(data) {
     if (data && data.status) {
         updateStatus(data.status);
+
+        // Auto-clear drop UI if status indicates idle or non-mining state
+        const statusLower = data.status.toLowerCase();
+        if (statusLower.includes('idle') || statusLower.includes('no active campaigns') || statusLower.includes('offline')) {
+            if (typeof clearDropProgress === 'function') {
+                clearDropProgress();
+            }
+        }
     }
 }
 
@@ -163,6 +205,21 @@ function handleInitialState(data) {
 
     if (data.settings && typeof state !== 'undefined') {
         state.settings = { ...state.settings, ...data.settings };
+    }
+
+    // Parse and store currently watched channel if available in initial payload
+    if (typeof state !== 'undefined') {
+        if (data.watching_channel) {
+            state.watching_channel = data.watching_channel;
+        } else if (data.status && typeof data.status === 'string' && data.status.startsWith('Watching: ')) {
+            const streamerName = data.status.replace('Watching: ', '').trim();
+            const channels = data.channels || {};
+            const chList = Array.isArray(channels) ? channels : Object.values(channels);
+            const found = chList.find(c => (c.displayName || c.name || c.username) === streamerName);
+            if (found) {
+                state.watching_channel = found.id;
+            }
+        }
     }
 
     data = filterIgnoredData(data);
@@ -205,7 +262,17 @@ function handleInitialState(data) {
     try { if (data.login && typeof updateLoginStatus === 'function') updateLoginStatus(data.login); } catch (e) { console.error("[INIT_ERR] Login:", e); }
     try { if (data.manual_mode && typeof updateManualModeUI === 'function') updateManualModeUI(data.manual_mode); } catch (e) { console.error("[INIT_ERR] ManualMode:", e); }
 
-    try { handleInitialCurrentDrop(data.current_drop, data.status); } catch (e) { console.error("[INIT_ERR] Drop:", e); }
+    try { 
+		if (data.current_drop) {
+			handleInitialCurrentDrop(data.current_drop, data.status); 
+		} else {
+			if (typeof clearDropProgress === 'function') {
+				clearDropProgress();
+			}
+		}
+	} catch (e) { 
+		console.error("[INIT_ERR] Drop:", e); 
+	}
 
     try {
         const autosortEl = document.getElementById('auto-sort-by-end');
@@ -235,18 +302,28 @@ function handleWantedItemsUpdate(data) {
     renderWantedItems(filteredData);
 }
 
-/**
- * Handles live drop progress updates.
- */
 function handleDropProgress(data) {
-    const gameName = data.game_name || data.game || data.game_title;
-    if (isGameIgnored(gameName)) {
-        if (typeof clearDropProgress === 'function') clearDropProgress();
+    if (!data) return;
+
+    const incomingGame = getDropGameName(data);
+    const watchedChannelObj = getWatchedChannelObject();
+    const currentlyWatchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game) : null;
+
+    // 1. Ignorované hry
+    if (incomingGame && isGameIgnored(incomingGame)) {
         return;
     }
 
+    // 2. Nesoulad her: přichází progress pro jinou hru, než jakou streamer právě hraje
+    if (currentlyWatchedGame && incomingGame && incomingGame !== currentlyWatchedGame) {
+        console.warn(`[SYNC BLOCK] Ignored progress for '${incomingGame}' (watched channel plays '${currentlyWatchedGame}')`);
+        safeClearDrop();
+        return;
+    }
+
+    // 3. Zápis a render
     const dropId = data.drop_id || data.id;
-    if (dropId) {
+    if (dropId && typeof syncAnyDropProgress === 'function') {
         syncAnyDropProgress(String(dropId), data);
     }
 
@@ -302,9 +379,21 @@ function handleChannelsBatchUpdate(data) {
             state.channels[ch.id] = ch;
         });
     }
-    renderChannels();
-}
 
+    // Kontrola po hromadné aktualizaci kanálů
+    const watchedChannelObj = getWatchedChannelObject();
+    const currentWatchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game) : null;
+
+    if (state.currentDrop && currentWatchedGame) {
+        const activeDropGame = getDropGameName(state.currentDrop);
+        if (activeDropGame && currentWatchedGame !== activeDropGame) {
+            console.warn(`[SYNC CLEANUP] Mismatch after channels update: watched '${currentWatchedGame}' vs drop '${activeDropGame}'. Clearing.`);
+            safeClearDrop();
+        }
+    }
+
+    if (typeof renderChannels === 'function') renderChannels();
+}
 
 // ----------------------------------------------------------------------------
 // ⚙️ Settings, Auth & Theme Handlers
@@ -463,4 +552,64 @@ function syncAutoAddUI(settings) {
 function clearInventory() {
     state.campaigns = {};
     if (typeof renderInventory === 'function') renderInventory();
+}
+
+/**
+ * Bezpečně vyhledá objekt sledovaného kanálu v state.channels
+ * bez ohledu na to, zda jde o Pole (Array) nebo Objekt (Map/Dict).
+ */
+function getWatchedChannelObject() {
+    if (typeof state === 'undefined' || !state.watching_channel || !state.channels) return null;
+    const target = state.watching_channel;
+
+    if (Array.isArray(state.channels)) {
+        return state.channels.find(c => 
+            String(c.id) === String(target) || 
+            c.name === target || 
+            c.displayName === target ||
+            c.username === target
+        ) || null;
+    } else if (typeof state.channels === 'object') {
+        if (state.channels[target]) return state.channels[target];
+        if (state.channels[String(target)]) return state.channels[String(target)];
+        return Object.values(state.channels).find(c => 
+            String(c?.id) === String(target) || 
+            c?.name === target || 
+            c?.displayName === target
+        ) || null;
+    }
+    return null;
+}
+
+/**
+ * Zjistí název hry z drop balíčku. Pokud v objektu chybí,
+ * dohledá ho přímo v načtených kampaních podle drop_id.
+ */
+function getDropGameName(data) {
+    if (!data) return null;
+    let game = data.game_name || data.game || data.game_title || data.campaign?.game_name || data.drop?.game_name;
+    if (game) return game;
+
+    const dropId = data.drop_id || data.id;
+    if (dropId && typeof state !== 'undefined' && state.campaigns) {
+        const campList = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        for (const camp of campList) {
+            if (camp.time_based_drops && camp.time_based_drops.some(d => String(d.id) === String(dropId))) {
+                return camp.game_name || camp.game;
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Kompletně vyčistí drop jak z RAM paměti (state.currentDrop), tak z HTML DOMu.
+ */
+function safeClearDrop() {
+    if (typeof state !== 'undefined') {
+        state.currentDrop = null;
+    }
+    if (typeof clearDropProgress === 'function') {
+        clearDropProgress(true);
+    }
 }

@@ -1,0 +1,456 @@
+/**
+ * Clears the current drop progress UI and resets related state.
+ */
+function clearDropProgress() {
+    // 1. Reset stavu v RAM
+    state.currentDrop = null;
+    dropTotalSeconds = 0;
+    
+    if (state.countdownTimer) {
+        clearInterval(state.countdownTimer);
+        state.countdownTimer = null;
+    }
+
+    // 2. Reset UI prvků pro progress bar
+    const noDropMessage = document.getElementById('no-drop-message');
+    const dropInfo = document.getElementById('drop-info');
+    
+    if (noDropMessage) noDropMessage.style.display = 'block';
+    if (dropInfo) dropInfo.style.display = 'none';
+
+    // --- DOPLNĚNO: Vyčištění hlavičky hry a ikony odměny ---
+    const dropGameEl = document.getElementById('drop-game');
+    if (dropGameEl) {
+        dropGameEl.innerHTML = '';
+        dropGameEl.style.display = 'none';
+    }
+
+    const leftImg = document.getElementById('drop-card-left-img');
+    if (leftImg) {
+        leftImg.remove();
+    }
+
+    const currentDropLabel = document.getElementById('current-drop-label');
+    if (currentDropLabel) {
+        currentDropLabel.textContent = '';
+    }
+    // ------------------------------------------------------
+
+    const fill = document.getElementById('progress-fill');
+    if (fill) {
+        fill.style.width = '0%';
+        fill.textContent = '0%';
+    }
+
+    const progressText = document.getElementById('progress-text');
+    if (progressText) progressText.textContent = '0 / 0 min';
+
+    const timeEl = document.getElementById('progress-time');
+    if (timeEl) timeEl.textContent = 'Time remaining: 0:00';
+
+    // 3. Vyčištění aktivních vizuálních tříd
+    if (typeof clearWantedActiveState === 'function') {
+        clearWantedActiveState();
+    }
+
+    // 4. Překreslení stromu fronty Wanted na základě aktuálního objektu state
+    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
+        renderWantedItems(state.wantedItemsTree);
+    }
+}
+
+function clearWantedActiveState() {
+    const activeWantedElements = document.querySelectorAll(
+        '.wanted-card.active-mining, .wanted-card.in-progress, .wanted-card.active, .wanted-card.is-active, ' +
+        '.wanted-item.active-mining, .wanted-item.in-progress, .wanted-item.active, .wanted-item.is-active'
+    );
+
+    if (activeWantedElements.length > 0) {
+        activeWantedElements.forEach(el => {
+            el.classList.remove('active-mining', 'in-progress', 'active', 'is-active', 'mining');
+        });
+    }
+}
+
+function renderDropGameHeader(data) {
+    const dropGameEl = document.getElementById('drop-game');
+    if (!dropGameEl) return;
+
+    let boxArtUrl = data.game_box_art_url;
+    if (!boxArtUrl && state.campaigns && data.campaign_id) {
+        const foundCampaign = state.campaigns[data.campaign_id] ||
+            Object.values(state.campaigns).find(c => c && (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
+        if (foundCampaign) {
+            boxArtUrl = foundCampaign.game_box_art_url || foundCampaign.box_art_url || foundCampaign.art_url;
+        }
+    }
+
+    dropGameEl.style.display = 'flex';
+    dropGameEl.style.alignItems = 'center';
+    dropGameEl.style.gap = '12px';
+    dropGameEl.style.margin = '8px 0';
+
+    const children = [];
+
+    if (boxArtUrl && typeof getCachedImage === 'function') {
+        const iconUrl = boxArtUrl.replace('{width}', '52').replace('{height}', '70');
+        const imgEl = getCachedImage(iconUrl, data.game_name || '', 'game-icon', {
+            width: '42px',
+            height: '56px',
+            borderRadius: '6px',
+            objectFit: 'cover',
+            flexShrink: '0'
+        });
+        if (imgEl) children.push(imgEl);
+    }
+
+    if (typeof makeElement === 'function') {
+        const infoTextDiv = makeElement('div', { class: 'drop-game-text-info' });
+        infoTextDiv.style.display = 'flex';
+        infoTextDiv.style.flexDirection = 'column';
+        infoTextDiv.style.justifyContent = 'center';
+
+        const titleText = data.campaign_name || '';
+        const subTextContent = data.drop_name || '';
+        const subText = makeElement('span', { class: 'drop-sub-name' }, subTextContent);
+        subText.style.fontSize = '0.9em';
+        subText.style.opacity = '0.85';
+
+        if (data.campaign_id) {
+            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
+            const linkEl = makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, titleText);
+            infoTextDiv.appendChild(linkEl);
+        } else {
+            const titleEl = makeElement('span', { class: 'drop-campaign-title' }, titleText);
+            infoTextDiv.appendChild(titleEl);
+        }
+        
+        infoTextDiv.appendChild(subText);
+        children.push(infoTextDiv);
+    }
+
+    dropGameEl.replaceChildren(...children);
+}
+
+function renderDropCardLayout(data, rewardImgUrl) {
+    const currentDropLabel = document.getElementById('current-drop-label');
+    if (!currentDropLabel) return;
+
+    let activeDrops = [];
+    const { drops } = getCampaignAndDrops(data);
+    
+    if (drops && drops.length > 0) activeDrops = drops.filter(d => !isClaimed(d));
+    if (activeDrops.length === 0 && state.activeDropsQueue && state.activeDropsQueue.length > 0) activeDrops = state.activeDropsQueue;
+
+    const dropQueueLen = activeDrops.length > 0 ? activeDrops.length : 1;
+    let dropIdx = 1;
+    
+    if (activeDrops.length > 0) {
+        const currentId = data.drop_id || data.id;
+        const foundIdx = activeDrops.findIndex(d => (d.drop_id || d.id) === currentId);
+        if (foundIdx !== -1) dropIdx = foundIdx + 1;
+    }
+
+    currentDropLabel.textContent = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${data.drop_name || ''}`;
+    let cardOuter = currentDropLabel.closest('.drop-card-container');
+
+    if (!cardOuter) {
+        const progressTime = document.getElementById('progress-time');
+        const progressFill = document.getElementById('progress-fill');
+        let parentSearch = currentDropLabel.parentElement;
+
+        while (parentSearch && parentSearch !== document.body) {
+            if ((progressTime && parentSearch.contains(progressTime)) || (progressFill && parentSearch.contains(progressFill))) {
+                cardOuter = parentSearch;
+                cardOuter.classList.add('drop-card-container');
+                break;
+            }
+            parentSearch = parentSearch.parentElement;
+        }
+    }
+
+    if (!cardOuter) return;
+
+    let rightCol = cardOuter.querySelector('#drop-card-right-col');
+    let leftImg = cardOuter.querySelector('#drop-card-left-img');
+
+    if (!rightCol) {
+        rightCol = document.createElement('div');
+        rightCol.id = 'drop-card-right-col';
+        rightCol.style.flex = '1';
+        rightCol.style.display = 'flex';
+        rightCol.style.flexDirection = 'column';
+        rightCol.style.justifyContent = 'space-between';
+        rightCol.style.gap = '6px';
+        rightCol.style.minWidth = '0';
+
+        while (cardOuter.firstChild) rightCol.appendChild(cardOuter.firstChild);
+
+        cardOuter.style.display = 'flex';
+        cardOuter.style.flexDirection = 'row';
+        cardOuter.style.alignItems = 'stretch';
+        cardOuter.style.gap = '12px';
+        cardOuter.appendChild(rightCol);
+    }
+
+    if (rewardImgUrl && typeof getCachedImage === 'function') {
+        const cachedRewardImg = getCachedImage(rewardImgUrl, data.drop_name || '', 'drop-reward-icon', {
+            width: '72px',
+            height: 'auto',
+            maxHeight: '100%',
+            alignSelf: 'center',
+            objectFit: 'contain',
+            borderRadius: '6px',
+            flexShrink: '0',
+            display: 'block'
+        });
+
+        if (cachedRewardImg) {
+            cachedRewardImg.id = 'drop-card-left-img';
+            if (!leftImg || leftImg !== cachedRewardImg) {
+                if (leftImg && cardOuter.contains(leftImg)) {
+                    leftImg.replaceWith(cachedRewardImg);
+                } else {
+                    cardOuter.insertBefore(cachedRewardImg, rightCol);
+                }
+            }
+        }
+    } else if (leftImg) {
+        leftImg.remove();
+    }
+}
+
+function renderAllProgressBars(currentMins, dropData) {
+    const reqMins = dropData.required_minutes || 1;
+    const dropPercentage = Math.min(100, Math.max(0, (currentMins / reqMins) * 100));
+
+    const fill = document.getElementById('progress-fill');
+    if (fill) {
+        fill.style.width = `${dropPercentage.toFixed(1)}%`;
+        fill.textContent = `${Math.round(dropPercentage)}%`;
+    }
+
+    const progressText = document.getElementById('progress-text');
+    if (progressText) progressText.textContent = `${currentMins} / ${reqMins} min`;
+
+    updateCampaignProgressData(dropData, currentMins);
+    updateOverallProgress();
+}
+
+async function toggleGameIgnore(game, isIgnored) {
+    if (!state.settings.ignored_games) {
+        state.settings.ignored_games = [];
+    }
+
+    if (isIgnored) {
+        // Přidání do seznamu ignorovaných
+        if (!state.settings.ignored_games.includes(game)) {
+            state.settings.ignored_games.push(game);
+        }
+
+        // 🧹 1. DROPY & PROGRESS: Vyčištění aktuálně těženého dropu
+        if (state.currentDrop) {
+            const dropGame = state.currentDrop.game_name || state.currentDrop.game || state.currentDrop.game_title;
+            if (dropGame === game) {
+                if (typeof clearDropProgress === 'function') {
+                    clearDropProgress();
+                } else {
+                    state.currentDrop = null;
+                }
+            }
+        }
+
+        // 🧹 2. FRONTY V RAM: Odstranění z aktivních front
+        if (Array.isArray(state.activeCampaignsQueue)) {
+            state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => (c.game_name || c.game) !== game);
+        }
+        if (Array.isArray(state.activeDropsQueue)) {
+            state.activeDropsQueue = state.activeDropsQueue.filter(ad => (ad.game_name || ad.game) !== game);
+        }
+        if (Array.isArray(state.liveMiningQueue)) {
+            state.liveMiningQueue = state.liveMiningQueue.filter(cid => {
+                const camp = state.campaigns ? state.campaigns[cid] : null;
+                return camp ? (camp.game_name || camp.game) !== game : true;
+            });
+        }
+
+        // 🧹 3. WANTED STROM: Okamžitý vyhazov ze stromu Chci/Wanted
+        if (Array.isArray(state.wantedItemsTree)) {
+            state.wantedItemsTree = state.wantedItemsTree.filter(group => group.game_name !== game);
+        }
+
+        // 🧹 4. VIZUÁLNÍ RESET: Shodíme svítící třídy z karet
+        if (typeof clearWantedActiveState === 'function') {
+            clearWantedActiveState();
+        }
+
+    } else {
+        // Odebrání ze seznamu ignorovaných
+        state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
+    }
+
+    // 🚀 BLESKOVÝ RE-RENDER Z ČISTÉ PAMĚTI
+    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
+        renderWantedItems(state.wantedItemsTree);
+    }
+    if (typeof renderWantedQueue === 'function') {
+        renderWantedQueue();
+    }
+    if (typeof refreshUI === 'function') {
+        refreshUI();
+    }
+
+    // Uložení nastavení a žádost o synchronizaci se serverem
+    await saveSettings();
+
+    console.log('[WANTED] Ignore list updated. Requesting queue refresh.');
+    socket.emit('get_wanted_items');
+    socket.emit('get_campaigns');
+
+    if (typeof startCombinedRotation === 'function') {
+        startCombinedRotation(true);
+    }
+}
+
+
+function renderWantedItems(tree) {
+    const container = document.getElementById('wanted-items-list');
+    if (!container) {
+        return;
+    }
+
+    state.wantedItemsTree = tree || [];
+
+    if (!tree || tree.length === 0) {
+        const emptyMsg = state.translations.gui?.wanted?.none || 'No wanted drops queued...';
+        container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
+        updateOverallProgress();
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    tree.forEach((gameGroup, index) => {
+        fragment.appendChild(createGameGroupElement(gameGroup, index));
+    });
+
+    container.replaceChildren(fragment);
+    updateOverallProgress();
+}
+
+
+/**
+ * Handles initial state payload received from server.
+ */
+function handleInitialState(data) {
+    console.log('[SOCKET] Received initial state', data);
+
+    if (data.settings && typeof state !== 'undefined') {
+        state.settings = { ...state.settings, ...data.settings };
+    }
+
+    // Parse and store currently watched channel if available in initial payload
+    if (typeof state !== 'undefined') {
+        if (data.watching_channel) {
+            state.watching_channel = data.watching_channel;
+        } else if (data.status && typeof data.status === 'string' && data.status.startsWith('Watching: ')) {
+            const streamerName = data.status.replace('Watching: ', '').trim();
+            const channels = data.channels || {};
+            const chList = Array.isArray(channels) ? channels : Object.values(channels);
+            const found = chList.find(c => (c.displayName || c.name || c.username) === streamerName);
+            if (found) {
+                state.watching_channel = found.id;
+            }
+        }
+    }
+
+    data = filterIgnoredData(data);
+
+    try { if (data.status && typeof updateStatus === 'function') updateStatus(data.status); } catch (e) { console.error("[INIT_ERR] Status:", e); }
+    try { handleInitialWantedItems(data.wanted_items); } catch (e) { console.error("[INIT_ERR] Wanted:", e); }
+    try { handleInitialChannels(data.channels); } catch (e) { console.error("[INIT_ERR] Channels:", e); }
+
+    try {
+        if (data.campaigns) {
+            state.campaigns = {};
+            const campList = Array.isArray(data.campaigns) ? data.campaigns : Object.values(data.campaigns);
+            campList.forEach(camp => {
+                if (camp && camp.id) state.campaigns[camp.id] = camp;
+            });
+            if (typeof renderInventory === 'function') renderInventory();
+        }
+    } catch (e) { console.error("[INIT_ERR] Campaigns:", e); }
+
+    try {
+        if (data.console && typeof document !== 'undefined') {
+            const consoleEl = document.getElementById('console-output');
+            if (consoleEl && Array.isArray(data.console)) {
+                const fragment = document.createDocumentFragment();
+                data.console.forEach(line => {
+                    const div = document.createElement('div');
+                    div.textContent = line;
+                    fragment.appendChild(div);
+                });
+                consoleEl.appendChild(fragment);
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+                while (consoleEl.children.length > 1000) {
+                    consoleEl.removeChild(consoleEl.firstChild);
+                }
+            }
+        }
+    } catch (e) { console.error("[INIT_ERR] Console:", e); }
+
+    try { if (data.settings && typeof updateSettingsUI === 'function') updateSettingsUI(data.settings); } catch (e) { console.error("[INIT_ERR] Settings:", e); }
+    try { if (data.login && typeof updateLoginStatus === 'function') updateLoginStatus(data.login); } catch (e) { console.error("[INIT_ERR] Login:", e); }
+    try { if (data.manual_mode && typeof updateManualModeUI === 'function') updateManualModeUI(data.manual_mode); } catch (e) { console.error("[INIT_ERR] ManualMode:", e); }
+
+    try { handleInitialCurrentDrop(data.current_drop, data.status); } catch (e) { console.error("[INIT_ERR] Drop:", e); }
+
+    try {
+        const autosortEl = document.getElementById('auto-sort-by-end');
+        if (autosortEl && data.settings) {
+            autosortEl.checked = !!data.settings.auto_sort_by_end;
+            if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
+        }
+
+        if (data.settings && typeof syncAutoAddUI === 'function') {
+            syncAutoAddUI(data.settings);
+        }
+
+        if (typeof startCombinedRotation === 'function') {
+            startCombinedRotation(true);
+        }
+    } catch (e) { console.error("[INIT_ERR] Rotation:", e); }
+}
+
+/**
+ * Handles live drop progress updates.
+ */
+function handleDropProgress(data) {
+    const gameName = data.game_name || data.game || data.game_title;
+
+    // Pokud je hra na ignore listu, paket pouze ignorujeme (NEČISTÍME aktivní UI)
+    if (isGameIgnored(gameName)) {
+        return;
+    }
+
+    // Safety check: ensure drop progress matches currently watched channel's game
+    if (typeof state !== 'undefined' && state.watching_channel && state.channels && state.channels[state.watching_channel]) {
+        const currentlyWatchedGame = state.channels[state.watching_channel].game_name || state.channels[state.watching_channel].game;
+        
+        if (currentlyWatchedGame && gameName !== currentlyWatchedGame) {
+            console.warn(`[SYNC BLOCK] Ignored progress for '${gameName}' because currently watching '${currentlyWatchedGame}'`);
+            // FIX: Pouze vyskočíme! NEVOLÁME clearDropProgress(), aby zůstal zachován stávající Drop na UI.
+            return;
+        }
+    }
+
+    const dropId = data.drop_id || data.id;
+    if (dropId) {
+        syncAnyDropProgress(String(dropId), data);
+    }
+
+    if (typeof updateDropProgress === 'function') {
+        updateDropProgress(data);
+    }
+}

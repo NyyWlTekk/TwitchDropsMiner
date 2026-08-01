@@ -73,7 +73,8 @@ function createGameGroupElement(gameGroup, index) {
     const campaigns = gameGroup.campaigns || [];
     
     campaigns.forEach(campaign => {
-        campaignListEl.appendChild(createCampaignCardElement(campaign));
+        // [FIX] Předáváme gameGroup.game_name do vytváření karty kampaně
+        campaignListEl.appendChild(createCampaignCardElement(campaign, gameGroup.game_name));
     });
 
     groupEl.appendChild(campaignListEl);
@@ -83,11 +84,12 @@ function createGameGroupElement(gameGroup, index) {
 /**
  * [INFO] Creates a single campaign card element with its drop items using modular helpers.
  */
-function createCampaignCardElement(campaign) {
+function createCampaignCardElement(campaign, gameName) {
     const campaignId = campaign.campaign_id || campaign.id || '';
     const drops = campaign.drops || [];
     
-    const isActivelyMining = checkIfCampaignIsActive(campaignId, drops);
+    // [FIX] Přijímáme gameName a posíláme ho do checkIfCampaignIsActive
+    const isActivelyMining = checkIfCampaignIsActive(campaignId, drops, gameName);
     const hasProgress = checkIfCampaignHasProgress(drops, isActivelyMining);
 
     let cardClasses = 'wanted-card';
@@ -204,43 +206,29 @@ function createDropItemElement(drop, index = 1) {
 // ==================== 3. State & Active Checks ====================
 
 /**
- * [INFO] Checks if the campaign is currently being actively mined (queues or fallback).
+ * [INFO] Checks if a campaign is actively mining, with strict validation against the currently watched game.
  */
-function checkIfCampaignIsActive(campaignId, drops) {
-    if (typeof state !== 'undefined' && Array.isArray(state.activeCampaignsQueue)) {
-        const isActive = state.activeCampaignsQueue.some(c => {
-            const cId = c.campaign_id || c.id;
-            return cId && String(cId) === String(campaignId);
-        });
-        if (isActive) return true;
+function checkIfCampaignIsActive(campaignId, drops, gameName) {
+    const currentWatchedGame = state.watchedChannel?.game || state.currentChannel?.game;
+
+    // Pokud kanál sleduje něco jiného, kampaň aktivně netěží
+    if (currentWatchedGame && gameName && currentWatchedGame.toLowerCase() !== gameName.toLowerCase()) {
+        return false;
     }
 
-    if (typeof state !== 'undefined' && Array.isArray(state.activeDropsQueue)) {
-        const isActive = state.activeDropsQueue.some(ad => {
-            const adCampId = ad.campaign_id || ad.parent_campaign_id;
-            if (adCampId && String(adCampId) === String(campaignId)) return true;
-            return drops.some(d => 
-                (d.id && ad.id && String(d.id) === String(ad.id)) ||
-                (d.drop_id && ad.drop_id && String(d.drop_id) === String(ad.drop_id))
-            );
-        });
-        if (isActive) return true;
+    const activeDropId = state.currentDrop?.drop_id || state.currentDrop?.id;
+    const activeCampaignId = state.currentDrop?.campaign_id;
+
+    if (!activeDropId && !activeCampaignId) {
+        return false;
     }
 
-    const currentDrop = (typeof state !== 'undefined' && state.currentDrop);
-    if (currentDrop) {
-        const dropCampaignId = currentDrop.campaign_id || currentDrop.parent_campaign_id;
-        if (dropCampaignId && String(dropCampaignId) === String(campaignId)) {
-            return true;
-        } else if (drops.length > 0) {
-            return drops.some(d => 
-                (d.id && currentDrop.id && String(d.id) === String(currentDrop.id)) ||
-                (d.drop_id && currentDrop.drop_id && String(d.drop_id) === String(currentDrop.drop_id))
-            );
-        }
-    }
+    const hasActiveDrop = drops.some(drop => {
+        const dropId = drop.id || drop.drop_id;
+        return dropId && activeDropId && String(dropId) === String(activeDropId);
+    });
 
-    return false;
+    return hasActiveDrop || (activeCampaignId && String(campaignId) === String(activeCampaignId));
 }
 
 /**
@@ -252,6 +240,32 @@ function checkIfCampaignHasProgress(drops, isActivelyMining) {
         const current = Math.round(d.current_minutes || 0);
         return current > 0;
     });
+}
+
+/**
+ * [INFO] Checks if a campaign is actively mining, with strict validation against the currently watched game.
+ */
+function checkIfCampaignIsActive(campaignId, drops, gameName) {
+    const currentWatchedGame = state.watchedChannel?.game || state.currentChannel?.game;
+
+    // If the watched game doesn't match this campaign's game, it is never active
+    if (currentWatchedGame && gameName && currentWatchedGame.toLowerCase() !== gameName.toLowerCase()) {
+        return false;
+    }
+
+    const activeDropId = state.currentDrop?.drop_id || state.currentDrop?.id;
+    const activeCampaignId = state.currentDrop?.campaign_id;
+
+    if (!activeDropId && !activeCampaignId) {
+        return false;
+    }
+
+    const hasActiveDrop = drops.some(drop => {
+        const dropId = drop.id || drop.drop_id;
+        return dropId && activeDropId && String(dropId) === String(activeDropId);
+    });
+
+    return hasActiveDrop || (activeCampaignId && String(campaignId) === String(activeCampaignId));
 }
 
 /**
@@ -352,10 +366,16 @@ function syncWantedItemsProgress(data) {
     const sharedCurrentMins = Number(data.current_minutes) || 0;
     let treeUpdated = false;
 
+    // 🎯 Zjistíme, která hra je TEĎ REÁLNĚ AKTIVNÍ podle příchozích dat
+    const activeGameName = data.game_name || state.currentDrop?.game_name;
+
     state.wantedItemsTree.forEach((gameGroup) => {
         if (!gameGroup.campaigns || !Array.isArray(gameGroup.campaigns)) return;
 
         let groupHasChanges = false;
+        
+        // Zjistíme, jestli tato skupina odpovídá právě aktivní hře
+        const isThisGameActive = activeGameName && gameGroup.game_name === activeGameName;
 
         gameGroup.campaigns.forEach((campaign) => {
             const updated = updateSingleCampaign(campaign, data, sharedCurrentMins);
@@ -365,10 +385,30 @@ function syncWantedItemsProgress(data) {
             }
         });
 
+        // 🛑 KLÍČOVÝ KROK: Pokud tato hra NENÍ aktivní, natvrdo jí zrušíme paralelní/aktivní stav!
+        if (!isThisGameActive && gameGroup.isParallelActive) {
+            gameGroup.isParallelActive = false;
+            groupHasChanges = true;
+            treeUpdated = true;
+        } else {
+            const currentParallelState = checkParallelMiningState(gameGroup);
+            if (gameGroup.isParallelActive !== currentParallelState) {
+                gameGroup.isParallelActive = currentParallelState;
+                groupHasChanges = true;
+                treeUpdated = true;
+            }
+        }
+
         if (groupHasChanges) {
             processGameGroupSync(gameGroup);
         }
     });
+
+    // 🧹 Pokud proběhla změna, vynutíme kompletní přerenderování stromu, 
+    // aby se staré zelené rámečky okamžitě vymazaly z DOMu.
+    if (treeUpdated && typeof renderWantedItems === 'function') {
+        renderWantedItems(state.wantedItemsTree);
+    }
 
     return treeUpdated;
 }
@@ -405,31 +445,26 @@ function updateSingleCampaign(campaign, data, sharedCurrentMins) {
     
     if (!isCampaignMatch || !campaign.drops || !Array.isArray(campaign.drops)) return false;
 
-    let maxCampaignMins = sharedCurrentMins;
-    campaign.drops.forEach(d => {
-        const cur = Number(d.current_minutes) || 0;
-        if (cur > maxCampaignMins) {
-            maxCampaignMins = cur;
-        }
-    });
-
-    campaign.drops.forEach((drop, index) => {
+    campaign.drops.forEach((drop) => {
         const dropId = drop.drop_id || drop.id;
         const isMatchingDrop = (data.drop_id && dropId === data.drop_id) || 
                                (data.drop_name && drop.name === data.drop_name);
 
         const reqMins = Number(drop.required_minutes) || 0;
-        
-        drop.current_minutes = maxCampaignMins; 
-        
-        if (reqMins > 0) {
-            const effectiveMins = Math.min(maxCampaignMins, reqMins);
-            drop.progress = Math.min(100, (effectiveMins / reqMins) * 100);
-            drop.can_claim = maxCampaignMins >= reqMins && !drop.is_claimed;
-        }
 
-        if (data.is_claimed !== undefined && isMatchingDrop) {
-            drop.is_claimed = data.is_claimed;
+        // ✅ MINUTY SE AKTUALIZUJÍ JEN PRO SVOJ MATCHING DROP!
+        if (isMatchingDrop) {
+            drop.current_minutes = sharedCurrentMins;
+            
+            if (reqMins > 0) {
+                const effectiveMins = Math.min(sharedCurrentMins, reqMins);
+                drop.progress = Math.min(100, (effectiveMins / reqMins) * 100);
+                drop.can_claim = sharedCurrentMins >= reqMins && !drop.is_claimed;
+            }
+
+            if (data.is_claimed !== undefined) {
+                drop.is_claimed = data.is_claimed;
+            }
         }
     });
 

@@ -88,38 +88,45 @@ function handleInitialCurrentDrop(dropData) {
 
 
 // ============================================================================
-// DIAGNOSTIC DESYNCHRONIZATION TRACER
+// DIAGNOSTIC STATE INSPECTOR
 // ============================================================================
 
 /**
- * Checks consistency between active cards and watched channel in DOM.
+ * Inspects state object directly for channel and drop mismatches.
  */
 function checkSyncConsistency(eventName, payload) {
-    // 1. Get watched channel and its game in UI
-    const watchingEl = document.querySelector('.channel-card.watching, .channel-item.watching');
-    const watchingText = watchingEl ? watchingEl.textContent.trim().replace(/\s+/g, ' ') : 'None';
+    if (typeof state === 'undefined') return;
 
-    // 2. Find green-bordered elements (currently processing drop / campaign)
-    // We target inner drop progress containers or watching indicators
-    const greenBorderCards = Array.from(document.querySelectorAll('.drop-progress-container, .campaign-card-active, .watching-drop'))
-        .map(el => el.textContent.trim().replace(/\s+/g, ' ').substring(0, 60));
+    // 1. Get currently watched channel and its associated game
+    const watchedChannelId = state.watching_channel;
+    const watchedChannelObj = (watchedChannelId && state.channels) ? state.channels[watchedChannelId] : null;
+    const watchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game || 'Unknown Game') : 'None';
+    const watchedStreamer = watchedChannelObj ? (watchedChannelObj.displayName || watchedChannelObj.name || watchedChannelId) : 'None';
 
-    // 3. Log current state during events
-    console.group(`🔍 [SYNC INSPECTOR] Event: '${eventName}'`);
-    console.log('📺 Watched Channel in UI:', watchingText);
-    console.log('🟢 Green highlighted items in UI:', greenBorderCards);
-    console.log('📦 Socket payload:', payload);
+    // 2. Get active drop and its associated game
+    const currentDrop = state.currentDrop || state.current_drop;
+    const dropGame = currentDrop ? (currentDrop.game_name || currentDrop.game || currentDrop.game_title || 'Unknown Drop Game') : 'None';
 
-    // 4. Check if current drop game matches watched channel game
-    if (state.currentDrop && state.channels && state.watching_channel) {
-        const currentChannel = state.channels[state.watching_channel];
-        const watchedGame = currentChannel ? (currentChannel.game_name || currentChannel.game) : null;
-        const dropGame = state.currentDrop.game_name || state.currentDrop.game || state.currentDrop.game_title;
+    // 3. Print current state context
+    console.group(`🔍 [STATE INSPECTOR] Event: '${eventName}'`);
+    console.log(`📺 Watched Channel: ${watchedStreamer} (Game: '${watchedGame}')`);
+    console.log(`⚡ Active Drop Game: '${dropGame}'`);
 
-        if (watchedGame && dropGame && watchedGame !== dropGame) {
-            console.error(`❌ [GAME MISMATCH] Watching channel for '${watchedGame}', but currentDrop is for '${dropGame}'!`);
-        }
+    // 4. Trigger alert if watched game does not match active drop game
+    if (watchedGame !== 'None' && dropGame !== 'None' && watchedGame !== dropGame) {
+        console.error(`🚨 [SYNC ERROR] MISMATCH DETECTED! Channel is watching '${watchedGame}', but drop progress is running for '${dropGame}'!`);
+        console.log('📦 Current Drop Object:', currentDrop);
+        console.log('📺 Watched Channel Object:', watchedChannelObj);
     }
-    
+
     console.groupEnd();
+}
+
+// Auto-attach inspector to socket events (without high-frequency status_update spam)
+if (typeof socket !== 'undefined') {
+    ['drop_progress', 'channel_watching', 'initial_state', 'channels_batch_update'].forEach(evt => {
+        socket.on(evt, (data) => {
+            setTimeout(() => checkSyncConsistency(evt, data), 20);
+        });
+    });
 }

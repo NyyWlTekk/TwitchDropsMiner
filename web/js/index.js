@@ -844,15 +844,16 @@ async function toggleGameIgnore(game, isIgnored) {
     }
 
     if (isIgnored) {
-        // Přidání do seznamu ignorovaných
         if (!state.settings.ignored_games.includes(game)) {
             state.settings.ignored_games.push(game);
         }
 
-        // 🧹 1. DROPY & PROGRESS: Vyčištění aktuálně těženého dropu
+        // Reset current drop ONLY if the currently active drop belongs to the ignored game
         if (state.currentDrop) {
             const dropGame = state.currentDrop.game_name || state.currentDrop.game || state.currentDrop.game_title;
             if (dropGame === game) {
+                state.watching_channel = null;
+
                 if (typeof clearDropProgress === 'function') {
                     clearDropProgress();
                 } else {
@@ -861,7 +862,7 @@ async function toggleGameIgnore(game, isIgnored) {
             }
         }
 
-        // 🧹 2. FRONTY V RAM: Odstranění z aktivních front
+        // Remove game from active RAM queues
         if (Array.isArray(state.activeCampaignsQueue)) {
             state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => (c.game_name || c.game) !== game);
         }
@@ -875,22 +876,22 @@ async function toggleGameIgnore(game, isIgnored) {
             });
         }
 
-        // 🧹 3. WANTED STROM: Okamžitý vyhazov ze stromu Chci/Wanted
+        // Filter out ignored game from wanted items tree
         if (Array.isArray(state.wantedItemsTree)) {
             state.wantedItemsTree = state.wantedItemsTree.filter(group => group.game_name !== game);
         }
 
-        // 🧹 4. VIZUÁLNÍ RESET: Shodíme svítící třídy z karet
+        // Clear active UI highlight states
         if (typeof clearWantedActiveState === 'function') {
             clearWantedActiveState();
         }
 
     } else {
-        // Odebrání ze seznamu ignorovaných
+        // Remove game from ignored list
         state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
     }
 
-    // 🚀 BLESKOVÝ RE-RENDER Z ČISTÉ PAMĚTI
+    // Re-render UI components from current RAM state
     if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
         renderWantedItems(state.wantedItemsTree);
     }
@@ -901,7 +902,7 @@ async function toggleGameIgnore(game, isIgnored) {
         refreshUI();
     }
 
-    // Uložení nastavení a žádost o synchronizaci se serverem
+    // Persist settings and request server synchronization
     await saveSettings();
 
     console.log('[WANTED] Ignore list updated. Requesting queue refresh.');

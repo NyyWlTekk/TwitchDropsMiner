@@ -1,14 +1,13 @@
 // Twitch Drops Miner Web Client
 // Socket.IO and API communication
 
-
 let selectedInventoryGames = [];
 let availableGames = new Set(); // All games from campaigns
 let draggedElement = null;
 
 // Global state
 const state = {
-//    debug: true,
+//  debug: true,
     connected: false,
     channels: {},
     campaigns: {},
@@ -44,7 +43,7 @@ async function fetchAndDisplayVersion() {
                 // Preserve the span inside
                 const span = footerVersionText.querySelector('span');
                 footerVersionText.textContent = versionLabel + ' ';
-                footerVersionText.appendChild(span);
+                if (span) footerVersionText.appendChild(span);
             }
         }
 
@@ -67,13 +66,11 @@ async function fetchAndDisplayVersion() {
                     const span = updateLink.querySelector('span'); // latest-version span
                     updateLink.textContent = '';
                     updateLink.appendChild(linkText);
-                    updateLink.appendChild(span);
+                    if (span) updateLink.appendChild(span);
                 }
-
-                // Log to console
-//                console.log(`Update available: ${data.latest_version} (current: ${data.current_version})`);
             }
         }
+        console.debug('[Version] Fetched and updated app version:', data.current_version);
     } catch (error) {
         console.warn('Could not fetch version information:', error);
         // Set placeholder text if fetch fails
@@ -87,14 +84,12 @@ async function fetchAndDisplayVersion() {
 
 // ==================== Game Dropdown & Tags ====================
 
-// Track selected games for inventory filter
-
 let gameDropdownFocusedIndex = -1;
 let gameDropdownVisible = false;
 
 function getAvailableGamesForDropdown() {
     // Combine games from campaigns and availableGames Set
-    const gamesFromCampaigns = Object.values(state.campaigns).map(c => c.game_name);
+    const gamesFromCampaigns = Object.values(state.campaigns || {}).map(c => c.game_name);
     const gamesFromSettings = Array.from(availableGames || []);
 
     // Merge and deduplicate
@@ -106,6 +101,8 @@ function getAvailableGamesForDropdown() {
 
 function renderGameDropdown(searchTerm = '') {
     const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
+
     const allGames = getAvailableGamesForDropdown();
 
     // Filter games by search term (case-insensitive)
@@ -156,32 +153,36 @@ function renderGameDropdown(searchTerm = '') {
 function toggleGameSelection(gameName) {
     const index = selectedInventoryGames.indexOf(gameName);
     if (index >= 0) {
-        // Remove game
         selectedInventoryGames.splice(index, 1);
     } else {
-        // Add game
         selectedInventoryGames.push(gameName);
     }
 
+    console.debug('[Game Filter] Toggled inventory game selection:', gameName, 'Active selection:', selectedInventoryGames);
+
     updateGameTagsDisplay();
-    renderGameDropdown(document.getElementById('inventory-game-search').value);
+    const searchInput = document.getElementById('inventory-game-search');
+    renderGameDropdown(searchInput ? searchInput.value : '');
     saveSettings();
-    renderInventory();
+    if (typeof renderInventory === 'function') renderInventory();
 }
 
 function removeGameTag(gameName) {
     const index = selectedInventoryGames.indexOf(gameName);
     if (index >= 0) {
         selectedInventoryGames.splice(index, 1);
+        console.debug('[Game Filter] Removed game tag:', gameName);
         updateGameTagsDisplay();
-        renderGameDropdown(document.getElementById('inventory-game-search').value);
+        const searchInput = document.getElementById('inventory-game-search');
+        renderGameDropdown(searchInput ? searchInput.value : '');
         saveSettings();
-        renderInventory();
+        if (typeof renderInventory === 'function') renderInventory();
     }
 }
 
 function updateGameTagsDisplay() {
     const container = document.getElementById('selected-game-tags');
+    if (!container) return;
     container.innerHTML = '';
 
     selectedInventoryGames.forEach(gameName => {
@@ -209,108 +210,121 @@ function updateGameTagsDisplay() {
 
 function showGameDropdown() {
     const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
     dropdown.style.display = 'block';
     gameDropdownVisible = true;
     gameDropdownFocusedIndex = -1;
-    renderGameDropdown(document.getElementById('inventory-game-search').value);
+    const searchInput = document.getElementById('inventory-game-search');
+    renderGameDropdown(searchInput ? searchInput.value : '');
 }
 
 function closeGameDropdown() {
     const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
     dropdown.style.display = 'none';
     gameDropdownVisible = false;
     gameDropdownFocusedIndex = -1;
 }
 
 function handleGameSearchKeydown(event) {
-    if (!gameDropdownVisible) {
-        return;
-    }
+    if (!gameDropdownVisible) return;
 
     const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
+
     const items = dropdown.querySelectorAll('.dropdown-item:not(.no-results)');
     const maxIndex = items.length - 1;
+    const searchInput = document.getElementById('inventory-game-search');
+    const searchValue = searchInput ? searchInput.value : '';
 
     if (event.key === 'ArrowDown') {
         event.preventDefault();
         gameDropdownFocusedIndex = Math.min(gameDropdownFocusedIndex + 1, maxIndex);
-        renderGameDropdown(document.getElementById('inventory-game-search').value);
+        renderGameDropdown(searchValue);
 
-        // Scroll focused item into view
         const focusedItem = dropdown.querySelector('.dropdown-item.focused');
-        if (focusedItem) {
-            focusedItem.scrollIntoView({ block: 'nearest' });
-        }
+        if (focusedItem) focusedItem.scrollIntoView({ block: 'nearest' });
     } else if (event.key === 'ArrowUp') {
         event.preventDefault();
         gameDropdownFocusedIndex = Math.max(gameDropdownFocusedIndex - 1, 0);
-        renderGameDropdown(document.getElementById('inventory-game-search').value);
+        renderGameDropdown(searchValue);
 
-        // Scroll focused item into view
         const focusedItem = dropdown.querySelector('.dropdown-item.focused');
-        if (focusedItem) {
-            focusedItem.scrollIntoView({ block: 'nearest' });
-        }
+        if (focusedItem) focusedItem.scrollIntoView({ block: 'nearest' });
     } else if (event.key === 'Enter') {
         event.preventDefault();
         if (gameDropdownFocusedIndex >= 0 && gameDropdownFocusedIndex <= maxIndex) {
             const focusedItem = items[gameDropdownFocusedIndex];
-            const gameName = focusedItem.dataset.gameName;
-            if (gameName) {
-                toggleGameSelection(gameName);
-            }
+            const gameName = focusedItem ? focusedItem.dataset.gameName : null;
+            if (gameName) toggleGameSelection(gameName);
         }
     } else if (event.key === 'Escape') {
         event.preventDefault();
         closeGameDropdown();
-        document.getElementById('inventory-game-search').blur();
+        if (searchInput) searchInput.blur();
     }
 }
 
 function showLoginForm() {
-    document.getElementById('login-form').style.display = 'block';
-    document.getElementById('oauth-code-display').style.display = 'none';
+    const loginForm = document.getElementById('login-form');
+    const oauthDisplay = document.getElementById('oauth-code-display');
+    if (loginForm) loginForm.style.display = 'block';
+    if (oauthDisplay) oauthDisplay.style.display = 'none';
 }
 
 function showOAuthCode(url, code) {
-    document.getElementById('login-form').style.display = 'none';
-    document.getElementById('oauth-code-display').style.display = 'block';
-    document.getElementById('oauth-url').href = url;
-    document.getElementById('oauth-code').textContent = code;
+    const loginForm = document.getElementById('login-form');
+    const oauthDisplay = document.getElementById('oauth-code-display');
+    if (loginForm) loginForm.style.display = 'none';
+    if (oauthDisplay) oauthDisplay.style.display = 'block';
+
+    const oauthUrl = document.getElementById('oauth-url');
+    const oauthCode = document.getElementById('oauth-code');
+    if (oauthUrl) oauthUrl.href = url;
+    if (oauthCode) oauthCode.textContent = code;
 }
 
 function updateLoginStatus(data) {
     const statusEl = document.getElementById('login-status');
+    if (!statusEl) return;
+
     const t = state.translations;
     if (data.user_id) {
         const userIdLabel = t.gui?.login?.user_id_label || 'User ID:';
         statusEl.textContent = `${data.status} (${userIdLabel} ${data.user_id})`;
         statusEl.removeAttribute('translation-key');
         statusEl.style.color = 'var(--success-color)';
-        document.getElementById('login-form').style.display = 'none';
-        document.getElementById('oauth-code-display').style.display = 'none';
+        
+        const loginForm = document.getElementById('login-form');
+        const oauthDisplay = document.getElementById('oauth-code-display');
+        if (loginForm) loginForm.style.display = 'none';
+        if (oauthDisplay) oauthDisplay.style.display = 'none';
     } else {
         const loggedOut = t.gui?.login?.logged_out || 'Not logged in';
         statusEl.textContent = data.status || loggedOut;
         statusEl.setAttribute('translation-key', 'logged_out');
         statusEl.style.color = 'var(--text-secondary)';
-        // Check if OAuth is pending (for late-connecting clients)
+
         if (data.oauth_pending) {
             showOAuthCode(data.oauth_pending.url, data.oauth_pending.code);
         }
     }
+    console.debug('[Auth] Login status updated:', data.user_id ? `Authenticated (ID: ${data.user_id})` : 'Logged out / Pending');
 }
 
 function updateSettingsUI(settings) {
-    state.settings = settings;
-    document.getElementById('dark-mode').checked = settings.dark_mode || false;
-    document.getElementById('auto-sort-by-end').checked = settings.auto_sort_by_end || false;
-    document.getElementById('mine-badges-first').checked = settings.mine_badges_first || false;
-    document.getElementById('auto-add-all-games').checked = settings.auto_add_all_games || false;
-    document.getElementById('connection-quality').value = settings.connection_quality || 1;
-    document.getElementById('minimum-refresh-interval').value = settings.minimum_refresh_interval_minutes || 30;
+    state.settings = settings || {};
+    
+    const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = Boolean(val); };
+    const setValue = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
 
-    // Update proxy settings and indicator
+    setChecked('dark-mode', settings.dark_mode);
+    setChecked('auto-sort-by-end', settings.auto_sort_by_end);
+    setChecked('mine-badges-first', settings.mine_badges_first);
+    setChecked('auto-add-all-games', settings.auto_add_all_games);
+    setValue('connection-quality', settings.connection_quality || 1);
+    setValue('minimum-refresh-interval', settings.minimum_refresh_interval_minutes || 30);
+
     const proxyUrl = settings.proxy || '';
     const proxyInput = document.getElementById('proxy-url');
     if (proxyInput) proxyInput.value = proxyUrl;
@@ -321,12 +335,9 @@ function updateSettingsUI(settings) {
         proxyIndicator.title = proxyUrl ? `Proxy active: ${proxyUrl}` : 'Proxy disabled';
     }
 
-    // Update language dropdown if we have the current language
     if (settings.language) {
         const languageSelect = document.getElementById('language');
-        if (languageSelect) {
-            languageSelect.value = settings.language;
-        }
+        if (languageSelect) languageSelect.value = settings.language;
     }
 
     if (settings.dark_mode) {
@@ -335,57 +346,44 @@ function updateSettingsUI(settings) {
         document.body.classList.remove('dark-mode');
     }
 
-	// Update available games if provided in settings
     if (settings.games_available) {
         availableGames = new Set(settings.games_available);
-        
-        // Ensure watched games are always part of the available pool
         if (settings.games_to_watch) {
             settings.games_to_watch.forEach(game => availableGames.add(game));
         }
     }
 
-    // Restore inventory filters from settings
     if (settings.inventory_filters) {
-        document.getElementById('filter-active').checked = settings.inventory_filters.show_active || false;
-        document.getElementById('filter-not-linked').checked = settings.inventory_filters.show_not_linked || false;
-        document.getElementById('filter-upcoming').checked = settings.inventory_filters.show_upcoming || false;
-        document.getElementById('filter-expired').checked = settings.inventory_filters.show_expired || false;
-        document.getElementById('filter-finished').checked = settings.inventory_filters.show_finished || false;
+        setChecked('filter-active', settings.inventory_filters.show_active);
+        setChecked('filter-not-linked', settings.inventory_filters.show_not_linked);
+        setChecked('filter-upcoming', settings.inventory_filters.show_upcoming);
+        setChecked('filter-expired', settings.inventory_filters.show_expired);
+        setChecked('filter-finished', settings.inventory_filters.show_finished);
 
-        // Restore selected games array
         selectedInventoryGames = Array.isArray(settings.inventory_filters.game_name_search)
             ? [...settings.inventory_filters.game_name_search]
-            : [];  // Handle old string format gracefully
+            : [];
         updateGameTagsDisplay();
 
-        // Restore benefit type filters (default to true if not set)
-        if (document.getElementById('filter-benefit-item')) document.getElementById('filter-benefit-item').checked = settings.inventory_filters.show_benefit_item !== false;
-        if (document.getElementById('filter-benefit-badge')) document.getElementById('filter-benefit-badge').checked = settings.inventory_filters.show_benefit_badge !== false;
-        if (document.getElementById('filter-benefit-emote')) document.getElementById('filter-benefit-emote').checked = settings.inventory_filters.show_benefit_emote !== false;
-        if (document.getElementById('filter-benefit-other')) document.getElementById('filter-benefit-other').checked = settings.inventory_filters.show_benefit_other !== false;
+        setChecked('filter-benefit-item', settings.inventory_filters.show_benefit_item !== false);
+        setChecked('filter-benefit-badge', settings.inventory_filters.show_benefit_badge !== false);
+        setChecked('filter-benefit-emote', settings.inventory_filters.show_benefit_emote !== false);
+        setChecked('filter-benefit-other', settings.inventory_filters.show_benefit_other !== false);
     }
 
-    // Restore mining benefit filters
     if (settings.mining_benefits) {
-        if (document.getElementById('mining-benefit-item')) document.getElementById('mining-benefit-item').checked = settings.mining_benefits.DIRECT_ENTITLEMENT;
-        if (document.getElementById('mining-benefit-badge')) document.getElementById('mining-benefit-badge').checked = settings.mining_benefits.BADGE;
-        if (document.getElementById('mining-benefit-emote')) document.getElementById('mining-benefit-emote').checked = settings.mining_benefits.EMOTE;
-        if (document.getElementById('mining-benefit-unknown')) document.getElementById('mining-benefit-unknown').checked = settings.mining_benefits.UNKNOWN;
+        setChecked('mining-benefit-item', settings.mining_benefits.DIRECT_ENTITLEMENT);
+        setChecked('mining-benefit-badge', settings.mining_benefits.BADGE);
+        setChecked('mining-benefit-emote', settings.mining_benefits.EMOTE);
+        setChecked('mining-benefit-unknown', settings.mining_benefits.UNKNOWN);
     }
 
-
-    // Update games to watch lists
     renderGamesToWatch();
-
-    // Re-render channels list to apply filter based on updated games to watch
-    renderChannels();
-
-    // Re-render inventory to apply filters
-    renderInventory();
+    if (typeof renderChannels === 'function') renderChannels();
+    if (typeof renderInventory === 'function') renderInventory();
     
-    // Check if we need to auto-add games after settings are applied
     applyAutoAddIfNeeded();
+    console.debug('[Settings] UI elements updated from settings state.');
 }
 
 function updateManualModeUI(manualModeInfo) {
@@ -395,25 +393,21 @@ function updateManualModeUI(manualModeInfo) {
     const manualControls = document.getElementById('manual-mode-controls');
     const manualModeGame = document.getElementById('manual-mode-game');
 
-    if (manualModeInfo.active) {
-        // Show manual mode badge, hide auto badge
+    if (!manualBadge || !autoBadge) return;
+
+    if (manualModeInfo && manualModeInfo.active) {
         manualBadge.classList.remove('hidden');
         autoBadge.classList.add('hidden');
-        manualGameName.textContent = manualModeInfo.game_name || '';
+        if (manualGameName) manualGameName.textContent = manualModeInfo.game_name || '';
 
-        // Show manual mode controls in drop progress section
         if (manualControls) {
             manualControls.classList.remove('hidden');
-            if (manualModeGame) {
-                manualModeGame.textContent = manualModeInfo.game_name || '';
-            }
+            if (manualModeGame) manualModeGame.textContent = manualModeInfo.game_name || '';
         }
     } else {
-        // Hide manual mode badge, show auto badge
         manualBadge.classList.add('hidden');
         autoBadge.classList.remove('hidden');
 
-        // Hide manual mode controls
         if (manualControls) {
             manualControls.classList.add('hidden');
         }
@@ -428,7 +422,6 @@ function renderGamesToWatch() {
     const leftHeading = document.querySelector('.available-games h3');
     const rightHeading = document.querySelector('.selected-games h3');
 
-    // Update headings and colors based on active mode
     if (isIgnoreMode) {
         if (leftHeading) {
             leftHeading.textContent = 'Active / Auto-Mined Games';
@@ -449,13 +442,13 @@ function renderGamesToWatch() {
         }
     }
 
-    const filterText = document.getElementById('games-filter')?.value.toLowerCase() || '';
+    const searchInput = document.getElementById('games-filter');
+    const filterText = searchInput ? searchInput.value.toLowerCase() : '';
 
     if (isIgnoreMode) {
         const ignoredGames = state?.settings?.ignored_games || [];
         ignoredGames.forEach(game => availableGames.add(game));
 
-        // Active games (all available MINUS ignored ones)
         const activeGames = Array.from(availableGames)
             .filter(game => !ignoredGames.some(ig => ig.toLowerCase() === game.toLowerCase()))
             .filter(game => game.toLowerCase().includes(filterText))
@@ -481,6 +474,7 @@ function renderGamesToWatch() {
     }
 
     updateUIState();
+    console.debug('[Game List] Games rendered. Ignore mode:', isIgnoreMode);
 }
 
 function renderSelectedGames(games) {
@@ -488,11 +482,11 @@ function renderSelectedGames(games) {
     if (!container) return;
 
     const t = state.translations;
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
     
     container.innerHTML = '';
 
-    if (games.length === 0) {
+    if (!games || games.length === 0) {
         const emptyMsg = isIgnoreMode
             ? (t.gui?.settings?.no_games_ignored || 'No games on ignore list.')
             : (t.gui?.settings?.no_games_selected || 'No games selected. Check games below to add them.');
@@ -506,14 +500,12 @@ function renderSelectedGames(games) {
         div.dataset.game = game;
 
         if (isIgnoreMode) {
-            // In Ignore Mode, priority and dragging are disabled
             div.draggable = false;
             div.replaceChildren(
                 makeElement('span', { class: 'game-name', style: 'flex-grow: 1;' }, game),
                 makeElement('button', { class: 'remove-btn', title: 'Remove from Ignore List' }, '✕')
             );
         } else {
-            // Whitelist mode supports drag-and-drop reordering
             div.draggable = true;
             div.replaceChildren(
                 makeElement('span', { class: 'drag-handle' }, '☰'),
@@ -529,9 +521,11 @@ function renderSelectedGames(games) {
         }
 
         const removeBtn = div.querySelector('.remove-btn');
-        removeBtn.addEventListener('click', () => {
-            removeGameFromWatch(game);
-        });
+        if (removeBtn) {
+            removeBtn.addEventListener('click', () => {
+                removeGameFromWatch(game);
+            });
+        }
 
         container.appendChild(div);
     });
@@ -542,11 +536,11 @@ function renderAvailableGames(games, filterText) {
     if (!container) return;
 
     const t = state.translations;
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
 
     container.innerHTML = '';
 
-    if (games.length === 0) {
+    if (!games || games.length === 0) {
         if (filterText) {
             const emptyMsg = t.gui?.settings?.no_games_match || 'No games match your search.';
             const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
@@ -565,15 +559,13 @@ function renderAvailableGames(games, filterText) {
         label.className = 'game-checkbox';
 
         if (isIgnoreMode) {
-            // Active games get a block button to add them to the ignore list
             const ignoreBtn = makeElement('button', { class: 'remove-btn', style: 'margin-right: 8px;', title: 'Add to Ignore List' }, '🚫');
             ignoreBtn.addEventListener('click', (e) => {
                 e.preventDefault();
-                // Call dedicated handler to ensure instant UI render and Socket.IO emission
                 if (typeof toggleGameIgnore === 'function') {
                     toggleGameIgnore(game, true);
                 } else {
-                    // Fallback in case handler is unavailable
+                    if (!state.settings) state.settings = {};
                     if (!state.settings.ignored_games) state.settings.ignored_games = [];
                     if (!state.settings.ignored_games.some(g => g.toLowerCase() === game.toLowerCase())) {
                         state.settings.ignored_games.push(game);
@@ -588,7 +580,7 @@ function renderAvailableGames(games, filterText) {
                 makeElement('span', {}, game)
             );
         } else {
-            const isChecked = (state.settings?.games_to_watch || []).includes(game);
+            const isChecked = (state?.settings?.games_to_watch || []).includes(game);
             const input = makeElement('input', { type: 'checkbox', value: game });
             input.checked = isChecked;
 
@@ -646,25 +638,30 @@ function handleDrop(e) {
 function handleDragEnd(e) {
     e.target.classList.remove('dragging');
 
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
-    if (isIgnoreMode) return; // Order does not matter for Ignore List
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
+    if (isIgnoreMode) return;
 
     const container = document.getElementById('selected-games-list');
+    if (!container) return;
+
     const items = container.querySelectorAll('.sortable-item');
     const newOrder = Array.from(items).map(item => item.dataset.game);
 
-    state.settings.games_to_watch = newOrder;
+    if (state.settings) {
+        state.settings.games_to_watch = newOrder;
+    }
 
     renderSelectedGames(newOrder);
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
+    console.debug('[Game List] Priority order updated via drag-and-drop.');
 }
 
-// Helper state modification functions
 function toggleGameWatch(gameName, checked) {
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
     if (isIgnoreMode) return;
 
+    if (!state.settings) state.settings = {};
     const games = state.settings.games_to_watch || [];
 
     if (checked && !games.includes(gameName)) {
@@ -677,13 +674,15 @@ function toggleGameWatch(gameName, checked) {
     }
 
     state.settings.games_to_watch = games;
+    console.debug('[Game List] Toggled watch status:', gameName, 'Checked:', checked);
+
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
 function removeGameFromWatch(gameName) {
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
 
     if (isIgnoreMode) {
         if (typeof toggleGameIgnore === 'function') {
@@ -691,6 +690,7 @@ function removeGameFromWatch(gameName) {
             return;
         }
     } else {
+        if (!state.settings) state.settings = {};
         const games = state.settings.games_to_watch || [];
         const index = games.indexOf(gameName);
         if (index > -1) {
@@ -699,36 +699,39 @@ function removeGameFromWatch(gameName) {
         }
     }
 
+    console.debug('[Game List] Removed game from watch/ignore list:', gameName);
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
 function selectAllGames() {
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
+    if (!state.settings) state.settings = {};
 
     if (isIgnoreMode) {
-        // Clear ignore list to mine all available games
         state.settings.ignored_games = [];
     } else {
         state.settings.games_to_watch = Array.from(availableGames).sort();
     }
 
+    console.debug('[Game List] Selected all games.');
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
 }
 
 function deselectAllGames() {
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
+    if (!state.settings) state.settings = {};
 
     if (isIgnoreMode) {
-        // Ignore all available games
         state.settings.ignored_games = Array.from(availableGames).sort();
     } else {
         state.settings.games_to_watch = [];
     }
 
+    console.debug('[Game List] Deselected all games.');
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
@@ -736,14 +739,15 @@ function deselectAllGames() {
 
 function addGameFromSearch() {
     const searchInput = document.getElementById('games-filter');
-    const gameName = searchInput.value.trim();
+    if (!searchInput) return;
 
+    const gameName = searchInput.value.trim();
     if (!gameName) return;
 
-    const isIgnoreMode = Boolean(state.settings?.auto_add_all_games);
+    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
+    if (!state.settings) state.settings = {};
 
     if (isIgnoreMode) {
-        // Adding a game manually in ignore mode removes it from ignored_games
         if (state.settings.ignored_games) {
             state.settings.ignored_games = state.settings.ignored_games.filter(
                 g => g.toLowerCase() !== gameName.toLowerCase()
@@ -759,6 +763,7 @@ function addGameFromSearch() {
 
     availableGames.add(gameName);
     searchInput.value = '';
+    console.debug('[Game List] Added game manually:', gameName);
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
@@ -783,23 +788,18 @@ function sortGamesByEnding() {
     if (!state.settings || !Array.isArray(state.settings.games_to_watch)) return;
 
     const originalOrder = JSON.stringify(state.settings.games_to_watch);
-    
-    // Apply smart sorting function
     state.settings.games_to_watch = getSortedGamesArray(state.settings.games_to_watch);
     const newOrder = JSON.stringify(state.settings.games_to_watch);
 
-    // If order changed, force render and save
     if (originalOrder !== newOrder) {
+        console.debug('[Game List] Sorted watched games by ending campaign dates.');
         renderGamesToWatch();
-        renderChannels(); // Channels rely on watch priority, they must update too
+        if (typeof renderChannels === 'function') renderChannels();
         saveSettings();
-//        console.log("Game list sorted by ending date and changes saved.");
     }
 }
 
-// Pure function - only calculates, does not mutate DOM or Trigger APIs
 function getSortedGamesArray(games) {
-    // FALLBACK: If campaign data is missing, return original array
     if (!state.campaigns || Object.keys(state.campaigns).length === 0) {
         console.warn("Sorting skipped: Campaign data not available yet.");
         return games; 
@@ -818,7 +818,6 @@ function getSortedGamesArray(games) {
         }
     });
 
-    // Sort array
     return [...games].sort((a, b) => {
         const dateA = gameEndDates[a] || Infinity;
         const dateB = gameEndDates[b] || Infinity;
@@ -829,16 +828,14 @@ function getSortedGamesArray(games) {
 }
 
 function applyAutoSortIfNeeded() {
-//	console.log('Spouštím auto-sort ...');
     const autoSortCb = document.getElementById('auto-sort-by-end');
-    // Check if the checkbox exists and is checked
     if (autoSortCb && autoSortCb.checked) {
-//        console.log('Auto-sort enabled: Triggering sort automatically.');
         sortGamesByEnding();
     }
 }
 
 async function toggleGameIgnore(game, isIgnored) {
+    if (!state.settings) state.settings = {};
     if (!state.settings.ignored_games) {
         state.settings.ignored_games = [];
     }
@@ -848,7 +845,6 @@ async function toggleGameIgnore(game, isIgnored) {
             state.settings.ignored_games.push(game);
         }
 
-        // Reset current drop ONLY if the currently active drop belongs to the ignored game
         if (state.currentDrop) {
             const dropGame = state.currentDrop.game_name || state.currentDrop.game || state.currentDrop.game_title;
             if (dropGame === game) {
@@ -862,7 +858,6 @@ async function toggleGameIgnore(game, isIgnored) {
             }
         }
 
-        // Remove game from active RAM queues
         if (Array.isArray(state.activeCampaignsQueue)) {
             state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => (c.game_name || c.game) !== game);
         }
@@ -876,22 +871,18 @@ async function toggleGameIgnore(game, isIgnored) {
             });
         }
 
-        // Filter out ignored game from wanted items tree
         if (Array.isArray(state.wantedItemsTree)) {
             state.wantedItemsTree = state.wantedItemsTree.filter(group => group.game_name !== game);
         }
 
-        // Clear active UI highlight states
         if (typeof clearWantedActiveState === 'function') {
             clearWantedActiveState();
         }
 
     } else {
-        // Remove game from ignored list
         state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
     }
 
-    // Re-render UI components from current RAM state
     if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
         renderWantedItems(state.wantedItemsTree);
     }
@@ -902,21 +893,20 @@ async function toggleGameIgnore(game, isIgnored) {
         refreshUI();
     }
 
-    // Persist settings and request server synchronization
+    console.debug('[Game List] Updated game ignore status:', game, 'IsIgnored:', isIgnored);
     await saveSettings();
 
-    console.log('[WANTED] Ignore list updated. Requesting queue refresh.');
-    socket.emit('get_wanted_items');
-    socket.emit('get_campaigns');
+    if (typeof socket !== 'undefined') {
+        socket.emit('get_wanted_items');
+        socket.emit('get_campaigns');
+    }
 
     if (typeof startCombinedRotation === 'function') {
         startCombinedRotation(true);
     }
 }
 
-// Standalone function to handle auto-adding games based on user settings
 function applyAutoAddIfNeeded() {
-    // Guard: Do not auto-add games to games_to_watch if Ignore List mode is active
     if (state?.settings?.auto_add_all_games) {
         return;
     }
@@ -925,24 +915,25 @@ function applyAutoAddIfNeeded() {
     if (autoaddEl && autoaddEl.checked) {
         let hasChanges = false;
         const availableArray = Array.from(availableGames);
+        if (!state.settings) state.settings = {};
+        if (!state.settings.games_to_watch) state.settings.games_to_watch = [];
         
         availableArray.forEach(game => {
-            // Add game if it is not already in the watch list
             if (!state.settings.games_to_watch.includes(game)) {
                 state.settings.games_to_watch.push(game);
                 hasChanges = true;
             }
         });
         
-        // Only trigger UI updates and API calls if a new game was actually added
         if (hasChanges) {
             availableGames.clear(); 
             renderGamesToWatch();
+            const filterInput = document.getElementById('games-filter');
             if (typeof renderAvailableGames === 'function') {
-                renderAvailableGames(Array.from(availableGames), document.getElementById('games-filter')?.value.toLowerCase() || '');
+                renderAvailableGames(Array.from(availableGames), filterInput ? filterInput.value.toLowerCase() : '');
             }
             saveSettings();
-            console.log("Games automatically moved to watched list:", state.settings.games_to_watch);
+            console.debug('[Game List] Auto-added new games to watch list:', state.settings.games_to_watch);
             updateUIState();
         }
     }
@@ -952,6 +943,7 @@ function applyAutoAddIfNeeded() {
 
 async function selectChannel(channelId) {
     try {
+        console.debug('[Channel] Selecting channel:', channelId);
         const response = await fetch('/api/channels/select', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -961,36 +953,38 @@ async function selectChannel(channelId) {
         if (!response.ok) {
             const errorData = await response.json();
             console.error('Failed to select channel:', errorData.detail || 'Unknown error');
-            addConsoleLine(`Error selecting channel: ${errorData.detail || 'Unknown error'}`);
+            if (typeof addConsoleLine === 'function') addConsoleLine(`Error selecting channel: ${errorData.detail || 'Unknown error'}`);
         }
     } catch (error) {
         console.error('Failed to select channel:', error);
-        addConsoleLine(`Error selecting channel: ${error.message}`);
+        if (typeof addConsoleLine === 'function') addConsoleLine(`Error selecting channel: ${error.message}`);
     }
 }
 
 async function exitManualMode() {
     try {
+        console.debug('[Manual Mode] Exiting manual mode...');
         const response = await fetch('/api/mode/exit-manual', {
             method: 'POST'
         });
 
         const result = await response.json();
         if (!result.success) {
-            console.log('Exit manual mode:', result.message || 'Already in automatic mode');
+            console.debug('[Manual Mode] Exit notice:', result.message || 'Already in automatic mode');
         }
     } catch (error) {
         console.error('Failed to exit manual mode:', error);
-        addConsoleLine(`Error exiting manual mode: ${error.message}`);
+        if (typeof addConsoleLine === 'function') addConsoleLine(`Error exiting manual mode: ${error.message}`);
     }
 }
 
 async function submitLogin() {
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
-    const token = document.getElementById('2fa-token').value;
+    const username = document.getElementById('username')?.value || '';
+    const password = document.getElementById('password')?.value || '';
+    const token = document.getElementById('2fa-token')?.value || '';
 
     try {
+        console.debug('[Auth] Submitting credentials for user:', username);
         await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1002,18 +996,21 @@ async function submitLogin() {
 }
 
 async function confirmOAuth() {
-    // Signal that OAuth code has been entered
     try {
+        console.debug('[Auth] Confirming OAuth status...');
         await fetch('/api/oauth/confirm', {
             method: 'POST'
         });
-        // Hide the OAuth form and show waiting message
-        document.getElementById('oauth-code-display').style.display = 'none';
+        const oauthDisplay = document.getElementById('oauth-code-display');
+        if (oauthDisplay) oauthDisplay.style.display = 'none';
+
         const t = state.translations;
         const waitingAuth = t.gui?.login?.waiting_auth || 'Waiting for authentication...';
         const loginStatus = document.getElementById('login-status');
-        loginStatus.textContent = waitingAuth;
-        loginStatus.setAttribute('translation-key', 'waiting_auth');
+        if (loginStatus) {
+            loginStatus.textContent = waitingAuth;
+            loginStatus.setAttribute('translation-key', 'waiting_auth');
+        }
     } catch (error) {
         console.error('Failed to confirm OAuth:', error);
     }
@@ -1026,7 +1023,6 @@ async function verifyProxy() {
 
     if (!resultDiv) return;
 
-    // Reset display
     resultDiv.style.display = 'block';
     resultDiv.className = 'verify-result loading';
     resultDiv.textContent = 'Verifying connection...';
@@ -1038,6 +1034,7 @@ async function verifyProxy() {
     }
 
     try {
+        console.debug('[Settings] Verifying proxy connection:', proxyUrl);
         const response = await fetch('/api/settings/verify-proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1060,23 +1057,26 @@ async function verifyProxy() {
 }
 
 async function saveSettings() {
+    const getValue = (id, fallback = 0) => { const el = document.getElementById(id); return el ? parseInt(el.value) : fallback; };
+    const getChecked = (id) => { const el = document.getElementById(id); return el ? el.checked : false; };
+
     const settings = {
-        dark_mode: document.getElementById('dark-mode').checked,
-        language: document.getElementById('language').value,
-        connection_quality: parseInt(document.getElementById('connection-quality').value),
-        minimum_refresh_interval_minutes: parseInt(document.getElementById('minimum-refresh-interval').value),
-        proxy: state.settings.proxy || '',
-        games_to_watch: state.settings.games_to_watch || [],
-        inventory_filters: getInventoryFilters(),
-        auto_sort_by_end: document.getElementById('auto-sort-by-end')?.checked || false,
-        mine_badges_first: document.getElementById('mine-badges-first')?.checked || false,
-        auto_add_all_games: document.getElementById('auto-add-all-games')?.checked || false,
-        ignored_games: state.settings.ignored_games || [],
+        dark_mode: getChecked('dark-mode'),
+        language: document.getElementById('language')?.value || '',
+        connection_quality: getValue('connection-quality', 1),
+        minimum_refresh_interval_minutes: getValue('minimum-refresh-interval', 30),
+        proxy: state.settings?.proxy || '',
+        games_to_watch: state.settings?.games_to_watch || [],
+        inventory_filters: typeof getInventoryFilters === 'function' ? getInventoryFilters() : {},
+        auto_sort_by_end: getChecked('auto-sort-by-end'),
+        mine_badges_first: getChecked('mine-badges-first'),
+        auto_add_all_games: getChecked('auto-add-all-games'),
+        ignored_games: state.settings?.ignored_games || [],
         mining_benefits: {
-            "DIRECT_ENTITLEMENT": document.getElementById('mining-benefit-item')?.checked,
-            "BADGE": document.getElementById('mining-benefit-badge')?.checked,
-            "EMOTE": document.getElementById('mining-benefit-emote')?.checked,
-            "UNKNOWN": document.getElementById('mining-benefit-unknown')?.checked
+            "DIRECT_ENTITLEMENT": getChecked('mining-benefit-item'),
+            "BADGE": getChecked('mining-benefit-badge'),
+            "EMOTE": getChecked('mining-benefit-emote'),
+            "UNKNOWN": getChecked('mining-benefit-unknown')
         }
     };
 
@@ -1086,7 +1086,7 @@ async function saveSettings() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings)
         });
-        console.log('Settings saved automatically');
+        console.debug('[Settings] Settings saved successfully.');
     } catch (error) {
         console.error('Failed to save settings:', error);
     }
@@ -1103,10 +1103,8 @@ async function fetchAndPopulateLanguages() {
             return;
         }
 
-        // Clear existing options
         languageSelect.innerHTML = '';
 
-        // Populate with available languages
         data.available.forEach(lang => {
             const option = document.createElement('option');
             option.value = lang;
@@ -1114,7 +1112,6 @@ async function fetchAndPopulateLanguages() {
             languageSelect.appendChild(option);
         });
 
-        // Set current language
         if (data.current) {
             languageSelect.value = data.current;
         }
@@ -1124,7 +1121,9 @@ async function fetchAndPopulateLanguages() {
         if (languageSelect) {
             languageSelect.replaceChildren(makeElement('option', { value: '' }, 'Failed to load languages'));
         }
-        addConsoleLine('Error: Unable to fetch available languages. Please check your connection or try again later.');
+        if (typeof addConsoleLine === 'function') {
+            addConsoleLine('Error: Unable to fetch available languages. Please check your connection or try again later.');
+        }
     }
 }
 
@@ -1135,14 +1134,13 @@ async function fetchAndApplyTranslations() {
 
         state.translations = data;
         applyTranslations(data);
-//        console.log('Translations applied for language:', data.language_name);
+        console.debug('[Translation] Loaded and applied interface translations.');
     } catch (error) {
         console.error('Failed to fetch translations:', error);
     }
 }
 
 function applyTranslations(t) {
-    // Update tab buttons
     const tabButtons = {
         'main': document.querySelector('[data-tab="main"]'),
         'inventory': document.querySelector('[data-tab="inventory"]'),
@@ -1155,7 +1153,6 @@ function applyTranslations(t) {
     if (tabButtons.settings && t.gui?.tabs) tabButtons.settings.textContent = t.gui.tabs.settings;
     if (tabButtons.help && t.gui?.tabs) tabButtons.help.textContent = t.gui.tabs.help;
 
-    // Update Main tab - Login section
     const mainTab = document.getElementById('main-tab');
     if (mainTab && t.gui?.login) {
         const loginHeader = mainTab.querySelector('.login-panel h2');
@@ -1164,7 +1161,6 @@ function applyTranslations(t) {
         const loginStatus = document.getElementById('login-status');
         if (loginStatus?.hasAttribute('translation-key')) loginStatus.textContent = t.login?.status?.[loginStatus.getAttribute('translation-key')];
 
-        // Update login form placeholders
         const usernameInput = document.getElementById('username');
         if (usernameInput) usernameInput.placeholder = t.gui.login.username;
 
@@ -1177,7 +1173,6 @@ function applyTranslations(t) {
         const loginButton = document.getElementById('login-button');
         if (loginButton) loginButton.textContent = t.gui.login.button;
 
-        // Update OAuth display text
         const oauthDisplay = document.getElementById('oauth-code-display');
         if (oauthDisplay) {
             const oauthP = oauthDisplay.querySelector('p');
@@ -1195,9 +1190,7 @@ function applyTranslations(t) {
         }
     }
 
-    // Update Progress section
     if (mainTab && t.gui?.progress) {
-        // ID: progress-header
         const progressHeader = document.getElementById('progress-header');
         if (progressHeader) progressHeader.textContent = t.gui.progress.name;
 
@@ -1208,33 +1201,24 @@ function applyTranslations(t) {
         if (exitManualBtn) exitManualBtn.textContent = t.gui.progress.return_to_auto;
     }
 
-    // Update Console section
     if (mainTab && t.gui) {
-        // ID: console-header
         const consoleHeader = document.getElementById('console-header');
         if (consoleHeader) consoleHeader.textContent = t.gui.output;
     }
 
-    // Update Channels section
     if (mainTab && t.gui?.channels) {
-        // ID: channels-header
         const channelsHeader = document.getElementById('channels-header');
         if (channelsHeader) channelsHeader.textContent = t.gui.channels.name;
-        // Channel list will re-render with translated empty messages
-        renderChannels();
+        if (typeof renderChannels === 'function') renderChannels();
     }
 
-    // Update Inventory tab
     const inventoryTab = document.getElementById('inventory-tab');
     if (inventoryTab && t.gui?.inventory) {
-        // Inventory will re-render with translated status and empty messages
-        renderInventory();
+        if (typeof renderInventory === 'function') renderInventory();
     }
 
-    // Update Settings tab
     const settingsTab = document.getElementById('settings-tab');
     if (settingsTab && t.gui?.settings) {
-        // Use IDs for robust selection
         const generalHeader = document.getElementById('settings-general-header');
         if (generalHeader) generalHeader.textContent = t.gui.settings.general.name;
 
@@ -1251,7 +1235,7 @@ function applyTranslations(t) {
         if (darkModeLabel) {
             const checkbox = darkModeLabel.querySelector('input');
             darkModeLabel.textContent = '';
-            darkModeLabel.appendChild(checkbox);
+            if (checkbox) darkModeLabel.appendChild(checkbox);
             darkModeLabel.appendChild(document.createTextNode(' ' + t.gui.settings.general.dark_mode));
         }
 
@@ -1259,14 +1243,14 @@ function applyTranslations(t) {
         if (connQualityLabel) {
             const input = connQualityLabel.querySelector('input');
             connQualityLabel.textContent = t.gui.settings.connection_quality + ' ';
-            connQualityLabel.appendChild(input);
+            if (input) connQualityLabel.appendChild(input);
         }
 
         const refreshLabel = settingsTab.querySelector('label:has(#minimum-refresh-interval)');
         if (refreshLabel) {
             const input = refreshLabel.querySelector('input');
             refreshLabel.textContent = t.gui.settings.minimum_refresh + ' ';
-            refreshLabel.appendChild(input);
+            if (input) refreshLabel.appendChild(input);
         }
 
         const benefitsHelp = document.getElementById('settings-benefits-help');
@@ -1293,30 +1277,16 @@ function applyTranslations(t) {
         const availableGamesHeader = settingsTab.querySelector('.available-games h3');
         if (availableGamesHeader) availableGamesHeader.textContent = t.gui.settings.available_games;
 
-		const reloadBtn = document.getElementById('reload-btn');
+        const reloadBtn = document.getElementById('reload-btn');
+        if (reloadBtn) {
+            reloadBtn.textContent = t.gui.settings.reload_campaigns;
+        }
 
-		if (reloadBtn) {
-			reloadBtn.textContent = t.gui.settings.reload_campaigns;
-			reloadBtn.addEventListener('click', () => {
-				saveSettings();			
-				reloadBtn.disabled = true;
-				const originalText = reloadBtn.textContent;
-				reloadBtn.textContent = "Reloading..."; 				
-				socket.emit('reload_campaigns');				
-				setTimeout(() => { 
-					reloadBtn.disabled = false; 
-					reloadBtn.textContent = originalText;
-				}, 30000);
-			});
-		}
-        // Re-render games to watch with translated empty messages
         renderGamesToWatch();
     }
 
-    // Update Help tab
     const helpTab = document.getElementById('help-tab');
     if (helpTab && t.gui?.help) {
-        // Robust ID selection for Help tab headers
         const aboutHeader = document.getElementById('help-about-header');
         if (aboutHeader) aboutHeader.textContent = t.gui.help.about || 'About Twitch Drops Miner';
 
@@ -1329,7 +1299,6 @@ function applyTranslations(t) {
         const notesHeader = document.getElementById('help-notes-header');
         if (notesHeader) notesHeader.textContent = t.gui.help.important_notes || 'Important Notes';
 
-        // Update list items and links (keeping innerHTML approach for lists as they are dynamic content blocks)
         const helpContent = helpTab.querySelector('.help-content');
         if (helpContent) {
             const howToItems = t.gui.help.how_to_use_items || [
@@ -1368,11 +1337,9 @@ function applyTranslations(t) {
         }
     }
 
-    // Update Footer
     if (t.gui?.footer) {
         const loadingText = t.gui.footer.loading || 'Loading...';
         const currentVersionEl = document.getElementById('current-version');
-        // Only update if it's the specific "Loading..." text to avoid overwriting the fetched version
         if (currentVersionEl && currentVersionEl.textContent === 'Loading...') {
             currentVersionEl.textContent = loadingText;
         }
@@ -1380,14 +1347,12 @@ function applyTranslations(t) {
         const footerVersionText = document.getElementById('footer-version-text');
         if (footerVersionText) {
             const versionLabel = t.gui.footer.version || 'Version:';
-            const span = document.getElementById('current-version'); // Need to re-fetch or preserve
+            const span = document.getElementById('current-version');
             footerVersionText.textContent = versionLabel + ' ';
-            // Re-finding the span because textContent wiped it from parent
             if (span) footerVersionText.appendChild(span);
         }
     }
 
-    // Update Badges tooltips
     if (t.gui?.badges) {
         const manualBadge = document.getElementById('manual-mode-badge');
         if (manualBadge && t.gui.badges.manual) manualBadge.title = t.gui.badges.manual.title;
@@ -1396,30 +1361,19 @@ function applyTranslations(t) {
         if (autoBadge && t.gui.badges.auto) autoBadge.title = t.gui.badges.auto.title;
 
         const proxyBadge = document.getElementById('proxy-indicator');
-        if (proxyBadge && t.gui.badges.proxy) proxyBadge.title = t.gui.badges.proxy.title; // Note: append logic in updateSettingsUI overrides this
+        if (proxyBadge && t.gui.badges.proxy) proxyBadge.title = t.gui.badges.proxy.title;
     }
 
-    // Update Wanted Drops Panel
     if (mainTab && t.gui?.wanted) {
-        // ID: wanted-header
         const wantedHeader = document.getElementById('wanted-header');
         if (wantedHeader) wantedHeader.textContent = t.gui.wanted.name;
-        // Re-render wanted items to update empty message
-        // Since we don't store wanted items in state globally (only receives them), we rely on updateWantedItems triggering render
     }
-
-    // Update Inventory Filters (re-using existing inventoryTab variable if available, or just querying)
-    // Note: inventoryTab was declared above in "Update Inventory Status" section
-    // But since that might be in a different block or not, let's be safe and just query element directly without const redeclaration if it conflicts.
-    // However, looking at the code, the previous declaration was likely in the same function scope.
-    // Simplest fix: use the existing element or re-query without 'const' if needed, but best to just use the one we have.
-    // Actually, looking at the view_file, there was 'const inventoryTab' around line 1639.
-    // So I should just reuse that variable or use a different name.
 
     if (inventoryTab && t.gui?.inventory?.filters) {
         const f = t.gui.inventory.filters;
         const updateLabel = (id, text) => {
-            const el = document.getElementById(id)?.parentElement.querySelector('span');
+            const parent = document.getElementById(id)?.parentElement;
+            const el = parent ? parent.querySelector('span') : null;
             if (el) el.textContent = text;
         };
         updateLabel('filter-active', f.active);
@@ -1439,15 +1393,12 @@ function applyTranslations(t) {
         const searchInput = document.getElementById('games-filter');
         if (searchInput) searchInput.placeholder = f.search_placeholder;
 
-        // Update Mining Benefit Labels in Settings (re-using inventory filter keys)
-        // IDs: mining-benefit-item, mining-benefit-badge, mining-benefit-emote, mining-benefit-unknown
         updateLabel('mining-benefit-item', f.item);
         updateLabel('mining-benefit-badge', f.badge);
         updateLabel('mining-benefit-emote', f.emote);
         updateLabel('mining-benefit-unknown', f.other);
     }
 
-    // Update header elements
     if (t.gui?.header) {
         const languageLabel = document.querySelector('.language-selector span');
         if (languageLabel) languageLabel.textContent = t.gui.header.language;
@@ -1457,7 +1408,6 @@ function applyTranslations(t) {
             statusText.textContent = t.gui.header.initializing;
         }
 
-        // Update connection indicator
         const connIndicator = document.getElementById('connection-indicator');
         if (connIndicator) {
             if (state.connected) {
@@ -1471,8 +1421,8 @@ function applyTranslations(t) {
 
 async function reloadCampaigns() {
     try {
+        console.debug('[Campaigns] Requesting campaign data reload...');
         await fetch('/api/reload', { method: 'POST' });
-        // Status will update via Socket.IO when backend starts operation
     } catch (error) {
         console.error('Failed to reload:', error);
     }
@@ -1482,7 +1432,6 @@ async function reloadCampaigns() {
 // ==================== Tab and Button Management ====================
 
 function switchTab(tabName) {
-    // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.remove('active');
     });
@@ -1490,15 +1439,18 @@ function switchTab(tabName) {
         btn.classList.remove('active');
     });
 
-    // Show selected tab
-    document.getElementById(`${tabName}-tab`).classList.add('active');
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+    const targetTab = document.getElementById(`${tabName}-tab`);
+    const targetBtn = document.querySelector(`[data-tab="${tabName}"]`);
+    if (targetTab) targetTab.classList.add('active');
+    if (targetBtn) targetBtn.classList.add('active');
+
+    console.debug('[App] Switched tab to:', tabName);
 }
 
 function updateUIState() {
     const isAutoAddEnabled = document.getElementById('auto-add-all-games')?.checked;
 
-    // 1. Vypnutí tlačítek pro hromadný výběr
+    // 1. Disable bulk selection buttons
     const buttons = [
         document.getElementById('select-all-btn'), 
         document.getElementById('deselect-all-btn')
@@ -1508,9 +1460,7 @@ function updateUIState() {
         if (btn) btn.disabled = isAutoAddEnabled;
     });
 
-    // 2. Vypnutí jednotlivých checkboxů her
-    // Předpokládám, že tvoje checkboxy mají třídu 'game-checkbox'
-    // Pokud mají jinou, uprav ten selektor
+    // 2. Disable individual game checkboxes
     document.querySelectorAll('.game-checkbox').forEach(cb => {
         cb.disabled = isAutoAddEnabled;
     });
@@ -1519,7 +1469,6 @@ function updateUIState() {
 // ==================== Event Listeners ====================
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Fetch and display version information
     fetchAndDisplayVersion();
 
     // Tab switching
@@ -1530,97 +1479,141 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Login form
-    document.getElementById('login-button').addEventListener('click', submitLogin);
-    document.getElementById('oauth-confirm').addEventListener('click', confirmOAuth);
+    const loginBtn = document.getElementById('login-button');
+    if (loginBtn) loginBtn.addEventListener('click', submitLogin);
+
+    const oauthBtn = document.getElementById('oauth-confirm');
+    if (oauthBtn) oauthBtn.addEventListener('click', confirmOAuth);
 
     // Settings - auto-save on change
-    document.getElementById('dark-mode').addEventListener('change', (e) => {
-        // Apply dark mode immediately for instant feedback
-        if (e.target.checked) {
-            document.body.classList.add('dark-mode');
-        } else {
-            document.body.classList.remove('dark-mode');
-        }
-        // Then save settings
-        saveSettings();
-    });
-    
-    // Auto-sort checkbox management
+    const darkModeCb = document.getElementById('dark-mode');
+    if (darkModeCb) {
+        darkModeCb.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                document.body.classList.add('dark-mode');
+            } else {
+                document.body.classList.remove('dark-mode');
+            }
+            saveSettings();
+        });
+    }
+
     const autoSortEl = document.getElementById('auto-sort-by-end');
     if (autoSortEl) {
         autoSortEl.addEventListener('change', (e) => {
-            // Save the updated auto-sort state to the API
             saveSettings();
-            
-            // If the user enabled auto-sort, trigger the sorting function immediately
             if (e.target.checked) {
                 sortGamesByEnding();
             }
         });
     }
 
-	// Auto-add / Ignore List toggle management
-	document.getElementById('auto-add-all-games')?.addEventListener('change', async (e) => {
-		const isChecked = e.target.checked;
+    const autoAddEl = document.getElementById('auto-add-all-games');
+    if (autoAddEl) {
+        autoAddEl.addEventListener('change', async (e) => {
+            const isChecked = e.target.checked;
+            if (state && state.settings) {
+                state.settings.auto_add_all_games = isChecked;
+            }
 
-		if (state && state.settings) {
-			state.settings.auto_add_all_games = isChecked;
-		}
+            renderGamesToWatch();
+            await saveSettings();
+        });
+    }
 
-		if (typeof renderGamesToWatch === 'function') {
-			renderGamesToWatch();
-		}
+    const bindSave = (id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', saveSettings);
+    };
 
-		await saveSettings();
-	});
-		
-    document.getElementById('mine-badges-first').addEventListener('change', saveSettings);
-    document.getElementById('language').addEventListener('change', saveSettings);
-    document.getElementById('connection-quality').addEventListener('change', saveSettings);
-    document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);
+    bindSave('mine-badges-first');
+    bindSave('language');
+    bindSave('connection-quality');
+    bindSave('minimum-refresh-interval');
 
-    // Proxy uses a manual "Set Proxy" button instead of auto-save
-    document.getElementById('set-proxy-btn').addEventListener('click', () => {
-        const proxyInput = document.getElementById('proxy-url');
-        const newValue = proxyInput ? proxyInput.value : '';
+    const setProxyBtn = document.getElementById('set-proxy-btn');
+    if (setProxyBtn) {
+        setProxyBtn.addEventListener('click', () => {
+            const proxyInput = document.getElementById('proxy-url');
+            const newValue = proxyInput ? proxyInput.value : '';
 
-        // Only save if changed
-        if (newValue !== (state.settings.proxy || '')) {
-            state.settings.proxy = newValue;
+            if (!state.settings) state.settings = {};
+            if (newValue !== (state.settings.proxy || '')) {
+                state.settings.proxy = newValue;
+                saveSettings();
+                updateUIState();
+            }
+        });
+    }
+
+    const verifyProxyBtn = document.getElementById('verify-proxy-btn');
+    if (verifyProxyBtn) verifyProxyBtn.addEventListener('click', verifyProxy);
+
+    const reloadBtn = document.getElementById('reload-btn');
+    if (reloadBtn) {
+        reloadBtn.addEventListener('click', () => {
             saveSettings();
-            updateUIState();
-        }
-    });
-    
-    document.getElementById('verify-proxy-btn').addEventListener('click', verifyProxy);
-    document.getElementById('reload-btn').addEventListener('click', reloadCampaigns);
+            reloadBtn.disabled = true;
+            const originalText = reloadBtn.textContent;
+            reloadBtn.textContent = "Reloading...";
+            
+            if (typeof socket !== 'undefined') {
+                socket.emit('reload_campaigns');
+            } else {
+                reloadCampaigns();
+            }
+
+            setTimeout(() => {
+                reloadBtn.disabled = false;
+                reloadBtn.textContent = originalText;
+            }, 30000);
+        });
+    }
 
     // Games to watch management
-    document.getElementById('select-all-btn').addEventListener('click', selectAllGames);
-    document.getElementById('deselect-all-btn').addEventListener('click', deselectAllGames);
-    document.getElementById('add-game-btn').addEventListener('click', addGameFromSearch);
-    document.getElementById('sort-by-end-btn').addEventListener('click', sortGamesByEnding);
-    document.getElementById('games-filter').addEventListener('input', renderGamesToWatch);
+    const selectAllBtn = document.getElementById('select-all-btn');
+    if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllGames);
+
+    const deselectAllBtn = document.getElementById('deselect-all-btn');
+    if (deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllGames);
+
+    const addGameBtn = document.getElementById('add-game-btn');
+    if (addGameBtn) addGameBtn.addEventListener('click', addGameFromSearch);
+
+    const sortByEndBtn = document.getElementById('sort-by-end-btn');
+    if (sortByEndBtn) sortByEndBtn.addEventListener('click', sortGamesByEnding);
+
+    const gamesFilterInput = document.getElementById('games-filter');
+    if (gamesFilterInput) gamesFilterInput.addEventListener('input', renderGamesToWatch);
 
     // Inventory filters
-    document.getElementById('filter-active').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-not-linked').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-upcoming').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-expired').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-finished').addEventListener('change', onInventoryFilterChange);
+    const bindInvFilter = (id) => {
+        const el = document.getElementById(id);
+        if (el && typeof onInventoryFilterChange === 'function') {
+            el.addEventListener('change', onInventoryFilterChange);
+        }
+    };
 
-    // Benefit type filters
-    document.getElementById('filter-benefit-item').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-benefit-badge').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-benefit-emote').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-benefit-other').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('clear-filters-btn').addEventListener('click', clearInventoryFilters);
+    bindInvFilter('filter-active');
+    bindInvFilter('filter-not-linked');
+    bindInvFilter('filter-upcoming');
+    bindInvFilter('filter-expired');
+    bindInvFilter('filter-finished');
+    bindInvFilter('filter-benefit-item');
+    bindInvFilter('filter-benefit-badge');
+    bindInvFilter('filter-benefit-emote');
+    bindInvFilter('filter-benefit-other');
+
+    const clearFiltersBtn = document.getElementById('clear-filters-btn');
+    if (clearFiltersBtn && typeof clearInventoryFilters === 'function') {
+        clearFiltersBtn.addEventListener('click', clearInventoryFilters);
+    }
 
     // Mining benefit settings
-    document.getElementById('mining-benefit-item').addEventListener('change', saveSettings);
-    document.getElementById('mining-benefit-badge').addEventListener('change', saveSettings);
-    document.getElementById('mining-benefit-emote').addEventListener('change', saveSettings);
-    document.getElementById('mining-benefit-unknown').addEventListener('change', saveSettings);
+    bindSave('mining-benefit-item');
+    bindSave('mining-benefit-badge');
+    bindSave('mining-benefit-emote');
+    bindSave('mining-benefit-unknown');
 
     // Inventory game search dropdown
     const gameSearchInput = document.getElementById('inventory-game-search');
@@ -1648,13 +1641,9 @@ document.addEventListener('DOMContentLoaded', () => {
         exitManualBtn.addEventListener('click', exitManualMode);
     }
 
-    // Fetch and populate available languages
     fetchAndPopulateLanguages();
-
-    // Fetch and apply translations for the current language
     fetchAndApplyTranslations();
 
-    // Request notification permission
     if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
     }
@@ -1729,20 +1718,19 @@ function appendTrustedHelpContent(parent, text) {
     }
 }
 
-
 function getStatusIconSVG(statusClass) {
     const icons = {
         // Drops
         'completed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
         'ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
         'drop-claimed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
-        // Změněno na ikonu dárku pro "Ready"
+        // Gift icon for "Ready"
         'drop-ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
-        // Změněno na křížek v kroužku
+        // Circle cross icon for "Expired"
         'drop-expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`,
         'drop-active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
         
-        // Kampaně
+        // Campaigns
         'active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
         'upcoming': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
         'expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`

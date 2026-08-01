@@ -1,39 +1,113 @@
+/////////////////////////////////////////////////////
+////////////CHANNELS WATCHED/////////////////////////
+/////////////////////////////////////////////////////
+
+let isChannelsRenderScheduled = false;
+
+/**
+ * Schedules channels rendering on the next animation frame to prevent DOM render spamming.
+ */
+function scheduleRenderChannels() {
+    if (isChannelsRenderScheduled) return;
+    isChannelsRenderScheduled = true;
+    
+    // Batch multiple render calls into a single animation frame
+    requestAnimationFrame(() => {
+        renderChannels();
+        isChannelsRenderScheduled = false;
+    });
+}
+
+function hasImportantChange(oldData, newData) {
+    if (!oldData) return true;
+
+    // Critical structural changes affecting order or badges
+    if (oldData.game !== newData.game ||
+        oldData.online !== newData.online ||
+        oldData.watching !== newData.watching ||
+        oldData.drops_enabled !== newData.drops_enabled ||
+        oldData.acl_based !== newData.acl_based) {
+        return true;
+    }
+
+    // Trigger full re-render for viewers only on significant jumps
+    const viewerDiff = Math.abs((oldData.viewers || 0) - (newData.viewers || 0));
+    return viewerDiff > 50; 
+}
 
 function updateChannel(channelData) {
+    if (!channelData || !channelData.id) return;
+    const existing = state.channels[channelData.id];
+
+    // 1. Completely ignore update if data is identical
+    if (existing && JSON.stringify(existing) === JSON.stringify(channelData)) {
+        return;
+    }
+
+    // 2. Targeted DOM update if no structural/important changes occurred
+    if (existing && !hasImportantChange(existing, channelData)) {
+        state.channels[channelData.id] = channelData;
+
+        const viewerEl = document.querySelector(`#channel-${channelData.id} .channel-info`);
+        if (viewerEl) {
+            const viewersText = channelData.viewers !== null ? `${channelData.viewers.toLocaleString()} viewers` : 'Offline';
+            
+            if (channelData.watching) {
+                viewerEl.replaceChildren(
+                    document.createTextNode(viewersText + ' • '),
+                    makeElement('strong', {}, 'WATCHING')
+                );
+            } else {
+                viewerEl.textContent = viewersText;
+            }
+        }
+        return; // Skip full re-render
+    }
+
+    // 3. Fallback to full re-render on major status/game changes
+    console.log(`[Channel] Structural change detected for channel: ${channelData.displayName || channelData.name || channelData.id}`);
     state.channels[channelData.id] = channelData;
-    renderChannels();
+    scheduleRenderChannels();
 }
 
 function removeChannel(channelId) {
+    console.log(`[Channels] Removing channel ID: '${channelId}'`);
     delete state.channels[channelId];
-    renderChannels();
+    scheduleRenderChannels();
 }
 
 function clearChannels() {
+    console.log('[Channels] Clearing all channels from state');
     state.channels = {};
-    renderChannels();
+    scheduleRenderChannels();
 }
 
 function setWatchingChannel(channelId) {
+    console.log(`[Channels] Setting active watching channel ID: '${channelId}'`);
     Object.values(state.channels).forEach(ch => ch.watching = false);
     if (state.channels[channelId]) {
         state.channels[channelId].watching = true;
     }
-    renderChannels();
+    scheduleRenderChannels();
 }
 
 function clearWatchingChannel() {
+    console.log('[Channels] Clearing watching state for all channels');
     Object.values(state.channels).forEach(ch => ch.watching = false);
-    renderChannels();
+    scheduleRenderChannels();
 }
 
 function renderChannels() {
     const container = document.getElementById('channels-list');
-    if (!container) return;
+    if (!container) {
+        console.warn('[Channels] Element #channels-list not found in DOM');
+        return;
+    }
 
     const t = state.translations || {};
     const channels = Object.values(state.channels);
     if (channels.length === 0) {
+        console.log('[Channels] No channels available to render');
         const emptyMsg = t.gui?.channels?.no_channels || 'No channels tracked yet...';
         container.replaceChildren(
             makeElement('p', { class: 'empty-message' }, emptyMsg)
@@ -50,6 +124,7 @@ function renderChannels() {
     });
 
     if (filteredChannels.length === 0) {
+        console.log('[Channels] No channels found matching selected games filter');
         const emptyMsg = t.gui?.channels?.no_channels_for_games || 'No channels found for selected games...';
         container.replaceChildren(
             makeElement('p', { class: 'empty-message' }, emptyMsg)
@@ -85,6 +160,8 @@ function renderChannels() {
         return totalViewersB - totalViewersA;
     });
 
+    console.log(`[Channels] Rendering ${filteredChannels.length} channel(s) across ${sortedGames.length} game group(s)`);
+
     container.innerHTML = '';
     sortedGames.forEach(([gameId, group]) => {
         const gameHeader = document.createElement('div');
@@ -116,6 +193,7 @@ function renderChannels() {
 
         group.channels.forEach(channel => {
             const div = document.createElement('div');
+            div.id = `channel-${channel.id}`; // Assigned ID for targeted updates
             div.className = 'channel-item';
             if (channel.watching) div.classList.add('watching');
             if (channel.online) div.classList.add('online');

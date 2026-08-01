@@ -2,6 +2,21 @@
 // ==================== Active Drop & Campaign Rotation ====================
 ////////////////////////////////////////////////////////////////////////////
 
+// --- 0. Throttled Logger Helper (prevents console spam) ---
+const progressLogThrottleMap = new Map();
+function logProgressOnce(key, message, isWarn = false) {
+    const now = Date.now();
+    const lastLog = progressLogThrottleMap.get(key) || 0;
+    if (now - lastLog > 3000) {
+        if (isWarn) {
+            console.warn(`[THROTTLED] ${message}`);
+        } else {
+            console.log(`[THROTTLED] ${message}`);
+        }
+        progressLogThrottleMap.set(key, now);
+    }
+}
+
 // --- 1. State Initialization ---
 if (typeof state === 'undefined') {
     window.state = {};
@@ -184,7 +199,6 @@ function syncAnyDropProgress(incomingIdStr, data) {
 
 /**
  * Calculates total requirements for the overall progress bar from full inventory (state.campaigns)
- * to prevent percentages from dropping when completed campaigns disappear from the queueTree.
  */
 function calculateOverallStats() {
     let stats = { totalCurrent: 0, totalRequired: 0, totalRemainingSecs: 0 };
@@ -258,12 +272,17 @@ function calculateOverallStats() {
 function cleanupClaimedCampaigns() {
     if (!state.activeCampaignsQueue || !Array.isArray(state.activeCampaignsQueue)) return;
     
+    const initialLen = state.activeCampaignsQueue.length;
     state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => {
         if (isClaimed(c)) return false;
         let cDrops = extractCampaignDrops(c);
         if (cDrops.length === 0) return true;
         return cDrops.some(d => !isClaimed(d));
     });
+
+    if (state.activeCampaignsQueue.length < initialLen) {
+        logProgressOnce('camp_cleanup', `🧹 [CAMPAIGN] Cleaned up ${initialLen - state.activeCampaignsQueue.length} claimed/finished campaign(s) from queue.`);
+    }
 }
 
 /**
@@ -295,7 +314,9 @@ function mapDropsForQueue(drops, parentData) {
 // ==========================================
 
 function addCampaign(campaignData) {
+    if (!campaignData || !campaignData.id) return;
     state.campaigns[campaignData.id] = campaignData;
+    logProgressOnce(`camp_added_${campaignData.id}`, `➕ [CAMPAIGN] Added or updated campaign: '${campaignData.name || campaignData.id}'`);
     if (typeof renderInventory === 'function') renderInventory();
 }
 
@@ -319,10 +340,12 @@ function clearWantedActiveState() {
  * Clears the current drop progress UI and resets related state.
  */
 function clearDropProgress() {
-    console.log('🧹 [UI CLEAR] Executing clearDropProgress() - resetting state and clearing UI elements');
+    logProgressOnce('ui_clear_executed', '🧹 [UI CLEAR] Executing clearDropProgress() - resetting RAM state and UI');
 
-    // 1. Reset RAM state
+    // 1. Reset BOTH RAM state variants
     state.currentDrop = null;
+    state.current_drop = null;
+    state.activeDropsQueue = [];
     dropTotalSeconds = 0;
     
     if (state.countdownTimer) {
@@ -383,7 +406,7 @@ function updateRemainingTime(initialSeconds, currentData = null) {
         state.countdownTimer = null;
     }
 
-    const drop = currentData || state.currentDrop || {};
+    const drop = currentData || state.currentDrop || state.current_drop || {};
     const timeEl = document.getElementById('progress-time');
     
     if (timeEl) {
@@ -392,9 +415,8 @@ function updateRemainingTime(initialSeconds, currentData = null) {
         timeEl.textContent = `Time remaining: ${formatTime(remaining)} / ${formatTime(reqSecs)}`;
     }
 
-    if (state.currentDrop) {
-        state.currentDrop.remaining_seconds = Math.max(0, Math.floor(initialSeconds));
-    }
+    if (state.currentDrop) state.currentDrop.remaining_seconds = Math.max(0, Math.floor(initialSeconds));
+    if (state.current_drop) state.current_drop.remaining_seconds = Math.max(0, Math.floor(initialSeconds));
 }
 
 function updateDropTitle(data) {
@@ -451,7 +473,6 @@ function renderDropGameHeader(data) {
     const dropGameEl = document.getElementById('drop-game');
     if (!dropGameEl) return;
 
-    // 🛡️ BEZPEČNOSTNÍ POJISTKA: Pokud data chybí, schováme hlavičku
     if (!data || typeof data !== 'object') {
         dropGameEl.innerHTML = '';
         dropGameEl.style.display = 'none';
@@ -518,7 +539,6 @@ function renderDropCardLayout(data, rewardImgUrl) {
     const currentDropLabel = document.getElementById('current-drop-label');
     if (!currentDropLabel) return;
 
-    // 🛡️ BEZPEČNOSTNÍ POJISTKA: Pokud data chybí, vyčistíme text
     if (!data || typeof data !== 'object') {
         currentDropLabel.textContent = '';
         return;
@@ -611,7 +631,6 @@ function renderDropCardLayout(data, rewardImgUrl) {
 function renderAllProgressBars(currentMins, dropData) {
     if (!dropData) return;
 
-    // Bezpečné získání požadovaných minut (ochrana před NaN / null)
     const current = Number(currentMins) || 0;
     const reqMins = Number(dropData.required_minutes || dropData.total_minutes) || 1;
     
@@ -628,7 +647,6 @@ function renderAllProgressBars(currentMins, dropData) {
         progressText.textContent = `${current} / ${reqMins} min`;
     }
 
-    // Aktualizace kampaňových dat
     if (typeof updateCampaignProgressData === 'function') {
         updateCampaignProgressData(dropData, current);
     }
@@ -657,8 +675,9 @@ function updateGameHeaderTimeBadge(groupIdx, remainingMinutes) {
 function updateSingleDropDisplay(data, isFromRotation = false) {
     const targetId = data.drop_id || data.id;
 
-    if (state.currentDrop && (state.currentDrop.drop_id || state.currentDrop.id) === targetId) {
-        data = { ...state.currentDrop, ...data };
+    const activeDrop = state.currentDrop || state.current_drop;
+    if (activeDrop && (activeDrop.drop_id || activeDrop.id) === targetId) {
+        data = { ...activeDrop, ...data };
     } else if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
         const queueItem = state.activeDropsQueue.find(d => (d.drop_id || d.id) === targetId);
         if (queueItem) data = { ...queueItem, ...data };
@@ -672,6 +691,7 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
     const curMins = Number(data.current_minutes ?? 0);
 
     if (isClaimed(data) || (reqMins > 0 && curMins >= reqMins)) {
+        logProgressOnce(`drop_finished_${targetId}`, `🎉 [DROP COMPLETE] Drop '${data.drop_name || targetId}' is claimed or finished. Removing from queue.`);
         if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
             const dropIdToClean = data.drop_id || data.id;
             state.activeDropsQueue = state.activeDropsQueue.filter(d => (d.drop_id || d.id) !== dropIdToClean);
@@ -680,7 +700,9 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
         return;
     }
 
+    // Direct replacement of both state variables
     state.currentDrop = data;
+    state.current_drop = data;
 
     let remSecs = data.remaining_seconds !== undefined && data.remaining_seconds !== null 
         ? Number(data.remaining_seconds) 
@@ -700,21 +722,23 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
     updateRemainingTime(remSecs, data);
 }
 
-function switchCampaignDisplay(data, isManualSwitch = false) { // Default zmenen na false pro bezpecnost
+function switchCampaignDisplay(data, isManualSwitch = false) {
     if (data) {
         const now = Date.now();
         
         if (data.ends_at) {
             const endTime = new Date(data.ends_at).getTime();
             if (endTime <= now) {
-                clearDropProgress(true);
+                logProgressOnce(`camp_expired_${data.id}`, `⏳ [CAMPAIGN EXPIRED] Campaign '${data.name || data.id}' has ended. Clearing UI.`, true);
+                clearDropProgress();
                 return;
             }
         }
 
         if (data.current_minutes !== undefined && data.required_minutes !== undefined) {
             if (data.current_minutes >= data.required_minutes && data.required_minutes > 0) {
-                clearDropProgress(true);
+                logProgressOnce(`camp_done_${data.id}`, `✅ [CAMPAIGN DONE] Campaign '${data.name || data.id}' is completed. Clearing UI.`);
+                clearDropProgress();
                 return;
             }
         }
@@ -730,7 +754,8 @@ function switchCampaignDisplay(data, isManualSwitch = false) { // Default zmenen
         window._lastValidActiveCampaignsQueue = state.activeCampaignsQueue;
     }
 
-    const previousDropId = state.currentDrop ? (state.currentDrop.drop_id || state.currentDrop.id) : null;
+    const activeDrop = state.currentDrop || state.current_drop;
+    const previousDropId = activeDrop ? (activeDrop.drop_id || activeDrop.id) : null;
     const { drops } = getCampaignAndDrops(data);
 
     if (drops.length > 0) {
@@ -749,10 +774,10 @@ function switchCampaignDisplay(data, isManualSwitch = false) { // Default zmenen
         state.activeDropsQueue = mapDropsForQueue(targetDrops, data);
 
         if (isManualSwitch) {
+            logProgressOnce('manual_switch', `👆 [CAMPAIGN SWITCH] Manual switch triggered for '${data.name || data.id}'`);
             const idx = state.activeDropsQueue.findIndex(d => (d.drop_id || d.id) === data.drop_id);
             if (idx !== -1) state.dropRotationIndex = idx;
             
-            // FIX: Defer restart to the next event loop tick to break synchronous recursion
             setTimeout(() => {
                 if (typeof startCombinedRotation === 'function') {
                     startCombinedRotation(true);
@@ -776,16 +801,13 @@ function switchCampaignDisplay(data, isManualSwitch = false) { // Default zmenen
  * Updates UI and state with incoming drop progress data.
  */
 function updateDropProgress(dropData) {
-    // 1. Guard against empty drop data
     if (!dropData || typeof dropData !== 'object' || Object.keys(dropData).length === 0) {
-        console.warn('⚠️ [UI UPDATE] Empty dropData received. Clearing drop progress UI.');
+        logProgressOnce('warn_empty_data', '⚠️ [UI UPDATE] Empty dropData received. Clearing drop UI.', true);
         if (typeof clearDropProgress === 'function') clearDropProgress();
         return;
     }
 
     const validDrop = dropData;
-
-    // 2. STRICT GUARD: Validate game mismatch between watched channel and active drop
     const dropGame = validDrop.game_name || validDrop.game || validDrop.game_title;
     
     let watchedGame = null;
@@ -810,16 +832,20 @@ function updateDropProgress(dropData) {
         }
     }
 
-    // Refuse rendering if watched channel is playing a different game
-    if (watchedGame && dropGame && watchedGame !== dropGame) {
-        console.warn(`🚨 [UI GUARD MISMATCH] Refusing to render drop for '${dropGame}' because watched channel plays '${watchedGame}'. Clearing drop UI.`);
+    // STRICT GUARD: Refuse rendering if watched channel is playing a different game
+    if (watchedGame && dropGame && watchedGame.trim().toLowerCase() !== dropGame.trim().toLowerCase()) {
+        logProgressOnce(
+            `mismatch_${dropGame}_vs_${watchedGame}`,
+            `🚨 [UI GUARD MISMATCH] Refusing to render drop for '${dropGame}' because watched channel plays '${watchedGame}'. Clearing drop UI.`,
+            true
+        );
         if (typeof clearDropProgress === 'function') clearDropProgress();
         return;
     }
 
-    console.log(`✅ [UI UPDATE] Rendering drop progress for '${dropGame || 'Unknown Game'}':`, validDrop);
+    logProgressOnce(`render_${dropGame}`, `✅ [UI UPDATE] Rendering drop progress for '${dropGame || 'Unknown Game'}'`);
 
-    // 3. Process live mining queue
+    // Process live mining queue
     if (!state.liveMiningQueue) state.liveMiningQueue = [];
     const activeCampId = validDrop.campaign_id;
     
@@ -839,18 +865,16 @@ function updateDropProgress(dropData) {
         state.activeCampaignsQueue = state.liveMiningQueue.map(cid => state.campaigns[cid]).filter(Boolean);
     }
 
-	// 4. Save state & Restore UI visibility
+    // Save state (explicit copy into both variables)
     const incomingIdStr = String(validDrop.drop_id || validDrop.id);
-    if (!state.currentDrop) state.currentDrop = {};
-    Object.assign(state.currentDrop, validDrop);
+    state.currentDrop = { ...validDrop };
+    state.current_drop = { ...validDrop };
 
-    // 🔓 UNHIDE PROGRESS CARD & HIDE "NO ACTIVE DROP"
     const noDropMessage = document.getElementById('no-drop-message');
     const dropInfo = document.getElementById('drop-info');
     if (noDropMessage) noDropMessage.style.display = 'none';
     if (dropInfo) dropInfo.style.display = 'block';
 
-    // 🏷️ FIX GAME HEADERS (Prevents 'For Honor (1/1)' stuck header)
     const campaignTitleEl = document.getElementById('campaign-title') || document.querySelector('.campaign-header-title');
     if (campaignTitleEl && dropGame) {
         campaignTitleEl.textContent = `${dropGame} (1/1)`;
@@ -858,12 +882,10 @@ function updateDropProgress(dropData) {
 
     const dropGameEl = document.getElementById('drop-game');
     if (dropGameEl) {
-        // If campaignTitleEl handles game name, keep sub-header hidden or synced
         dropGameEl.textContent = dropGame || '';
-        dropGameEl.style.display = 'none'; // Hide redundant secondary header to avoid double titles
+        dropGameEl.style.display = 'none';
     }
 
-    // 🧹 HIDE GHOST / ZERO PROGRESS CARDS
     const secondaryProgressBars = document.querySelectorAll('.secondary-progress-card, #fallback-drop-card');
     secondaryProgressBars.forEach(card => {
         card.style.display = 'none';
@@ -871,7 +893,6 @@ function updateDropProgress(dropData) {
 
     const timeRemainingEl = document.getElementById('progress-time');
     if (timeRemainingEl && (validDrop.current_minutes === undefined || validDrop.current_minutes === 0)) {
-        // Hide zero-time remaining label if no timer is actively ticking
         if (!validDrop.time_remaining) {
             timeRemainingEl.style.display = 'none';
         } else {
@@ -879,7 +900,6 @@ function updateDropProgress(dropData) {
         }
     }
 
-    // 5. Trigger sub-renderers
     if (typeof syncAnyDropProgress === 'function') {
         syncAnyDropProgress(incomingIdStr, validDrop);
     }
@@ -910,7 +930,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
 
     if (!campaignFill || !campaignText || !data) return;
 
-    // 🛡️ Find the exact container card for this secondary campaign bar
     const cardContainer = campaignFill.closest('.secondary-progress-card') || 
                           campaignFill.closest('.drop-card-container') || 
                           campaignFill.parentElement?.parentElement;
@@ -937,7 +956,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
 
             const maxCampaignCurrent = drops.length > 0 ? Math.max(...drops.map(d => Number(d.current_minutes) || 0)) : currentDropCurrent;
             
-            // Check all potential duration field names (required_minutes, duration, total_minutes)
             totalCampaignRequired = drops.length > 0 ? Math.max(...drops.map(d => Number(d.required_minutes || d.duration || d.total_minutes) || 0)) : 0;
             totalCampaignCurrent = maxCampaignCurrent;
 
@@ -960,7 +978,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         totalCampaignRequired = Number(data.required_minutes || data.duration || data.total_minutes) || 0;
     }
 
-    // 🧹 HIDE GHOST CARD IF NO VALID REQUIRED TIME, UNHIDE IF VALID
     if (totalCampaignRequired > 0) {
         if (cardContainer) cardContainer.style.display = 'block';
 
@@ -969,7 +986,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         campaignFill.textContent = percentage > 0 ? `${percentage}%` : '';
         campaignText.textContent = `${totalCampaignCurrent} / ${totalCampaignRequired} min`;
     } else {
-        // Safely hide the element if required minutes are invalid/zero
         if (cardContainer) cardContainer.style.display = 'none';
         campaignFill.style.width = '0%';
         campaignFill.textContent = '';
@@ -1037,22 +1053,41 @@ function updateOverallProgress() {
  * Executes a single tick of rotation process
  */
 function executeRotationStep() {
-
     let validCampaigns = state.activeCampaignsQueue || [];
 
-    if (validCampaigns.length === 0 && state.currentDrop && state.currentDrop.campaign_id && state.campaigns) {
-        const fallbackCamp = state.campaigns[state.currentDrop.campaign_id];
+    const activeDrop = state.currentDrop || state.current_drop;
+    if (validCampaigns.length === 0 && activeDrop && activeDrop.campaign_id && state.campaigns) {
+        const fallbackCamp = state.campaigns[activeDrop.campaign_id];
         if (fallbackCamp) validCampaigns = [fallbackCamp];
     }
 
-    // Filter out completed/claimed campaigns and ignored games
+    // Get currently watched game
+    let watchedGame = null;
+    if (typeof getWatchedChannelObject === 'function') {
+        const wObj = getWatchedChannelObject();
+        if (wObj) watchedGame = wObj.game_name || wObj.game || wObj.game_title;
+    }
+
+    // Filter out completed, ignored, or mismatched game campaigns from rotation
     validCampaigns = validCampaigns.filter(c => {
         if (!c || isClaimed(c)) return false;
 
-        // Skip campaign if its game is ignored
         const gameName = c.game_name || c.game || c.gameName;
+        
+        // Skip ignored games
         if (typeof isGameIgnored === 'function' && isGameIgnored(gameName)) {
             return false;
+        }
+
+        // ROTATION GUARD: Do not start rotation for a game other than watched!
+        if (watchedGame && gameName) {
+            if (watchedGame.trim().toLowerCase() !== gameName.trim().toLowerCase()) {
+                logProgressOnce(
+                    `rot_skip_${gameName}`,
+                    `ℹ️ [ROTATION GUARD] Skipping '${gameName}' campaign (Watching '${watchedGame}')`
+                );
+                return false;
+            }
         }
 
         const drops = extractCampaignDrops(c);
@@ -1060,7 +1095,7 @@ function executeRotationStep() {
     });
 
     if (validCampaigns.length === 0) {
-        console.log('ℹ️ [ROTATION] No valid non-ignored campaigns available for rotation.');
+        logProgressOnce('rotation_empty', 'ℹ️ [ROTATION] No valid non-ignored campaigns available for rotation.');
         return;
     }
 
@@ -1115,9 +1150,9 @@ function startCombinedRotation(forceRestart = true) {
         state.rotationTimer = null;
     }
 
+    logProgressOnce('rot_start', `🔄 [ROTATION] Combined rotation started (interval: 4000ms, forceRestart: ${forceRestart})`);
     state.rotationTimer = setInterval(executeRotationStep, 4000);
     
-    // Odložení okamžitého spuštění na další tik Event Loopu zabrání přetečení stacku
     if (document.querySelectorAll('.wanted-drop-item').length > 0) {
         if (!isExecutingRotation) {
             setTimeout(() => {

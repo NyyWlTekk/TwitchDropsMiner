@@ -1,8 +1,8 @@
 // ==================== Inventory Filtering ====================
 
 function sortCampaigns(campaigns) {
-
     const now = Date.now();
+    console.debug('[Inventory Sort] Sorting campaigns array of count:', campaigns.length);
     return [...campaigns].sort((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1;
         
@@ -37,31 +37,31 @@ function sortCampaigns(campaigns) {
 
 function getInventoryFilters() {
     // Get filter state from UI checkboxes and selected games array
-    return {
+    const filters = {
         show_active: document.getElementById('filter-active')?.checked || false,
         show_not_linked: document.getElementById('filter-not-linked')?.checked || false,
         show_upcoming: document.getElementById('filter-upcoming')?.checked || false,
         show_expired: document.getElementById('filter-expired')?.checked || false,
         show_finished: document.getElementById('filter-finished')?.checked || false,
-        game_name_search: [...selectedInventoryGames],  // Array of selected game names
+        game_name_search: [...selectedInventoryGames],
         // Benefit type filters (default to true if checkbox doesn't exist)
         show_benefit_item: document.getElementById('filter-benefit-item')?.checked !== false,
         show_benefit_badge: document.getElementById('filter-benefit-badge')?.checked !== false,
         show_benefit_emote: document.getElementById('filter-benefit-emote')?.checked !== false,
         show_benefit_other: document.getElementById('filter-benefit-other')?.checked !== false,
     };
+    return filters;
 }
 
-// 1. Determines the precise lifecycle state of a campaign
-// Helper to determine campaign status using both time and API flags
+// Determines the precise lifecycle state of a campaign
 function getCampaignStatus(campaign, now = Date.now()) {
     const startsAt = campaign.starts_at ? new Date(campaign.starts_at).getTime() : 0;
     const endsAt = campaign.ends_at ? new Date(campaign.ends_at).getTime() : 0;
 
     // Check upcoming by local time OR by Twitch API flags
     const isUpcoming = (startsAt > now) || 
-                            (campaign.status === 'UPCOMING') || 
-                            (campaign.upcoming === true);
+                       (campaign.status === 'UPCOMING') || 
+                       (campaign.upcoming === true);
 
     // Check active by local time OR by Twitch API flags (must not be upcoming)
     const isActive = (((startsAt <= now && endsAt > now) || 
@@ -69,24 +69,28 @@ function getCampaignStatus(campaign, now = Date.now()) {
                       (campaign.active === true)) && !isUpcoming);
 
     const isExpired = (endsAt > 0 && endsAt <= now) || (campaign.status === 'EXPIRED');
-    // NOVÝ KÓD:
-	const dropsList = campaign.drops || campaign.time_based_drops || [];
-	const realClaimed = dropsList.length > 0 
-		? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
-		: (campaign.claimed_drops || 0);
-	const realTotal = dropsList.length > 0 ? dropsList.length : (campaign.total_drops || 0);
+    
+    // Calculate claim status across time-based drops or summary flags
+    const dropsList = campaign.drops || campaign.time_based_drops || [];
+    const realClaimed = dropsList.length > 0 
+        ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
+        : (campaign.claimed_drops || 0);
+    const realTotal = dropsList.length > 0 ? dropsList.length : (campaign.total_drops || 0);
 
-	const isFinished = realTotal > 0 && realClaimed >= realTotal;
+    const isFinished = realTotal > 0 && realClaimed >= realTotal;
 
-    return {
+    const statusResult = {
         isActive,
         isUpcoming,
         isExpired,
         isFinished
     };
+
+    console.debug(`[Inventory Status] "${campaign.name || campaign.game_name}":`, statusResult);
+    return statusResult;
 }
 
-// 2. Checks if a campaign matches status checkboxes
+// Checks if a campaign matches status checkboxes
 function matchesStatusFilters(campaign, filters, status) {
     const hasAnyFilter = filters.show_active || filters.show_not_linked ||
                          filters.show_upcoming || filters.show_expired || 
@@ -94,41 +98,36 @@ function matchesStatusFilters(campaign, filters, status) {
     
     if (!hasAnyFilter) return true;
 
-    // 1. Time status check (Active, Upcoming, Expired, Finished)
+    // Time status check (Active, Upcoming, Expired, Finished)
     const hasTimeFilter = filters.show_active || filters.show_upcoming || 
                           filters.show_expired || filters.show_finished;
     
-    let matchesTime = !hasTimeFilter; // Default to true if no time filter is selected
+    let matchesTime = !hasTimeFilter;
     if (hasTimeFilter) {
         if (filters.show_finished && status.isFinished) matchesTime = true;
         if (filters.show_expired && status.isExpired && !status.isFinished) matchesTime = true;
-        
-        // TADY: Pokud je zaškrtnuté Upcoming a kampaň je podle času vyhodnocena jako nadcházející
         if (filters.show_upcoming && status.isUpcoming && !status.isFinished) matchesTime = true;
-        
         if (filters.show_active && status.isActive && !status.isFinished && !status.isUpcoming) matchesTime = true;
     }
 
-    // 2. Connection status check (Not Linked)
+    // Connection status check (Not Linked)
     let matchesLink = true;
     if (!campaign.linked) {
         matchesLink = filters.show_not_linked;
-    } else {
-        if (filters.show_not_linked && !hasTimeFilter) {
-            matchesLink = false;
-        }
+    } else if (filters.show_not_linked && !hasTimeFilter) {
+        matchesLink = false;
     }
 
     return matchesTime && matchesLink;
 }
 
-// 3. Checks if a campaign matches the search query
+// Checks if a campaign matches the selected game filters
 function matchesGameFilter(campaign, filters) {
     if (!filters.game_name_search || filters.game_name_search.length === 0) return true;
     return filters.game_name_search.includes(campaign.game_name);
 }
 
-// 4. Checks if a campaign has drops matching selected reward types
+// Checks if a campaign has drops matching selected reward types
 function matchesBenefitFilter(campaign, filters) {
     const allBenefitsEnabled = filters.show_benefit_item && filters.show_benefit_badge &&
                                filters.show_benefit_emote && filters.show_benefit_other;
@@ -164,13 +163,12 @@ function campaignMatchesFilters(campaign, filters) {
 }
 
 function onInventoryFilterChange() {
-    // Save filter state to settings and re-render inventory
+    console.debug('[Inventory Filter] Filter state changed by user interaction.');
     saveSettings();
     renderInventory();
 }
 
 function clearInventoryFilters() {
-    // Uncheck all filter checkboxes
     document.getElementById('filter-active').checked = false;
     document.getElementById('filter-not-linked').checked = false;
     document.getElementById('filter-upcoming').checked = false;
@@ -178,22 +176,20 @@ function clearInventoryFilters() {
     document.getElementById('filter-finished').checked = false;
     document.getElementById('inventory-game-search').value = '';
 
-    // Reset benefit type filters to checked (show all)
     if (document.getElementById('filter-benefit-item')) document.getElementById('filter-benefit-item').checked = true;
     if (document.getElementById('filter-benefit-badge')) document.getElementById('filter-benefit-badge').checked = true;
     if (document.getElementById('filter-benefit-emote')) document.getElementById('filter-benefit-emote').checked = true;
     if (document.getElementById('filter-benefit-other')) document.getElementById('filter-benefit-other').checked = true;
 
-    // Clear selected games
     selectedInventoryGames = [];
     updateGameTagsDisplay();
 
-    // Save and re-render
+    console.debug('[Inventory Filter] Cleared all inventory filters to default state.');
     saveSettings();
     renderInventory();
 }
 
-// Renders a single benefit item (icon + name + type)
+// Renders a single benefit item
 function createBenefitItem(benefit, statusClass = '') {
     const className = statusClass ? `benefit-item ${statusClass}` : 'benefit-item';
     
@@ -209,9 +205,8 @@ function createBenefitItem(benefit, statusClass = '') {
     });
 }
 
-// Renders a single drop with its progress and benefits
+// Renders a single drop item with progress and benefits
 function createDropItem(drop, t) {
-    // 1. Zjistíme stavovou třídu (stejnou pro oba boxy)
     let statusClass = '';
     if (drop.is_claimed) {
         statusClass = 'drop-claimed';
@@ -223,11 +218,9 @@ function createDropItem(drop, t) {
         statusClass = 'drop-active';
     }
 
-    // 2. Vytvoříme vnější i vnitřní box se stejnou třídou
     const dropItem = makeElement('div', { class: `drop-item ${statusClass}` });
     const contentWrapper = makeElement('div', { class: `drop-content-box ${statusClass}` });
 
-    // Header
     contentWrapper.appendChild(
         makeElement('div', { class: 'drop-item-header' }, '', el =>
             el.appendChild(makeElement('div', { class: 'drop-item-info' }, '', el2 =>
@@ -245,14 +238,11 @@ function createDropItem(drop, t) {
         )
     );
     
-    // Benefity
     const benefitsList = makeElement('div', { class: 'benefits-list' });
     if (drop.benefits && drop.benefits.length > 0) {
         drop.benefits.forEach(benefit => {
-            // Tady se předává statusClass, aby benefitItem dostal správnou stavovou třídu
             const benefitEl = createBenefitItem(benefit, statusClass);
             
-            // Přidání ikony do každého benefitu
             const iconHTML = getStatusIconSVG(statusClass);
             if (iconHTML) {
                 const iconDiv = document.createElement('div');
@@ -269,7 +259,6 @@ function createDropItem(drop, t) {
     }
     contentWrapper.appendChild(benefitsList);
 
-    // Progress
     if (!drop.is_claimed) {
         const isDirect = drop.delivery_method === 'DIRECT_ENTITLEMENT' || 
                          drop.deliveryMethod === 'DIRECT_ENTITLEMENT' || 
@@ -279,7 +268,7 @@ function createDropItem(drop, t) {
             if (!drop.can_claim) {
                 const progressPercent = Math.round((drop.progress || 0) * 100);
                 contentWrapper.appendChild(makeElement('div', {}, `${drop.current_minutes || 0} / ${drop.required_minutes} minutes (${progressPercent}%)`));
-            } else if (drop.can_claim) {
+            } else {
                 contentWrapper.appendChild(makeElement('div', { style: 'color: var(--warning-color); font-weight: bold; margin-top: 5px;' }, 'Ready to claim!'));
             }
         } else {
@@ -290,6 +279,7 @@ function createDropItem(drop, t) {
     dropItem.appendChild(contentWrapper);
     return dropItem;
 }
+
 function createDropBlock(drop, t) {
     let statusClass = '';
     if (drop.is_claimed) statusClass = 'drop-claimed';
@@ -299,51 +289,12 @@ function createDropBlock(drop, t) {
 
     const dropBlock = document.createElement('div');
     dropBlock.className = `drop-block ${statusClass}`;
-
     dropBlock.appendChild(createDropItem(drop, t));
 
     return dropBlock;
 }
 
-// Renders the top header of a campaign card (Game art, linking state, external links)
-function createCampaignHeader(campaign) {
-    const dropsList = campaign.drops || campaign.time_based_drops || [];
-    const realClaimed = dropsList.length > 0 
-        ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
-        : (campaign.claimed_drops || 0);
-    const realTotal = dropsList.length > 0 ? dropsList.length : (campaign.total_drops || 0);
-
-    const isCompleted = realTotal > 0 && realClaimed >= realTotal;
-    const isActive = (campaign.is_active !== undefined ? campaign.is_active : campaign.active) && !isCompleted;
-
-    let statusClass = 'expired';
-    let statusText = t.gui?.inventory?.expired || 'Expired';
-
-    if (isCompleted) {
-        statusClass = 'completed';
-        statusText = t.gui?.inventory?.completed || 'Completed ✔';
-    } else if (isActive) {
-        statusClass = 'active';
-        statusText = t.gui?.inventory?.active || 'Active ✔';
-    }
-
-    const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
-
-    const headerEl = makeElement('div', { class: `campaign-header ${statusClass}` });
-
-    headerEl.appendChild(makeElement('div', { class: 'campaign-title-row' }, '', el => {
-        el.appendChild(makeElement('h3', {}, campaign.name || campaign.game_name || 'Campaign'));
-    }));
-
-    headerEl.appendChild(makeElement('div', { class: 'campaign-status', style: 'display: flex; justify-content: space-between;' }, '', el => {
-        el.appendChild(makeElement('span', { class: `status-tag ${statusClass}` }, statusText));
-        el.appendChild(makeElement('span', { class: 'claimed-counter' }, `${realClaimed} / ${realTotal} ${claimedCountText}`));
-    }));
-
-    return headerEl;
-}
-
-// 1. Vytvoření horní hlavičky karty (obrázek, název hry, link, badge)
+// Renders header section for a campaign card
 function createCardHeaderSection(campaign, statusClass, t) {
     const campaignHeader = makeElement('div', { class: 'campaign-header' });
 
@@ -384,7 +335,7 @@ function createCardHeaderSection(campaign, statusClass, t) {
     return campaignHeader;
 }
 
-// 2. Vytvoření stavového řádku a časů
+// Renders info section (status, counters, timing)
 function createCardInfoSection(campaign, statusText, t) {
     const infoSection = makeElement('div', { class: 'campaign-info' });
 
@@ -400,7 +351,6 @@ function createCardInfoSection(campaign, statusText, t) {
         el.appendChild(makeElement('span', {}, `${realClaimed} / ${realTotal} ${claimedCountText}`));
     }));
     
-    // Tlačítko pro propojení účtu
     if (!campaign.linked && campaign.link_url) {
         infoSection.appendChild(makeElement('button', { 
             class: 'link-account-btn', 
@@ -413,7 +363,6 @@ function createCardInfoSection(campaign, statusText, t) {
         }));
     }
 
-    // Časové údaje (Start / Konec)
     if (campaign.starts_at) {
         const startsLabel = t.gui?.inventory?.starts || 'Starts: {time}';
         infoSection.appendChild(makeElement('div', { class: 'campaign-timing' }, 
@@ -431,20 +380,15 @@ function createCardInfoSection(campaign, statusText, t) {
     return infoSection;
 }
 
-/**
- * [INFO] Clean rendering of campaign drops without storage cache hacks.
- */
+// Renders campaign drops section
 function createCardDropsSection(campaign, t) {
     const dropsBox = makeElement('div', { class: 'campaign-drops' });
-    
-    // Čistě aktuální stav ze state bez jakéhokoliv sahat do úložiště
     const currentDrop = (typeof state !== 'undefined' && state.currentDrop) || null;
 
     if (campaign.drops && campaign.drops.length > 0) {
         dropsBox.appendChild(makeElement('div', { class: 'campaign-drop-title' }, campaign.name));
         
         campaign.drops.forEach(drop => {
-            // Sjednocené ID z dat serveru (podpora pro id i drop_id)
             const dropId = drop.id || drop.drop_id || '';
             let isActivelyMining = false;
             
@@ -461,10 +405,8 @@ function createCardDropsSection(campaign, t) {
 
             const hasProgress = !isActivelyMining && !isFinished && current > 0;
 
-            // Vytvoření bloku dropu
             const dropBlock = createDropBlock(drop, t);
             
-            // JISTOTA PRO DOM: Vynucení správného UUID v atributu, aby progress.js prvek vždy našel
             if (dropId && dropBlock && typeof dropBlock.setAttribute === 'function') {
                 dropBlock.setAttribute('data-drop-id', String(dropId));
             }
@@ -482,23 +424,22 @@ function createCardDropsSection(campaign, t) {
     return dropsBox;
 }
 
-// Hlavní čistá funkce, která to pouze poskládá dohromady
+// Builds the final HTML element for a single campaign card
 function createCampaignCard(campaign, t) {
-    let statusClass = '';
-    let statusText = '';
+    const status = getCampaignStatus(campaign);
 
-    if (campaign.claimed_drops !== undefined && campaign.total_drops !== undefined && campaign.claimed_drops >= campaign.total_drops) {
+    let statusClass = 'expired';
+    let statusText = t.gui?.inventory?.status?.expired || 'Expired';
+
+    if (status.isFinished) {
         statusClass = 'completed';
-        statusText = 'Completed'; 
-    } else if (campaign.active) {
+        statusText = t.gui?.inventory?.status?.completed || 'Completed';
+    } else if (status.isActive) {
         statusClass = 'active';
         statusText = t.gui?.inventory?.status?.active || 'Active';
-    } else if (campaign.upcoming) {
+    } else if (status.isUpcoming) {
         statusClass = 'upcoming';
         statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
-    } else if (campaign.expired) {
-        statusClass = 'expired';
-        statusText = t.gui?.inventory?.status?.expired || 'Expired';
     }
 
     const card = makeElement('div', { class: `campaign-card ${statusClass}` });
@@ -512,6 +453,7 @@ function createCampaignCard(campaign, t) {
     return card;
 }
 
+// Main grid rendering procedure
 function renderInventory() {
     const container = document.getElementById('inventory-grid');
     container.innerHTML = '';
@@ -526,15 +468,22 @@ function renderInventory() {
                             filters.show_upcoming || filters.show_expired || 
                             filters.show_finished;
 
-    if (!hasStatusFilter) return;
+    if (!hasStatusFilter) {
+        console.debug('[Inventory Render] Skipping render: No status filters active.');
+        return;
+    }
 
-    // 1. Filter
+    // Filter & Sort
     const filteredCampaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
-    
-    // 2. Sort
     const sortedCampaigns = sortCampaigns(filteredCampaigns);
 
-    // 3. Handle Empty States
+    console.debug('[Inventory Render] Filter results:', { 
+        total: allCampaigns.length, 
+        filteredCount: sortedCampaigns.length,
+        filters 
+    });
+
+    // Handle Empty States
     if (allCampaigns.length === 0) {
         const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
         container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
@@ -546,7 +495,7 @@ function renderInventory() {
         return;
     }
 
-    // 4. Render and Append Cards
+    // Render Cards
     sortedCampaigns.forEach(campaign => {
         container.appendChild(createCampaignCard(campaign, t));
     });

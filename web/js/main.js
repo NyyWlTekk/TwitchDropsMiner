@@ -1,5 +1,5 @@
 ////////////////////////////////////////
-// MAIN PAGE////////////////////////////
+// MAIN PAGE / INITIALIZERS & LOGGING
 ////////////////////////////////////////
 
 function addConsoleLine(message) {
@@ -7,16 +7,32 @@ function addConsoleLine(message) {
 }
 
 function addConsoleLineRaw(line) {
-    const console = document.getElementById('console-output');
-    if (!console) return;
+    const consoleEl = document.getElementById('console-output');
+    if (!consoleEl) return;
 
     const div = document.createElement('div');
     div.textContent = line;
-    console.appendChild(div);
-    console.scrollTop = console.scrollHeight;
+    consoleEl.appendChild(div);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
 
-    while (console.children.length > 1000) {
-        console.removeChild(console.firstChild);
+    while (consoleEl.children.length > 1000) {
+        consoleEl.removeChild(consoleEl.firstChild);
+    }
+}
+
+// Lightweight throttled logger to prevent console spam
+const logThrottleMap = new Map();
+
+function logOnce(key, message, isWarn = false) {
+    const now = Date.now();
+    const lastLog = logThrottleMap.get(key) || 0;
+    if (now - lastLog > 3000) {
+        if (isWarn) {
+            console.warn(`[THROTTLED] ${message}`);
+        } else {
+            console.log(`[THROTTLED] ${message}`);
+        }
+        logThrottleMap.set(key, now);
     }
 }
 
@@ -27,6 +43,8 @@ function addConsoleLineRaw(line) {
  * Handles channels received from the server.
  */
 function handleInitialChannels(channelsData) {
+    if (typeof state === 'undefined') return;
+
     state.channels = {};
     let channelsList = [];
     
@@ -51,6 +69,8 @@ function handleInitialChannels(channelsData) {
  * Handles wanted items received from the server.
  */
 function handleInitialWantedItems(wantedData) {
+    if (typeof state === 'undefined') return;
+
     let treeToRender = wantedData;
 
     if (treeToRender && !Array.isArray(treeToRender) && typeof treeToRender === 'object') {
@@ -72,13 +92,19 @@ function handleInitialCurrentDrop(dropData) {
     const hasValidDrop = dropData && typeof dropData === 'object' && Object.keys(dropData).length > 0;
 
     if (hasValidDrop) {
-        state.currentDrop = dropData;
+        if (typeof state !== 'undefined') {
+            state.currentDrop = dropData;
+            state.current_drop = dropData;
+        }
         
         if (typeof updateDropProgress === 'function') {
             updateDropProgress(dropData);
         }
     } else {
-        state.currentDrop = null;
+        if (typeof state !== 'undefined') {
+            state.currentDrop = null;
+            state.current_drop = null;
+        }
 
         if (typeof clearDropProgress === 'function') {
             clearDropProgress(true); // Forced cleanup
@@ -94,32 +120,42 @@ function handleInitialCurrentDrop(dropData) {
 /**
  * Inspects state object directly for channel and drop mismatches.
  */
-function checkSyncConsistency(eventName, payload) {
+let lastLoggedMismatch = null;
+
+function checkSyncConsistency(evt = null, data = null) {
     if (typeof state === 'undefined') return;
 
-    // 1. Get currently watched channel and its associated game
-    const watchedChannelId = state.watching_channel;
-    const watchedChannelObj = (watchedChannelId && state.channels) ? state.channels[watchedChannelId] : null;
-    const watchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game || 'Unknown Game') : 'None';
-    const watchedStreamer = watchedChannelObj ? (watchedChannelObj.displayName || watchedChannelObj.name || watchedChannelId) : 'None';
-
-    // 2. Get active drop and its associated game
     const currentDrop = state.currentDrop || state.current_drop;
-    const dropGame = currentDrop ? (currentDrop.game_name || currentDrop.game || currentDrop.game_title || 'Unknown Drop Game') : 'None';
-
-    // 3. Print current state context
-    console.group(`🔍 [STATE INSPECTOR] Event: '${eventName}'`);
-    console.log(`📺 Watched Channel: ${watchedStreamer} (Game: '${watchedGame}')`);
-    console.log(`⚡ Active Drop Game: '${dropGame}'`);
-
-    // 4. Trigger alert if watched game does not match active drop game
-    if (watchedGame !== 'None' && dropGame !== 'None' && watchedGame !== dropGame) {
-        console.error(`🚨 [SYNC ERROR] MISMATCH DETECTED! Channel is watching '${watchedGame}', but drop progress is running for '${dropGame}'!`);
-        console.log('📦 Current Drop Object:', currentDrop);
-        console.log('📺 Watched Channel Object:', watchedChannelObj);
+    if (!currentDrop) {
+        lastLoggedMismatch = null;
+        return;
     }
 
-    console.groupEnd();
+    const watchedChannelObj = typeof getWatchedChannelObject === 'function' ? getWatchedChannelObject() : null;
+    const watchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game || watchedChannelObj.game_title) : null;
+    const activeDropGame = typeof getDropGameName === 'function' ? getDropGameName(currentDrop) : null;
+
+    if (watchedGame && activeDropGame) {
+        const cleanWatched = watchedGame.trim().toLowerCase();
+        const cleanDrop = activeDropGame.trim().toLowerCase();
+
+        if (cleanWatched !== cleanDrop) {
+            const mismatchKey = `${cleanWatched}_vs_${cleanDrop}`;
+
+            // Log warning only once per unique mismatch
+            if (lastLoggedMismatch !== mismatchKey) {
+                console.warn(`[SYNC AUTOCLEAN] Ghost drop detected '${activeDropGame}' while watching '${watchedGame}'. Clearing from memory.`);
+                lastLoggedMismatch = mismatchKey;
+            }
+
+            // Immediate memory & UI cleanup
+            if (typeof safeClearDrop === 'function') {
+                safeClearDrop();
+            }
+        } else {
+            lastLoggedMismatch = null;
+        }
+    }
 }
 
 // Auto-attach inspector to socket events (without high-frequency status_update spam)

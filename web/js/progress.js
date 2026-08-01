@@ -1083,9 +1083,9 @@ function executeRotationStep() {
         if (watchedGame && gameName) {
             if (watchedGame.trim().toLowerCase() !== gameName.trim().toLowerCase()) {
                 logProgressOnce(
-                    `rot_skip_${gameName}`,
-                    `ℹ️ [ROTATION GUARD] Skipping '${gameName}' campaign (Watching '${watchedGame}')`
-                );
+					`rot_skip_${gameName}_${watchedGame}`,
+					`ℹ️ [ROTATION GUARD] Skipping '${gameName}' campaign (Watching '${watchedGame}')`
+				);
                 return false;
             }
         }

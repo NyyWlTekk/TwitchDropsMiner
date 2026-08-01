@@ -218,16 +218,46 @@ function handleConnectError(error) {
     }
 }
 
+let lastLoggedCampaignProgress = -1;
+
 /**
  * Handles status update payload from server.
  */
 function handleStatusUpdate(data) {
     if (data && data.status) {
-        console.log('[Status] Received update:', data.status);
-        updateStatus(data.status);
+        const statusText = data.status;
+        let shouldLog = true;
+
+        // Throttle repetitive campaign inventory progress logs in console
+        if (statusText.includes('Adding campaigns to inventory...')) {
+            const match = statusText.match(/\((\d+)\/(\d+)\)/);
+            if (match) {
+                const current = parseInt(match[1], 10);
+                const total = parseInt(match[2], 10);
+                const percent = Math.floor((current / total) * 100);
+
+                // Log only at start, 25% steps, and completion
+                const isQuarterStep = percent % 25 === 0 && percent !== lastLoggedCampaignProgress;
+                shouldLog = current === 1 || current === total || isQuarterStep;
+
+                if (shouldLog) {
+                    lastLoggedCampaignProgress = percent;
+                }
+            }
+        } else {
+            // Reset state when status message changes to something else
+            lastLoggedCampaignProgress = -1;
+        }
+
+        if (shouldLog) {
+            console.log('[Status] Received update:', statusText);
+        }
+
+        // Always update UI status text regardless of console logging
+        updateStatus(statusText);
 
         // Auto-clear drop UI if status indicates idle or non-mining state
-        const statusLower = data.status.toLowerCase();
+        const statusLower = statusText.toLowerCase();
         if (statusLower.includes('idle') || statusLower.includes('no active campaigns') || statusLower.includes('offline')) {
             if (typeof clearDropProgress === 'function') {
                 clearDropProgress();
@@ -235,7 +265,6 @@ function handleStatusUpdate(data) {
         }
     }
 }
-
 
 // ----------------------------------------------------------------------------
 // Core Data & Campaign Sync Handlers

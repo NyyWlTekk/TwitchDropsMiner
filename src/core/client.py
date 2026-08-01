@@ -267,7 +267,7 @@ class Twitch:
         await self._inventory_service.fetch_inventory()
 
         # Po načtení zavoláme prioritizaci
-        prioritize_badge_games(self)
+        handle_prioritize_badge_games(self)
 
     async def bulk_check_online(self, channels: abc.Iterable[Channel]) -> None:
         await self._channel_service.bulk_check_online(channels)
@@ -546,6 +546,25 @@ def get_filtered_inventory(client: Twitch) -> list[DropsCampaign]:
 
 
 # ==========================================
+# Helpers for Stream Queue Management
+# ==========================================
+
+def force_stream_reevaluation(client: Twitch) -> None:
+    """Force immediate stop and re-evaluation of stream queue."""
+    logger.info("[DEBUG-EVAL] Forcing stream re-evaluation and switch...")
+    watch_service = getattr(client, "_watch_service", None)
+    
+    if watch_service:
+        if hasattr(watch_service, "stop_watching"):
+            watch_service.stop_watching()
+        if hasattr(watch_service, "restart_watching"):
+            watch_service.restart_watching()
+
+    if hasattr(client, "trigger_stream_selection") and callable(client.trigger_stream_selection):
+        client.trigger_stream_selection(force=True)
+
+
+# ==========================================
 # Handlers for Ignored & Auto-Added Games
 # ==========================================
 
@@ -562,32 +581,8 @@ def handle_ignored_games_update(client: Twitch, new_ignored_games: list[str]) ->
         client.build_wanted_games()
         logger.info("[DEBUG-IGN] Client wanted_games rebuilt: %s", getattr(client, "wanted_games", "N/A"))
 
-    # 2. Check WatchService state
-    watch_service = getattr(client, "watch_service", None)
-    if watch_service:
-        current_stream = getattr(watch_service, "current_stream", None)
-        logger.info("[DEBUG-IGN] Current stream: %s", current_stream)
-
-        # Synchronize ignored games directly to watch_service internal state
-        if hasattr(watch_service, "ignored_games"):
-            watch_service.ignored_games = client.settings.ignored_games
-            logger.info("[DEBUG-IGN] Synchronized watch_service.ignored_games: %s", watch_service.ignored_games)
-
-        # 3. Stop current stream
-        if hasattr(watch_service, "stop_watching"):
-            logger.info("[DEBUG-IGN] Calling watch_service.stop_watching()")
-            watch_service.stop_watching()
-
-        # 4. Refresh watch_service queues from client's newly built wanted games
-        if hasattr(watch_service, "update_games_queue") and hasattr(client, "wanted_games"):
-            watch_service.update_games_queue(client.wanted_games)
-        elif hasattr(watch_service, "games") and hasattr(client, "wanted_games"):
-            watch_service.games = list(client.wanted_games) # Nebo odpovídající metoda pro naplnění
-
-        # 5. Restart watching loop to pick the next available stream
-        if hasattr(watch_service, "restart_watching"):
-            logger.info("[DEBUG-IGN] Calling watch_service.restart_watching()")
-            watch_service.restart_watching()
+    # 2. Force immediate re-evaluation and stream switch
+    force_stream_reevaluation(client)
 
     logger.info("==================================================")
     
@@ -598,14 +593,14 @@ def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaig
     """
     logger.info("Auto-sorting games by pending badges and ending time")
     
-    # 1. Nejprve provést případné auto-přidání / odebrání
+    # 1. First perform auto-add / removal check
     handle_auto_add_games(client, filtered_inventory)
 
     if not client.settings.games_to_watch:
         logger.debug("Skip auto-sorting: games_to_watch is empty.")
         return
 
-    # Mapování kampaní podle hry
+    # Map campaigns by game name
     campaign_map: dict[str, list[DropsCampaign]] = {}
     for c in filtered_inventory:
         c_game = getattr(c, "game", "")
@@ -621,15 +616,20 @@ def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaig
         if not campaigns:
             return (0, float('inf'))
         
-        # Priorita podle nejbližšího konce kampaně
+        # Priority based on earliest campaign end time
         earliest_end = min(
             (getattr(c, "end_time", float('inf')) for c in campaigns),
             default=float('inf')
         )
         return (1, earliest_end)
 
+    old_queue = list(client.settings.games_to_watch)
     client.settings.games_to_watch.sort(key=sort_key)
     logger.debug("Games successfully auto-sorted.")
+
+    if client.settings.games_to_watch != old_queue:
+        client.settings.save()
+        force_stream_reevaluation(client)
 
 
 def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
@@ -667,14 +667,14 @@ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign
     existing_games = {g.strip().lower(): g for g in client.settings.games_to_watch}
     newly_added = []
 
-    # 1. Přidání nových her
+    # 1. Add new games
     for c_lower, c_original in inventory_games_original.items():
         if c_lower not in existing_games:
             client.settings.games_to_watch.append(c_original)
             existing_games[c_lower] = c_original
             newly_added.append(c_original)
 
-    # 2. Odebrání neaktivních nebo ignorovaných her
+    # 2. Remove inactive or ignored games
     removed_games = []
     updated_list = []
     for g in client.settings.games_to_watch:
@@ -686,7 +686,7 @@ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign
 
     client.settings.games_to_watch = updated_list
 
-    # Uložení a reakce na změny
+    # Save and handle changes
     if newly_added or removed_games:
         if newly_added:
             logger.info("Automatically added new games to watch list: %s", ", ".join(newly_added))
@@ -698,33 +698,34 @@ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign
             client.socketio.emit("settings_updated", client.settings.__dict__)
 
         current_watched_game = getattr(client, "current_game", None)
-        if current_watched_game and current_watched_game.strip().lower() in {
+        is_watched_removed = current_watched_game and current_watched_game.strip().lower() in {
             g.strip().lower() for g in removed_games
-        }:
+        }
+        
+        if is_watched_removed:
             logger.info(
                 "Currently watched game '%s' was removed/ignored during auto-sync. Stopping stream and switching...",
                 current_watched_game,
             )
-            if hasattr(client, "stop_watching") and callable(client.stop_watching):
-                client.stop_watching()
-            if hasattr(client, "trigger_stream_selection") and callable(client.trigger_stream_selection):
-                client.trigger_stream_selection(force=True)
+
+        if newly_added or is_watched_removed:
+            force_stream_reevaluation(client)
     else:
         logger.debug("No changes in games_to_watch after auto-add sync.")
-
-def prioritize_badge_games(client: Twitch, filtered_inventory: list[DropsCampaign] | None = None) -> None:
+        
+def handle_prioritize_badge_games(client: Twitch, filtered_inventory: list[DropsCampaign] | None = None) -> None:
     """
-    Vyčleněná funkce bez kompletního auto-sortu.
-    Pokud je zapnuto 'mine_badges_first', posune hry s nedotěženou badge na začátek fronty.
+    Separated function without full auto-sort.
+    If 'mine_badges_first' is enabled, moves games with pending badges to the front of the queue.
     """
     if not getattr(client.settings, "mine_badges_first", False) or not client.inventory:
         return
 
-    # Pokud filtered_inventory nedodáme, načteme ho z clienta
+    # If filtered_inventory is not provided, load it from client
     if filtered_inventory is None:
         filtered_inventory = get_filtered_inventory(client)
 
-    # 1. Najdeme názvy her, které mají aktivní a NEDOTĚŽENÝ odznak
+    # 1. Find game names that have active and unclaimed badges
     badge_games: set[str] = set()
 
     for campaign in filtered_inventory:
@@ -744,17 +745,21 @@ def prioritize_badge_games(client: Twitch, filtered_inventory: list[DropsCampaig
     if not badge_games:
         return
 
-    # 2. Rozdělíme seznam na hry s badge a ostatní (OPRAVENO: self -> client)
+    # 2. Split the list into badge games and others
     current_games = getattr(getattr(client, "settings", None), "games_to_watch", []) or []
     with_badges = [g for g in current_games if g in badge_games]
     without_badges = [g for g in current_games if g not in badge_games]
 
-    # 3. Hry s badge dáme dopředu
+    # 3. Put badge games first
     new_queue = with_badges + without_badges
 
     if new_queue != current_games:
         client.settings.games_to_watch = new_queue
-        logger.info(f"Prioritizovány hry s odznaky na začátek fronty: {with_badges}")
+        logger.info("Prioritized games with badges to the front of the queue: %s", with_badges)
+        
+        # Save settings and force immediate re-evaluation
+        client.settings.save()
+        force_stream_reevaluation(client)
 
 def get_wanted_games(client: Twitch, filtered_inventory: list[DropsCampaign], next_hour: datetime, force_rebuild: bool = False) -> list[Game]:
     if client._inventory_dirty or force_rebuild or not client._wanted_games_cache:

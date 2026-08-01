@@ -2,41 +2,6 @@
 // MAIN PAGE / INITIALIZERS & LOGGING
 ////////////////////////////////////////
 
-function addConsoleLine(message) {
-    addConsoleLineRaw(message);
-}
-
-function addConsoleLineRaw(line) {
-    const consoleEl = document.getElementById('console-output');
-    if (!consoleEl) return;
-
-    const div = document.createElement('div');
-    div.textContent = line;
-    consoleEl.appendChild(div);
-    consoleEl.scrollTop = consoleEl.scrollHeight;
-
-    while (consoleEl.children.length > 1000) {
-        consoleEl.removeChild(consoleEl.firstChild);
-    }
-}
-
-// Lightweight throttled logger to prevent console spam
-const logThrottleMap = new Map();
-
-function logOnce(key, message, isWarn = false) {
-    const now = Date.now();
-    const lastLog = logThrottleMap.get(key) || 0;
-    if (now - lastLog > 3000) {
-        if (isWarn) {
-            console.warn(`[THROTTLED] ${message}`);
-        } else {
-            console.log(`[THROTTLED] ${message}`);
-        }
-        logThrottleMap.set(key, now);
-    }
-}
-
-
 // INITIALIZATION HELPERS
 
 /**

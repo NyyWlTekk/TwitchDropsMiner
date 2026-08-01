@@ -6,7 +6,7 @@
 }
 
 html {
-    font-size: 16px; /* Base size for rem calculations */
+    font-size: 16px;
 }
 
 :root {
@@ -15,8 +15,8 @@ html {
     --bg-panel: #ffffff;
     --text-primary: #333333;
     --text-secondary: #666666;
-    --border-color: #9146ff;   /* old one #dddddd; */
-    --accent-color: #9146ff;    /* violet atm */
+    --border-color: #9146ff;
+    --accent-color: #9146ff;
     --success-color: #00c853;
     --success-rgb: 0, 200, 83;
     --warning-color: #ffa726;
@@ -31,7 +31,7 @@ body.dark-mode {
     --bg-panel: #2a2a2a;
     --text-primary: #e0e0e0;
     --text-secondary: #a0a0a0;
-    --border-color: #9146ff; /* #444444; */
+    --border-color: #9146ff;
 }
 
 body {
@@ -250,16 +250,41 @@ header h1 {
     padding-bottom: 8px;
 }
 
-/* Main Tab Grid */
+/* Main Tab Grid (2 Sloupce, pravý přes 2 řádky) */
 .main-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 450px), 1fr));
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
     gap: 20px;
-    min-height: 70vh;
+    align-items: start;
 }
 
-.wanted-panel { 
-    grid-column: 1 / -1; 
+.progress-panel {
+    grid-column: 1;
+    grid-row: 1;
+}
+
+.channels-panel {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    max-height: 520px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.channels-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
+.wanted-panel {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    box-sizing: border-box;
 }
 
 /* Login */
@@ -358,15 +383,11 @@ header h1 {
     font-size: 0.75rem;
 }
 
-/* Console Output & Channels List */
-.console-output,
-.channels-list {
+/* Console Output */
+.console-output {
     height: clamp(250px, 40vh, 500px);
     overflow-y: auto;
     width: 100%;
-}
-
-.console-output {
     font-family: 'Courier New', monospace;
     font-size: 0.75rem;
     background: var(--bg-secondary);
@@ -662,16 +683,15 @@ header h1 {
 /* Inventory Grid */
 .inventory-grid {
     display: grid;
-    /* Optimized for extremely small screens preventing overflow */
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr));
     gap: 20px;
     align-items: start;
 }
 
-/* Campaign Card Base & Status Variants (Consolidated) */
+/* Campaign Card Base & Status Variants */
 .campaign-card {
     background: var(--bg-panel);
-    border: 1px solid #444; /* Default border */
+    border: 1px solid #444;
     border-radius: 8px;
     overflow: hidden;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -681,24 +701,20 @@ header h1 {
     height: 100%; 
 }
 
-/* Unified status colors */
 .campaign-card.active { border-color: var(--active-color); }
 .campaign-card.upcoming { border-color: var(--warning-color); }
 .campaign-card.expired { border-color: var(--error-color); }
 .campaign-card.ready { border-color: var(--warning-color); }
 .campaign-card.completed { 
     border-color: var(--success-color);
-    /* Optional background for completed items */
     background-color: rgba(var(--success-rgb), 0.05); 
 }
 
-/* Campaign Status Text Colors */
 .campaign-card.active .campaign-status { color: var(--active-color); }
 .campaign-card.upcoming .campaign-status { color: var(--warning-color); }
 .campaign-card.expired .campaign-status { color: var(--error-color); }
 .campaign-card.completed .campaign-status { color: var(--success-color); }
 
-/* Target header icons based on card status */
 .campaign-header-icon { 
     display: flex; 
     align-items: center; 
@@ -714,7 +730,6 @@ header h1 {
 .campaign-card.completed .campaign-header-icon { color: var(--success-color); }
 .campaign-status .campaign-header-icon { color: inherit; }
 
-/* Header Layout */
 .campaign-header {
     padding: 10px 12px; 
     background: var(--bg-secondary);
@@ -788,7 +803,6 @@ header h1 {
     box-shadow: 0 3px 6px rgba(139, 35, 35, 0.4);
 }
 
-/* Campaign Link */
 .campaign-name-link {
     font-size: 0.75rem;
     color: #bf94ff;
@@ -803,7 +817,6 @@ header h1 {
     text-decoration: underline;
 }
 
-/* Link Account Button */
 .link-account-btn {
     margin-top: 8px;
     padding: 8px 16px;
@@ -830,7 +843,6 @@ header h1 {
     box-shadow: 0 1px 2px rgba(145, 71, 255, 0.3);
 }
 
-/* SVGs inside headers */
 .campaign-header-icon svg, 
 .drop-item-header svg, 
 .benefit-status-icon svg,
@@ -879,7 +891,6 @@ header h1 {
     padding: 15px;
 }
 
-/* Campaign Group Containers */
 .campaign-group-container {
     background: rgba(0, 0, 0, 0.2); 
     border-left: 4px solid var(--border-color);
@@ -917,13 +928,13 @@ header h1 {
     display: flex;
     flex-wrap: wrap;
     gap: 20px;
-    justify-content: flex-start; /* Zabrání tomu, aby se prázdný prostor roztahal do šířky */
+    justify-content: flex-start;
 }
 
 .wanted-game-group {
     flex: 1 1 280px;
-    width: 100%;          /* Na mobilu vyplní dostupnou šířku */
-    max-width: 280px;     /* Na větších obrazovkách nepřesáhne 280px */
+    width: 100%;
+    max-width: 280px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -1005,7 +1016,7 @@ header h1 {
 
 .wanted-drop-item {
     font-size: 0.6875rem;
-    margin-bottom: 0px; 
+    margin-bottom: 0; 
     padding: 8px 12px; 
     background: transparent; 
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -1013,7 +1024,7 @@ header h1 {
     flex-wrap: nowrap;
     align-items: center;
     gap: 12px;
-    justify-content: flex-start; /* Změna z space-between, aby se držely u sebe vlevo */
+    justify-content: flex-start;
 }
 
 .wanted-drop-name {
@@ -1055,7 +1066,6 @@ header h1 {
     cursor: pointer;
 }
 
-/* Consolidated Drop & Content Box States */
 .drop-item.in-progress { border-left: 4px solid var(--active-color); }
 .drop-item.drop-claimed, .drop-content-box.drop-claimed { 
     border-left-color: var(--success-color); 
@@ -1709,7 +1719,6 @@ header h1 {
 }
 
 .drop-block {
-    /* New settings: overlapping blocks layout */
     width: calc(100% + 15px); 
     box-sizing: border-box;
     margin-right: -15px;
@@ -1719,25 +1728,91 @@ header h1 {
     z-index: 1;
 }
 
-/* Responsive */
+/* SVG Alignments */
+.status-tag, .wanted-game-time-badge, .wanted-campaign-dates {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.status-icon {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    flex-shrink: 0;
+}
+
+.wanted-campaign-dates .status-icon {
+    width: 12px;
+    height: 12px;
+}
+
+/* Active Animations & States */
+@keyframes slowPulseGreen {
+    0% {
+        border-color: rgba(46, 204, 113, 0.4);
+        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
+    }
+    50% {
+        border-color: rgba(46, 204, 113, 1);
+        box-shadow: 0 0 18px rgba(46, 204, 113, 0.6);
+    }
+    100% {
+        border-color: rgba(46, 204, 113, 0.4);
+        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
+    }
+}
+
+.wanted-card.active-mining {
+    animation: slowPulseGreen 3s infinite ease-in-out;
+}
+
+.wanted-card.active-mining .wanted-card-header {
+    background-color: rgba(46, 204, 113, 0.08);
+}
+
+.wanted-card.in-progress {
+    border-color: #f1c40f; 
+    box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
+}
+
+.wanted-card.in-progress .wanted-card-header {
+    background-color: rgba(241, 196, 15, 0.08);
+}
+
+.drop-block.active-mining {
+    border-color: #2ecc71;
+}
+
+.drop-block.in-progress {
+    border-color: #f1c40f;
+}
+
+.drop-content-box.drop-active .benefit-item { border-left-color: var(--active-color); background-color: rgba(241, 196, 15, 0.05); }
+.drop-content-box.drop-ready .benefit-item { border-left-color: var(--warning-color); background-color: rgba(230, 126, 34, 0.05); }
+.drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
+.drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }
+
+/* Responsive Breaks */
 @media (max-width: 1024px) {
     .main-grid {
         grid-template-columns: 1fr;
         grid-template-rows: auto;
     }
 
-    .login-panel,
     .progress-panel,
-    .console-panel,
+    .wanted-panel,
     .channels-panel {
-        grid-column: 1;
-        grid-row: auto;
+        grid-column: 1 !important;
+        grid-row: auto !important;
     }
 
-    .inventory-grid {
-        grid-template-columns: 1fr;
+    .channels-list {
+        height: 500px;
+        max-height: 500px;
     }
 
+    .inventory-grid,
     .games-container {
         grid-template-columns: 1fr;
     }
@@ -1840,72 +1915,3 @@ header h1 {
         width: 100%;
     }
 }
-
-/* Základní zarovnání SVG ikon v badge a stavitelných tagách */
-.status-tag, .wanted-game-time-badge, .wanted-campaign-dates {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.status-icon {
-    width: 14px;
-    height: 14px;
-    fill: currentColor;
-    flex-shrink: 0;
-}
-
-.wanted-campaign-dates .status-icon {
-    width: 12px;
-    height: 12px;
-}
-
-/* Právě těžená kampaň – Zelená */
-@keyframes slowPulseGreen {
-    0% {
-        border-color: rgba(46, 204, 113, 0.4);
-        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
-    }
-    50% {
-        border-color: rgba(46, 204, 113, 1);
-        box-shadow: 0 0 18px rgba(46, 204, 113, 0.6);
-    }
-    100% {
-        border-color: rgba(46, 204, 113, 0.4);
-        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
-    }
-}
-
-.wanted-card.active-mining {
-    animation: slowPulseGreen 3s infinite ease-in-out;
-}
-
-.wanted-card.active-mining .wanted-card-header {
-    background-color: rgba(46, 204, 113, 0.08);
-}
-
-/* Rozpracovaná kampaň s progressem – Žlutá */
-.wanted-card.in-progress {
-    border-color: #f1c40f; 
-    box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
-}
-
-.wanted-card.in-progress .wanted-card-header {
-    background-color: rgba(241, 196, 15, 0.08);
-}
-
-/* Vnitřní blok - právě těžený (zelený) */
-.drop-block.active-mining {
-    border-color: #2ecc71;
-}
-
-/* Vnitřní blok - rozpracovaný (žlutý jako na obrázku) */
-.drop-block.in-progress {
-    border-color: #f1c40f;
-}
-
-/* Automaticky obarví benefit-item, pokud je uvnitř aktivního/ready/claimed boxu */
-.drop-content-box.drop-active .benefit-item { border-left-color: var(--active-color); background-color: rgba(241, 196, 15, 0.05); }
-.drop-content-box.drop-ready .benefit-item { border-left-color: var(--warning-color); background-color: rgba(230, 126, 34, 0.05); }
-.drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
-.drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }

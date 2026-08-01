@@ -114,6 +114,7 @@ socket.on('channel_watching', (data) => {
     if (typeof setWatchingChannel === 'function') {
         setWatchingChannel(channelId);
     }
+    syncAdminState();
 });
 
 socket.on('channel_watching_clear', () => {
@@ -128,6 +129,7 @@ socket.on('channel_watching_clear', () => {
     if (typeof clearDropProgress === 'function') {
         clearDropProgress();
     }
+    syncAdminState();
 });
 
 
@@ -169,9 +171,32 @@ socket.on('attention_required', (data) => handleAttentionRequired(data));
 // 3. HELPER & UTILITY FUNCTIONS
 // ============================================================================
 
-// ----------------------------------------------------------------------------
-// Connection & Status Handlers
-// ----------------------------------------------------------------------------
+/**
+ * Synchronizes state and status data with administration.js module.
+ */
+function syncAdminState() {
+    if (window.Administration) {
+        // Compute queue count from campaigns or wanted items
+        let qCount = 0;
+        if (typeof state !== 'undefined') {
+            if (Array.isArray(state.wanted_items)) {
+                qCount = state.wanted_items.length;
+            } else if (state.campaigns) {
+                qCount = Object.keys(state.campaigns).length;
+            }
+        }
+
+        window.Administration.updateDiagnostics({
+            connected: Boolean(state?.connected),
+            queueCount: qCount,
+            rotationIndex: state?.rotation_index || state?.rotationIndex || 0
+        });
+
+        if (typeof state !== 'undefined') {
+            window.Administration.setState(state);
+        }
+    }
+}
 
 /**
  * Handles successful socket connection.
@@ -188,6 +213,11 @@ function handleConnect() {
     if (indicatorEl) {
         indicatorEl.textContent = '● ' + connText;
         indicatorEl.className = 'connected';
+    }
+
+    // Sync status with administration.js
+    if (window.Administration) {
+        window.Administration.updateDiagnostics({ connected: true });
     }
 }
 
@@ -206,6 +236,11 @@ function handleDisconnect(reason) {
     if (indicatorEl) {
         indicatorEl.textContent = '● ' + disconnText;
         indicatorEl.className = 'disconnected';
+    }
+
+    // Sync status with administration.js
+    if (window.Administration) {
+        window.Administration.updateDiagnostics({ connected: false });
     }
 }
 
@@ -263,6 +298,16 @@ function handleStatusUpdate(data) {
                 clearDropProgress();
             }
         }
+    }
+
+    if (data) {
+        if (data.queue_count !== undefined || data.rotation_index !== undefined) {
+            if (typeof state !== 'undefined') {
+                if (data.queue_count !== undefined) state.queue_count = data.queue_count;
+                if (data.rotation_index !== undefined) state.rotation_index = data.rotation_index;
+            }
+        }
+        syncAdminState();
     }
 }
 
@@ -364,6 +409,9 @@ function handleInitialState(data) {
             startCombinedRotation(true);
         }
     } catch (e) { console.error("[INIT_ERR] Rotation:", e); }
+
+    // Sync with administration.js on initial state arrival
+    syncAdminState();
 }
 
 /**
@@ -378,6 +426,7 @@ function handleWantedItemsUpdate(data) {
     if (typeof renderWantedItems === 'function') {
         renderWantedItems(filteredData);
     }
+    syncAdminState();
 }
 
 /**
@@ -430,6 +479,7 @@ function handleDropProgress(data) {
     if (typeof updateDropProgress === 'function') {
         updateDropProgress(data);
     }
+    syncAdminState();
 }
 
 /**
@@ -441,6 +491,7 @@ function handleCampaignAdd(data) {
     if (!isGameIgnored(gameName) && typeof addCampaign === 'function') {
         addCampaign(data);
     }
+    syncAdminState();
 }
 
 /**
@@ -455,6 +506,7 @@ function handleInventoryBatchUpdate(data) {
     });
     if (typeof renderInventory === 'function') renderInventory();
     if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
+    syncAdminState();
 }
 
 /**
@@ -467,6 +519,7 @@ function handleGamesAvailable(data) {
     }
     if (typeof renderGamesToWatch === 'function') renderGamesToWatch();
     if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
+    syncAdminState();
 }
 
 
@@ -500,6 +553,7 @@ function handleChannelsBatchUpdate(data) {
     }
 
     if (typeof renderChannels === 'function') renderChannels();
+    syncAdminState();
 }
 
 
@@ -532,6 +586,7 @@ function handleSettingsUpdated(data) {
     if (data.auto_sort_by_end && typeof sortGamesByEnding === 'function') {
         sortGamesByEnding();
     }
+    syncAdminState();
 }
 
 /**
@@ -648,6 +703,7 @@ function updateStatus(status) {
     if (typeof refreshUI === 'function') {
         refreshUI();
     }
+    syncAdminState();
 }
 
 /**
@@ -673,6 +729,7 @@ function clearInventory() {
     console.log('[Inventory] Resetting state inventory object');
     state.campaigns = {};
     if (typeof renderInventory === 'function') renderInventory();
+    syncAdminState();
 }
 
 /**
@@ -736,4 +793,5 @@ function safeClearDrop() {
     if (typeof clearDropProgress === 'function') {
         clearDropProgress(true);
     }
+    syncAdminState();
 }

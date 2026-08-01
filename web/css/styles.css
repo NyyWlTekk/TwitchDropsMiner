@@ -195,7 +195,7 @@ header h1 {
     color: var(--text-secondary);
 }
 
-/* Tabs (Upraveno pro roztažení přes celou šířku) */
+/* Tabs */
 .tabs {
     display: flex;
     flex-wrap: wrap;
@@ -238,11 +238,12 @@ header h1 {
 /* Panels */
 .panel {
     background: var(--bg-panel);
-    border: 1px solid var(--border-color);
+    border: none;
     border-radius: 8px;
     padding: 1.25rem;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 0 0 1px var(--border-color), 0 2px 4px rgba(0, 0, 0, 0.1);
     width: 100%;
+    overflow: hidden;
 }
 
 .panel h2 {
@@ -252,23 +253,47 @@ header h1 {
     padding-bottom: 8px;
 }
 
-/* Main Tab Grid (2 Sloupce, pravý přes 2 řádky) */
+/* Main Tab Grid (2 Sloupce, pravý přes 2 řádky, sjednoceno) */
+/* Main Tab Grid - vizuálně rozděleno do přehledných oblastí */
 .main-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
+    grid-template-areas:
+        "progress channels"
+        "wanted wanted";
     gap: 20px;
-    align-items: start;
+    align-items: stretch; /* Sjednotí výšku obou sloupců nahoře */
 }
 
+/* Sjednocený styl pro všechny panely (řeší schůdky přes box-shadow) */
+.panel {
+    background: var(--bg-panel);
+    border: none;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 0 0 1px var(--border-color), 0 2px 4px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.panel h2 {
+    margin-bottom: 1rem;
+    font-size: 1.125rem;
+    border-bottom: 2px solid var(--accent-color);
+    padding-bottom: 8px;
+}
+
+/* Umístění jednotlivých panelů do definovaných oblastí */
 .progress-panel {
-    grid-column: 1;
-    grid-row: 1;
+    grid-area: progress;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
 }
 
 .channels-panel {
-    grid-column: 2;
-    grid-row: 1;
+    grid-area: channels;
     display: flex;
     flex-direction: column;
     max-height: 520px;
@@ -284,8 +309,7 @@ header h1 {
 }
 
 .wanted-panel {
-    grid-column: 1 / -1;
-    grid-row: 2;
+    grid-area: wanted;
     box-sizing: border-box;
 }
 
@@ -682,7 +706,7 @@ header h1 {
     background: none;
 }
 
-/* Inventory Grid (Upraveno pomocí auto-fill pro zarovnání posledních prvků) */
+/* Inventory Grid */
 .inventory-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr));
@@ -925,7 +949,7 @@ header h1 {
     grid-column: 1 / -1;
 }
 
-/* Wanted Items Tree / Groups (Upraveno na Grid pro čisté zarovnání jako Inventory) */
+/* Wanted Items Tree / Groups */
 #wanted-items-list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -1795,18 +1819,15 @@ header h1 {
 .drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
 .drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }
 
-/* Responsive Breaks */
+/* --- SDUJENÉ RESPONSIVNÍ MEDIA QUERIES --- */
+
 @media (max-width: 1024px) {
     .main-grid {
         grid-template-columns: 1fr;
-        grid-template-rows: auto;
-    }
-
-    .progress-panel,
-    .wanted-panel,
-    .channels-panel {
-        grid-column: 1 !important;
-        grid-row: auto !important;
+        grid-template-areas:
+            "progress"
+            "channels"
+            "wanted";
     }
 
     .channels-list {
@@ -1875,6 +1896,27 @@ header h1 {
     .help-content {
         padding: 20px;
     }
+
+    .mobile-menu-toggle {
+        display: block;
+    }
+
+    .tabs {
+        display: none;
+        flex-direction: column;
+        gap: 5px;
+        margin-bottom: 15px;
+    }
+
+    .tabs.mobile-open {
+        display: flex;
+    }
+
+    .tabs .tab-button {
+        width: 100%;
+        text-align: left;
+        border-radius: 6px !important;
+    }
 }
 
 @media (max-width: 480px) {
@@ -1901,14 +1943,6 @@ header h1 {
         padding: 15px;
     }
 
-    .tabs {
-        flex-wrap: wrap;
-    }
-
-    .tab-button {
-        flex: 1 1 40%;
-    }
-
     .filter-separator {
         display: none;
     }
@@ -1931,27 +1965,4 @@ header h1 {
     cursor: pointer;
     margin-bottom: 10px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-@media (max-width: 768px) {
-    .mobile-menu-toggle {
-        display: block;
-    }
-
-    .tabs {
-        display: none;
-        flex-direction: column;
-        gap: 5px;
-        margin-bottom: 15px;
-    }
-
-    .tabs.mobile-open {
-        display: flex;
-    }
-
-    .tab-button {
-        width: 100%;
-        text-align: left;
-        border-radius: 6px !important;
-    }
 }

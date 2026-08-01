@@ -262,37 +262,49 @@ function createDropItemElement(drop, index = 1) {
 // ==================== 3. State & Active Checks ====================
 
 /**
- * Checks if a campaign is actively mining, with strict validation against the currently watched game.
+ * Checks if a campaign is actively mining, with priority on exact ID matching from the state.
  */
 function checkIfCampaignIsActive(campaignId, drops, gameName) {
-    let currentWatchedGame = null;
+    if (!campaignId && (!drops || drops.length === 0)) return false;
 
+    // 1. Bezpečné vytažení aktivních ID ze stavu (podporuje různé formáty zápisu)
+    const activeDropId = state?.currentDrop?.drop_id || state?.currentDrop?.id || 
+                         state?.current_drop?.drop_id || state?.current_drop?.id;
+                         
+    const activeCampaignId = state?.currentDrop?.campaign_id || state?.current_drop?.campaign_id ||
+                             state?.current_drop?.campaign_id;
+
+    // 2. Přímé porovnání podle ID kampaně (pokud se shoduje, kampaň aktivně těží)
+    if (activeCampaignId && campaignId && String(campaignId).trim() === String(activeCampaignId).trim()) {
+        return true;
+    }
+
+    // 3. Přímé porovnání podle ID konkrétního dropu uvnitř kampaně
+    if (activeDropId && drops && drops.length > 0) {
+        const hasMatchingDrop = drops.some(drop => {
+            const dropId = drop.id || drop.drop_id;
+            return dropId && String(dropId).trim() === String(activeDropId).trim();
+        });
+        if (hasMatchingDrop) {
+            return true;
+        }
+    }
+
+    // 4. Sekundární kontrola podle názvu hry jako záloha
+    let currentWatchedGame = null;
     if (typeof getWatchedChannelObject === 'function') {
         const wObj = getWatchedChannelObject();
         if (wObj) currentWatchedGame = wObj.game_name || wObj.game || wObj.game_title;
     }
-
     if (!currentWatchedGame) {
-        currentWatchedGame = state.watchedChannel?.game || state.currentChannel?.game || state.watching_channel?.game;
+        currentWatchedGame = state?.watchedChannel?.game || state?.currentChannel?.game || state?.watching_channel?.game;
     }
 
-    if (currentWatchedGame && gameName && currentWatchedGame.trim().toLowerCase() !== gameName.trim().toLowerCase()) {
-        return false;
+    if (currentWatchedGame && gameName) {
+        return currentWatchedGame.trim().toLowerCase() === gameName.trim().toLowerCase();
     }
 
-    const activeDropId = state.currentDrop?.drop_id || state.currentDrop?.id || state.current_drop?.drop_id || state.current_drop?.id;
-    const activeCampaignId = state.currentDrop?.campaign_id || state.current_drop?.campaign_id;
-
-    if (!activeDropId && !activeCampaignId) {
-        return false;
-    }
-
-    const hasActiveDrop = drops.some(drop => {
-        const dropId = drop.id || drop.drop_id;
-        return dropId && activeDropId && String(dropId) === String(activeDropId);
-    });
-
-    return hasActiveDrop || (activeCampaignId && String(campaignId) === String(activeCampaignId));
+    return false;
 }
 
 /**
@@ -300,9 +312,17 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
  */
 function checkIfCampaignHasProgress(drops, isActivelyMining) {
     if (isActivelyMining) return false;
+    
     return drops.some(d => {
-        const current = Math.round(d.current_minutes || 0);
-        return current > 0 && !d.is_claimed;
+        // Bezpečné vytažení minut s fallbacky na různé formáty zápisu v API/datech
+        const current = Math.round(
+            d.current_minutes ?? d.currentMinutes ?? d.current_time ?? d.progress ?? 0
+        );
+        
+        // Bezpečné ověření, zda je drop claimnutý
+        const isClaimed = d.is_claimed ?? d.isClaimed ?? d.claimed ?? false;
+
+        return current > 0 && !isClaimed;
     });
 }
 

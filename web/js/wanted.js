@@ -429,7 +429,7 @@ function normalizeSyncData(data) {
 }
 
 /**
- * [INFO] Updates drops and stats for a single campaign if it matches the sync data.
+ * [INFO] Updates drops and stats for a single campaign and synchronizes progress across its drops.
  */
 function updateSingleCampaign(campaign, data, sharedCurrentMins) {
     const campaignId = campaign.campaign_id || campaign.id;
@@ -440,11 +440,11 @@ function updateSingleCampaign(campaign, data, sharedCurrentMins) {
     });
 
     const isCampaignMatch = (data.campaign_id && campaignId === data.campaign_id) || 
-                           (data.campaign_name && campaign.name === data.campaign_name) ||
                            hasMatchingDrop;
     
     if (!isCampaignMatch || !campaign.drops || !Array.isArray(campaign.drops)) return false;
 
+    // Synchronizace a aktualizace minut napříč všemi dropy v kampani
     campaign.drops.forEach((drop) => {
         const dropId = drop.drop_id || drop.id;
         const isMatchingDrop = (data.drop_id && dropId === data.drop_id) || 
@@ -452,7 +452,6 @@ function updateSingleCampaign(campaign, data, sharedCurrentMins) {
 
         const reqMins = Number(drop.required_minutes) || 0;
 
-        // ✅ MINUTY SE AKTUALIZUJÍ JEN PRO SVOJ MATCHING DROP!
         if (isMatchingDrop) {
             drop.current_minutes = sharedCurrentMins;
             
@@ -465,6 +464,10 @@ function updateSingleCampaign(campaign, data, sharedCurrentMins) {
             if (data.is_claimed !== undefined) {
                 drop.is_claimed = data.is_claimed;
             }
+        } else if (drop.is_claimed) {
+            // Pokud je drop již nárokován, zajistíme, aby měl vždy plný počet minut
+            drop.current_minutes = reqMins;
+            drop.progress = 100;
         }
     });
 

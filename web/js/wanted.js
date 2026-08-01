@@ -195,7 +195,15 @@ function createCampaignHeaderElement(campaign, drops) {
  */
 function createCampaignBodyElement(drops) {
     const dropContainer = makeElement('div', { class: 'wanted-drops-container' });
-    drops.forEach((drop, index) => {
+
+    // Seřazení dropů vzestupně podle požadovaného času (minut)
+    const sortedDrops = [...(drops || [])].sort((a, b) => {
+        const timeA = a.required_minutes ?? a.requiredMinutes ?? a.required_time ?? a.needed_minutes ?? 0;
+        const timeB = b.required_minutes ?? b.requiredMinutes ?? b.required_time ?? b.needed_minutes ?? 0;
+        return timeA - timeB;
+    });
+
+    sortedDrops.forEach((drop, index) => {
         if (typeof createDropItemElement === 'function') {
             dropContainer.appendChild(createDropItemElement(drop, index + 1));
         }

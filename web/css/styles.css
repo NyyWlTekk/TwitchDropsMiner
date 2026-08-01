@@ -195,17 +195,19 @@ header h1 {
     color: var(--text-secondary);
 }
 
-/* Tabs */
+/* Tabs (Upraveno pro roztažení přes celou šířku) */
 .tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 5px;
     margin-bottom: 1.25rem;
     width: 100%;
 }
 
 .tab-button {
-    flex: 1;
-    padding: 12px;
+    flex: 1 1 auto;
+    text-align: center;
+    padding: 12px 10px;
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
     border-radius: 8px 8px 0 0;
@@ -680,7 +682,7 @@ header h1 {
     background: none;
 }
 
-/* Inventory Grid */
+/* Inventory Grid (Upraveno pomocí auto-fill pro zarovnání posledních prvků) */
 .inventory-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr));
@@ -923,22 +925,22 @@ header h1 {
     grid-column: 1 / -1;
 }
 
-/* Wanted Items Tree / Groups */
+/* Wanted Items Tree / Groups (Upraveno na Grid pro čisté zarovnání jako Inventory) */
 #wanted-items-list {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 20px;
     justify-content: flex-start;
 }
 
 .wanted-game-group {
-    flex: 1 1 280px;
+    flex: unset;
     width: 100%;
-    max-width: 280px;
+    max-width: none;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    margin-bottom: 20px;
+    margin-bottom: 0;
     break-inside: avoid;
     overflow: hidden;
     position: relative;
@@ -1913,5 +1915,43 @@ header h1 {
 
     #clear-filters-btn {
         width: 100%;
+    }
+}
+
+.mobile-menu-toggle {
+    display: none;
+    width: 100%;
+    padding: 12px;
+    background: var(--accent-color);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+@media (max-width: 768px) {
+    .mobile-menu-toggle {
+        display: block;
+    }
+
+    .tabs {
+        display: none;
+        flex-direction: column;
+        gap: 5px;
+        margin-bottom: 15px;
+    }
+
+    .tabs.mobile-open {
+        display: flex;
+    }
+
+    .tab-button {
+        width: 100%;
+        text-align: left;
+        border-radius: 6px !important;
     }
 }

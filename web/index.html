@@ -40,13 +40,39 @@
             </div>
         </header>
 
-        <nav class="tabs">
-            <button class="tab-button active" data-tab="main">Main</button>
-            <button class="tab-button" data-tab="inventory">Inventory</button>
-            <button class="tab-button" data-tab="settings">Settings</button>
-            <button class="tab-button" data-tab="help">Help</button>
-            <button class="tab-button" data-tab="admin-debug">Admin & Debug</button>
-        </nav>
+        <button class="mobile-menu-toggle" aria-label="Menu">☰ Menu</button>
+		<nav class="tabs">
+			<button class="tab-button active" data-tab="main">Main</button>
+			<button class="tab-button" data-tab="inventory">Inventory</button>
+			<button class="tab-button" data-tab="settings">Settings</button>
+			<button class="tab-button" data-tab="help">Help</button>
+			<button class="tab-button" data-tab="admin-debug">Admin & Debug</button>
+		</nav>
+        
+        <script>
+			// Initialize mobile menu for tabs
+			const tabsNav = document.querySelector('.tabs');
+			if (tabsNav) {
+				const mobileToggle = document.querySelector('.mobile-menu-toggle');
+				
+				if (mobileToggle) {
+					// Toggle menu visibility on click
+					mobileToggle.addEventListener('click', () => {
+						tabsNav.classList.toggle('mobile-open');
+					});
+
+					// Automatically close menu on mobile after clicking any tab
+					const tabButtons = tabsNav.querySelectorAll('.tab-button');
+					tabButtons.forEach(button => {
+						button.addEventListener('click', () => {
+							if (window.innerWidth <= 768) {
+								tabsNav.classList.remove('mobile-open');
+							}
+						});
+					});
+				}
+			}
+		</script>
 
         <!-- Main Tab -->
         <div id="main-tab" class="tab-content active">

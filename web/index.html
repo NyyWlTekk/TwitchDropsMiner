@@ -74,82 +74,82 @@
 			}
 		</script>
 
-        <!-- Main Tab -->
-        <div id="main-tab" class="tab-content active">
-            <div class="main-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: stretch;">
-                
-                <!-- 1. PROGRESS PANEL (Levý sloupec nahoře) -->
-                <section class="panel progress-panel" style="box-sizing: border-box;">
-                    <h2 id="progress-header">Campaign Progress</h2>
-                    
-                    <!-- 1. BAR: Overall Progress -->
-                    <div class="overall-progress-section" style="margin-bottom: 16px;">
-                        <div style="display: flex; justify-content: space-between; font-size: 0.9em; margin-bottom: 4px; font-weight: 500;">
-                            <span style="color: #a9b7c6;">🌐 Overall Queue Progress</span>
-                            <span id="overall-progress-text">0 / 0 min</span>
-                        </div>
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="overall-progress-fill" style="width: 0%;">0%</div>
-                        </div>
-                        <div class="progress-time" id="overall-progress-time" style="text-align: right; font-size: 0.85em; opacity: 0.8; margin-top: 6px;"></div>
-                    </div>
+		<!-- Main Tab -->
+		<div id="main-tab" class="tab-content active">
+			<div class="main-grid" style="display: grid; gap: 20px; align-items: stretch;">
+				
+				<!-- 1. PROGRESS PANEL (Levý sloupec nahoře) -->
+				<section class="panel progress-panel" style="box-sizing: border-box;">
+					<h2 id="progress-header">Campaign Progress</h2>
+					
+					<!-- 1. BAR: Overall Progress -->
+					<div class="overall-progress-section" style="margin-bottom: 16px;">
+						<div style="display: flex; justify-content: space-between; font-size: 0.9em; margin-bottom: 4px; font-weight: 500;">
+							<span style="color: #a9b7c6;">🌐 Overall Queue Progress</span>
+							<span id="overall-progress-text">0 / 0 min</span>
+						</div>
+						<div class="progress-bar">
+							<div class="progress-fill" id="overall-progress-fill" style="width: 0%;">0%</div>
+						</div>
+						<div class="progress-time" id="overall-progress-time" style="text-align: right; font-size: 0.85em; opacity: 0.8; margin-top: 6px;"></div>
+					</div>
 
-                    <div id="progress-container">
-                        <div id="no-drop-message">No active drop</div>
-                        <div id="drop-info" style="display: none;">
-                            <div id="manual-mode-controls" class="manual-mode-controls hidden">
-                                <div class="manual-mode-info">
-                                    🎯 Manual Mode: Mining <strong id="manual-mode-game"></strong>
-                                </div>
-                                <button id="exit-manual-btn" class="exit-manual-btn">Return to Auto Mode</button>
-                            </div>
-                            
-                            <div class="drop-name" id="drop-name" style="font-size: 1.05em; font-weight: bold; margin-bottom: 2px;"></div>
-                            <div class="drop-game" id="drop-game" style="margin-bottom: 12px; font-size: 0.9em; opacity: 0.8;"></div>
+					<div id="progress-container">
+						<div id="no-drop-message">No active drop</div>
+						<div id="drop-info" style="display: none;">
+							<div id="manual-mode-controls" class="manual-mode-controls hidden">
+								<div class="manual-mode-info">
+									🎯 Manual Mode: Mining <strong id="manual-mode-game"></strong>
+								</div>
+								<button id="exit-manual-btn" class="exit-manual-btn">Return to Auto Mode</button>
+							</div>
+							
+							<div class="drop-name" id="drop-name" style="font-size: 1.05em; font-weight: bold; margin-bottom: 2px;"></div>
+							<div class="drop-game" id="drop-game" style="margin-bottom: 12px; font-size: 0.9em; opacity: 0.8;"></div>
 
-                            <!-- 2. BAR: Campaign Progress -->
-                            <div class="campaign-progress-section" style="margin-bottom: 12px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                <div style="display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 4px;">
-                                    <span id="campaign-progress-title" style="font-weight: 600; color: #e0e0e0;">Campaign Progress</span>
-                                    <span id="campaign-progress-text">0 / 0 min</span>
-                                </div>
-                                <div class="progress-bar">
-                                    <div class="progress-fill" id="campaign-progress-fill" style="width: 0%;">0%</div>
-                                </div>
-                                <div class="progress-time" id="campaign-progress-time" style="text-align: right; font-size: 0.85em; opacity: 0.8; margin-top: 6px;"></div>
-                            </div>
+							<!-- 2. BAR: Campaign Progress -->
+							<div class="campaign-progress-section" style="margin-bottom: 12px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+								<div style="display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 4px;">
+									<span id="campaign-progress-title" style="font-weight: 600; color: #e0e0e0;">Campaign Progress</span>
+									<span id="campaign-progress-text">0 / 0 min</span>
+								</div>
+								<div class="progress-bar">
+									<div class="progress-fill" id="campaign-progress-fill" style="width: 0%;">0%</div>
+								</div>
+								<div class="progress-time" id="campaign-progress-time" style="text-align: right; font-size: 0.85em; opacity: 0.8; margin-top: 6px;"></div>
+							</div>
 
-                            <!-- 3. BAR: Current Drop Progress -->
-                            <div class="drop-progress-section" style="margin-bottom: 8px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-                                <div style="display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 4px;">
-                                    <span id="current-drop-label" style="font-weight: 600; color: #e0e0e0;">Current Drop</span>
-                                    <span id="progress-text">0 / 0 min</span>
-                                </div>
-                                <div class="progress-bar">
-                                    <div class="progress-fill" id="progress-fill" style="width: 0%;">0%</div>
-                                </div>
-                                <div class="progress-time" id="progress-time" style="text-align: right; font-size: 0.85em; opacity: 0.8; margin-top: 6px;"></div>
-                            </div>
-                        </div>
-                    </div>
-                </section>
+							<!-- 3. BAR: Current Drop Progress -->
+							<div class="drop-progress-section" style="margin-bottom: 8px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+								<div style="display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 4px;">
+									<span id="current-drop-label" style="font-weight: 600; color: #e0e0e0;">Current Drop</span>
+									<span id="progress-text">0 / 0 min</span>
+								</div>
+								<div class="progress-bar">
+									<div class="progress-fill" id="progress-fill" style="width: 0%;">0%</div>
+								</div>
+								<div class="progress-time" id="progress-time" style="text-align: right; font-size: 0.85em; opacity: 0.8; margin-top: 6px;"></div>
+							</div>
+						</div>
+					</div>
+				</section>
 
-                <!-- 2. CHANNELS PANEL (Pravý sloupec nahoře - opravený přetech) -->
-                <section class="panel channels-panel" style="display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; box-sizing: border-box; overflow: hidden;">
-                    <h2 id="channels-header" style="flex-shrink: 0;">Channels</h2>
-                    <div id="channels-list" class="channels-list" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box;"></div>
-                </section>
+				<!-- 2. CHANNELS PANEL (Pravý sloupec nahoře) -->
+				<section class="panel channels-panel" style="display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; box-sizing: border-box; overflow: hidden;">
+					<h2 id="channels-header" style="flex-shrink: 0;">Channels</h2>
+					<div id="channels-list" class="channels-list" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box;"></div>
+				</section>
 
-                <!-- 3. WANTED ITEMS / QUEUE PANEL (Přes celou šířku dole) -->
-                <section class="panel wanted-panel" style="grid-column: 1 / -1; box-sizing: border-box;">
-                    <h2 id="wanted-header">Wanted Drop Queue</h2>
-                    <div id="wanted-items-list" class="wanted-items-list">
-                        <p class="empty-message-small">No wanted drops queued...</p>
-                    </div>
-                </section>
+				<!-- 3. WANTED ITEMS / QUEUE PANEL (Přes celou šířku dole) -->
+				<section class="panel wanted-panel" style="grid-column: 1 / -1; box-sizing: border-box;">
+					<h2 id="wanted-header">Wanted Drop Queue</h2>
+					<div id="wanted-items-list" class="wanted-items-list">
+						<p class="empty-message-small">No wanted drops queued...</p>
+					</div>
+				</section>
 
-            </div>
-        </div>
+			</div>
+		</div>
 
         <!-- Inventory Tab -->
         <div id="inventory-tab" class="tab-content">

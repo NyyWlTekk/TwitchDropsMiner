@@ -1,4 +1,21 @@
-/* Global Styles */
+/* =================================================================
+   Main Layout & Global Styles
+   =================================================================== */
+
+/* Base Layout Settings */
+.main-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 500px), 1fr));
+    gap: 20px;
+    align-items: stretch;
+}
+
+@media (min-width: 1200px) {
+    .main-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -48,7 +65,7 @@ body {
     padding: 1.25rem;
 }
 
-/* Header */
+/* Header Styles */
 header {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
@@ -235,37 +252,7 @@ header h1 {
     display: block;
 }
 
-/* Panels */
-.panel {
-    background: var(--bg-panel);
-    border: none;
-    border-radius: 8px;
-    padding: 1.25rem;
-    box-shadow: 0 0 0 1px var(--border-color), 0 2px 4px rgba(0, 0, 0, 0.1);
-    width: 100%;
-    overflow: hidden;
-}
-
-.panel h2 {
-    margin-bottom: 1rem;
-    font-size: 1.125rem;
-    border-bottom: 2px solid var(--accent-color);
-    padding-bottom: 8px;
-}
-
-/* Main Tab Grid (2 Sloupce, pravý přes 2 řádky, sjednoceno) */
-/* Main Tab Grid - vizuálně rozděleno do přehledných oblastí */
-.main-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-        "progress channels"
-        "wanted wanted";
-    gap: 20px;
-    align-items: stretch; /* Sjednotí výšku obou sloupců nahoře */
-}
-
-/* Sjednocený styl pro všechny panely (řeší schůdky přes box-shadow) */
+/* Panels & Layouts */
 .panel {
     background: var(--bg-panel);
     border: none;
@@ -284,16 +271,13 @@ header h1 {
     padding-bottom: 8px;
 }
 
-/* Umístění jednotlivých panelů do definovaných oblastí */
 .progress-panel {
-    grid-area: progress;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
 }
 
 .channels-panel {
-    grid-area: channels;
     display: flex;
     flex-direction: column;
     max-height: 520px;
@@ -309,11 +293,11 @@ header h1 {
 }
 
 .wanted-panel {
-    grid-area: wanted;
+    grid-column: 1 / -1;
     box-sizing: border-box;
 }
 
-/* Login */
+/* Login Form */
 #login-form input {
     display: block;
     width: 100%;
@@ -426,7 +410,7 @@ header h1 {
     margin-bottom: 2px;
 }
 
-/* Game Group Header */
+/* Game Group & Channels */
 .game-group-header {
     display: flex;
     align-items: center;
@@ -706,7 +690,7 @@ header h1 {
     background: none;
 }
 
-/* Inventory Grid */
+/* Inventory Grid & Campaign Cards */
 .inventory-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr));
@@ -714,7 +698,6 @@ header h1 {
     align-items: start;
 }
 
-/* Campaign Card Base & Status Variants */
 .campaign-card {
     background: var(--bg-panel);
     border: 1px solid #444;
@@ -799,7 +782,6 @@ header h1 {
     flex-shrink: 0;
 }
 
-/* Badges */
 .campaign-badge {
     padding: 2px 6px;
     font-size: 0.625rem;
@@ -1007,7 +989,6 @@ header h1 {
     gap: 10px;
 }
 
-/* Wanted Cards */
 .wanted-card {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
@@ -1641,6 +1622,22 @@ header h1 {
     box-shadow: 0 2px 8px rgba(145, 70, 255, 0.3);
 }
 
+/* Mobile Menu Toggle Button */
+.mobile-menu-toggle {
+    display: none;
+    width: 100%;
+    padding: 12px;
+    background: var(--accent-color);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
 /* Utilities */
 .hidden {
     display: none !important;
@@ -1819,28 +1816,7 @@ header h1 {
 .drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
 .drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }
 
-/* --- SDUJENÉ RESPONSIVNÍ MEDIA QUERIES --- */
-
-@media (max-width: 1024px) {
-    .main-grid {
-        grid-template-columns: 1fr;
-        grid-template-areas:
-            "progress"
-            "channels"
-            "wanted";
-    }
-
-    .channels-list {
-        height: 500px;
-        max-height: 500px;
-    }
-
-    .inventory-grid,
-    .games-container {
-        grid-template-columns: 1fr;
-    }
-}
-
+/* --- RESPONSIVE MEDIA QUERIES --- */
 @media (max-width: 768px) {
     .container {
         padding: 10px;
@@ -1870,6 +1846,15 @@ header h1 {
         gap: 8px 12px;
     }
 
+    /* Show mobile menu toggle button on narrow screens */
+    .mobile-menu-toggle {
+        display: block;
+    }
+
+    .main-grid {
+        grid-template-columns: 1fr;
+    }
+
     .tab-button {
         padding: 10px 6px;
         font-size: 0.875rem;
@@ -1895,10 +1880,6 @@ header h1 {
 
     .help-content {
         padding: 20px;
-    }
-
-    .mobile-menu-toggle {
-        display: block;
     }
 
     .tabs {
@@ -1950,19 +1931,4 @@ header h1 {
     #clear-filters-btn {
         width: 100%;
     }
-}
-
-.mobile-menu-toggle {
-    display: none;
-    width: 100%;
-    padding: 12px;
-    background: var(--accent-color);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: bold;
-    cursor: pointer;
-    margin-bottom: 10px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }

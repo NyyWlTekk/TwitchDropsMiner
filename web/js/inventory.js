@@ -1,4 +1,203 @@
+////////////////////////////////////////////////////////////////
 // ==================== Inventory Filtering ====================
+////////////////////////////////////////////////////////////////
+
+// GLOBAL STATES AND VARIABLES
+
+let selectedInventoryGames = [];
+let inventorySaveTimeout = null;
+let gameDropdownFocusedIndex = -1;
+let gameDropdownVisible = false;
+
+// ==================== Game Dropdown & Tags ====================
+
+function getAvailableGamesForDropdown() {
+    // Combine games from campaigns and availableGames Set
+    const gamesFromCampaigns = Object.values(state.campaigns || {}).map(c => c.game_name);
+    const gamesFromSettings = Array.from(availableGames || []);
+
+    // Merge and deduplicate
+    const allGames = [...new Set([...gamesFromCampaigns, ...gamesFromSettings])];
+
+    // Sort alphabetically
+    return allGames.sort((a, b) => a.localeCompare(b));
+}
+
+function renderGameDropdown(searchTerm = '') {
+    const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
+
+    const allGames = getAvailableGamesForDropdown();
+
+    // Filter games by search term (case-insensitive)
+    const searchLower = searchTerm.toLowerCase().trim();
+    const filteredGames = searchLower
+        ? allGames.filter(game => game.toLowerCase().includes(searchLower))
+        : allGames;
+
+    dropdown.innerHTML = '';
+
+    if (filteredGames.length === 0) {
+        dropdown.replaceChildren(makeElement('div', { class: 'dropdown-item no-results' }, 'No games found'));
+        gameDropdownFocusedIndex = -1;
+        return;
+    }
+
+    filteredGames.forEach((gameName, index) => {
+        const isSelected = selectedInventoryGames.includes(gameName);
+        const isFocused = index === gameDropdownFocusedIndex;
+
+        const item = document.createElement('div');
+        item.className = 'dropdown-item' + (isFocused ? ' focused' : '');
+        item.dataset.gameName = gameName;
+        item.dataset.index = index;
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = isSelected;
+        checkbox.id = `game-dropdown-${index}`;
+
+        const label = document.createElement('label');
+        label.setAttribute('for', `game-dropdown-${index}`);
+        label.textContent = gameName;
+
+        item.appendChild(checkbox);
+        item.appendChild(label);
+
+        // Click handler for the entire item
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleGameSelection(gameName);
+        });
+
+        dropdown.appendChild(item);
+    });
+}
+
+function showGameDropdown() {
+    const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
+    dropdown.style.display = 'block';
+    gameDropdownVisible = true;
+    gameDropdownFocusedIndex = -1;
+    const searchInput = document.getElementById('inventory-game-search');
+    renderGameDropdown(searchInput ? searchInput.value : '');
+}
+
+function closeGameDropdown() {
+    const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
+    dropdown.style.display = 'none';
+    gameDropdownVisible = false;
+    gameDropdownFocusedIndex = -1;
+}
+
+function handleGameSearchKeydown(event) {
+    if (!gameDropdownVisible) return;
+
+    const dropdown = document.getElementById('game-dropdown-list');
+    if (!dropdown) return;
+
+    const items = dropdown.querySelectorAll('.dropdown-item:not(.no-results)');
+    const maxIndex = items.length - 1;
+    const searchInput = document.getElementById('inventory-game-search');
+    const searchValue = searchInput ? searchInput.value : '';
+
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        gameDropdownFocusedIndex = Math.min(gameDropdownFocusedIndex + 1, maxIndex);
+        renderGameDropdown(searchValue);
+
+        const focusedItem = dropdown.querySelector('.dropdown-item.focused');
+        if (focusedItem) focusedItem.scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        gameDropdownFocusedIndex = Math.max(gameDropdownFocusedIndex - 1, 0);
+        renderGameDropdown(searchValue);
+
+        const focusedItem = dropdown.querySelector('.dropdown-item.focused');
+        if (focusedItem) focusedItem.scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'Enter') {
+        event.preventDefault();
+        if (gameDropdownFocusedIndex >= 0 && gameDropdownFocusedIndex <= maxIndex) {
+            const focusedItem = items[gameDropdownFocusedIndex];
+            const gameName = focusedItem ? focusedItem.dataset.gameName : null;
+            if (gameName) toggleGameSelection(gameName);
+        }
+    } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeGameDropdown();
+        if (searchInput) searchInput.blur();
+    }
+}
+
+function toggleGameSelection(gameName) {
+    const index = selectedInventoryGames.indexOf(gameName);
+    if (index >= 0) {
+        selectedInventoryGames.splice(index, 1);
+    } else {
+        selectedInventoryGames.push(gameName);
+    }
+
+    console.debug('[Game Filter] Toggled inventory game selection:', gameName, 'Active selection:', selectedInventoryGames);
+
+    // 1. Immediate local UI update (Optimistic UI)
+    updateGameTagsDisplay();
+    const searchInput = document.getElementById('inventory-game-search');
+    renderGameDropdown(searchInput ? searchInput.value : '');
+    if (typeof renderInventory === 'function') renderInventory();
+
+    // 2. Buffer / Debounce for server save
+    if (inventorySaveTimeout) {
+        clearTimeout(inventorySaveTimeout);
+    }
+
+    inventorySaveTimeout = setTimeout(() => {
+        console.debug('[Game Filter] Flushing inventory selection to server...');
+        saveSettings();
+    }, 1000); // Wait 1 second before saving
+}
+
+function removeGameTag(gameName) {
+    const index = selectedInventoryGames.indexOf(gameName);
+    if (index >= 0) {
+        selectedInventoryGames.splice(index, 1);
+        console.debug('[Game Filter] Removed game tag:', gameName);
+        updateGameTagsDisplay();
+        const searchInput = document.getElementById('inventory-game-search');
+        renderGameDropdown(searchInput ? searchInput.value : '');
+        saveSettings();
+        if (typeof renderInventory === 'function') renderInventory();
+    }
+}
+
+function updateGameTagsDisplay() {
+    const container = document.getElementById('selected-game-tags');
+    if (!container) return;
+    container.innerHTML = '';
+
+    selectedInventoryGames.forEach(gameName => {
+        const tag = document.createElement('div');
+        tag.className = 'game-tag';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'game-tag-name';
+        nameSpan.textContent = gameName;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'game-tag-remove';
+        removeBtn.textContent = '×';
+        removeBtn.setAttribute('aria-label', `Remove ${gameName}`);
+        removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            removeGameTag(gameName);
+        });
+
+        tag.appendChild(nameSpan);
+        tag.appendChild(removeBtn);
+        container.appendChild(tag);
+    });
+}
 
 function sortCampaigns(campaigns) {
     const now = Date.now();

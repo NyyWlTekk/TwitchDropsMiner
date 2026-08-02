@@ -326,13 +326,8 @@ async def handle_state_inventory_fetch(client: Twitch) -> None:
     await client.fetch_inventory()
     client.gui.set_games({campaign.game for campaign in client.inventory})
     client.gui.broadcast_wanted_items()
-    
-    # Update status bar in Web GUI
     client.gui.status.update("Campaigns reloaded successfully")
-    
-    # Correct way: Emit reload_complete event via broadcaster
     asyncio.create_task(client.gui._broadcaster.emit("reload_complete", {}))
-
     client.change_state(State.GAMES_UPDATE)
 
 async def handle_state_games_update(client: Twitch) -> None:

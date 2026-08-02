@@ -640,12 +640,14 @@ function renderDropGameHeader(data) {
     const dropGameEl = document.getElementById('drop-game');
     if (!dropGameEl) return;
 
-    if (!data || typeof data !== 'object') {
+    // 1. Pokud nemáme data, všechno vyčistíme a schováme
+    if (!data || typeof data !== 'object' || (!data.campaign_name && !data.game_name)) {
         dropGameEl.innerHTML = '';
         dropGameEl.style.display = 'none';
         return;
     }
 
+    // Zjištění URL obrázku
     let boxArtUrl = data.game_box_art_url;
     if (!boxArtUrl && state.campaigns && data.campaign_id) {
         const foundCampaign = state.campaigns[data.campaign_id] ||
@@ -660,57 +662,104 @@ function renderDropGameHeader(data) {
     dropGameEl.style.gap = '12px';
     dropGameEl.style.margin = '8px 0';
 
-    const children = [];
-
-    if (boxArtUrl && typeof getCachedImage === 'function') {
-        const iconUrl = boxArtUrl.replace('{width}', '52').replace('{height}', '70');
-        const imgEl = getCachedImage(iconUrl, data.game_name || '', 'game-icon', {
-            width: '42px',
-            height: '56px',
-            borderRadius: '6px',
-            objectFit: 'cover',
-            flexShrink: '0'
-        });
-        if (imgEl) children.push(imgEl);
-    } else {
-        // Placeholder čtvereček pro ikonu hry, pokud chybí obrázek
-        const placeholderImg = document.createElement('div');
-        placeholderImg.className = 'game-icon-placeholder';
-        placeholderImg.style.width = '42px';
-        placeholderImg.style.height = '56px';
-        placeholderImg.style.borderRadius = '6px';
-        placeholderImg.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
-        placeholderImg.style.border = '1px dashed rgba(255, 255, 255, 0.15)';
-        placeholderImg.style.flexShrink = '0';
-        children.push(placeholderImg);
+    // 2. Trvalý obal ikony (42x56px - brání skákání layoutu)
+    let iconContainer = dropGameEl.querySelector('.game-icon-container');
+    if (!iconContainer) {
+        iconContainer = document.createElement('div');
+        iconContainer.className = 'game-icon-container';
+        iconContainer.style.width = '42px';
+        iconContainer.style.height = '56px';
+        iconContainer.style.minWidth = '42px';
+        iconContainer.style.minHeight = '56px';
+        iconContainer.style.flexShrink = '0';
+        iconContainer.style.borderRadius = '6px';
+        iconContainer.style.overflow = 'hidden';
+        iconContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+        iconContainer.style.border = '1px dashed rgba(255, 255, 255, 0.15)';
     }
 
-    if (typeof makeElement === 'function') {
-        const infoTextDiv = makeElement('div', { class: 'drop-game-text-info' });
+    // Aktualizace samotného obrázku <img>
+    const iconUrl = boxArtUrl ? boxArtUrl.replace('{width}', '52').replace('{height}', '70') : null;
+    let imgEl = iconContainer.querySelector('img');
+
+    if (iconUrl) {
+        if (!imgEl) {
+            imgEl = document.createElement('img');
+            imgEl.className = 'game-icon';
+            imgEl.style.width = '100%';
+            imgEl.style.height = '100%';
+            imgEl.style.objectFit = 'cover';
+            imgEl.style.display = 'block';
+            iconContainer.appendChild(imgEl);
+        }
+        if (imgEl.src !== iconUrl) {
+            imgEl.src = iconUrl;
+        }
+    } else if (imgEl) {
+        imgEl.remove();
+    }
+
+    // 3. Textový kontejner
+    let infoTextDiv = dropGameEl.querySelector('.drop-game-text-info');
+    if (!infoTextDiv) {
+        infoTextDiv = document.createElement('div');
+        infoTextDiv.className = 'drop-game-text-info';
         infoTextDiv.style.display = 'flex';
         infoTextDiv.style.flexDirection = 'column';
         infoTextDiv.style.justifyContent = 'center';
-
-        const titleText = data.campaign_name || '';
-        const subTextContent = data.drop_name || '';
-        const subText = makeElement('span', { class: 'drop-sub-name' }, subTextContent);
-        subText.style.fontSize = '0.9em';
-        subText.style.opacity = '0.85';
-
-        if (data.campaign_id) {
-            const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
-            const linkEl = makeElement('a', { href: campaignUrl, target: '_blank', rel: 'noopener noreferrer', class: 'drop-campaign-link' }, titleText);
-            infoTextDiv.appendChild(linkEl);
-        } else {
-            const titleEl = makeElement('span', { class: 'drop-campaign-title' }, titleText);
-            infoTextDiv.appendChild(titleEl);
-        }
-        
-        infoTextDiv.appendChild(subText);
-        children.push(infoTextDiv);
     }
 
-    dropGameEl.replaceChildren(...children);
+    // Název kampaně / Odkaz
+    const titleText = data.campaign_name || data.game_name || '';
+    let titleNode = infoTextDiv.querySelector('.drop-campaign-link, .drop-campaign-title');
+
+    if (data.campaign_id) {
+        const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
+        if (!titleNode || titleNode.tagName !== 'A') {
+            if (titleNode) titleNode.remove();
+            titleNode = document.createElement('a');
+            titleNode.className = 'drop-campaign-link';
+            titleNode.target = '_blank';
+            titleNode.rel = 'noopener noreferrer';
+            infoTextDiv.prepend(titleNode);
+        }
+        titleNode.href = campaignUrl;
+    } else {
+        if (!titleNode || titleNode.tagName !== 'SPAN') {
+            if (titleNode) titleNode.remove();
+            titleNode = document.createElement('span');
+            titleNode.className = 'drop-campaign-title';
+            infoTextDiv.prepend(titleNode);
+        }
+    }
+    if (titleNode.textContent !== titleText) titleNode.textContent = titleText;
+
+    // Název dropu (podtitulek)
+    let subText = infoTextDiv.querySelector('.drop-sub-name');
+    if (!subText) {
+        subText = document.createElement('span');
+        subText.className = 'drop-sub-name';
+        subText.style.fontSize = '0.9em';
+        subText.style.opacity = '0.85';
+        infoTextDiv.appendChild(subText);
+    }
+    const subTextContent = data.drop_name || '';
+    if (subText.textContent !== subTextContent) subText.textContent = subTextContent;
+
+    // 4. ÚKLID & SPRÁVNÉ POŘADÍ: Odstraníme jakýkoliv jiný neznámý prvek z dropGameEl
+    Array.from(dropGameEl.childNodes).forEach(node => {
+        if (node !== iconContainer && node !== infoTextDiv) {
+            node.remove();
+        }
+    });
+
+    // Vložíme přesně iconContainer a za něj infoTextDiv
+    if (dropGameEl.firstElementChild !== iconContainer) {
+        dropGameEl.prepend(iconContainer);
+    }
+    if (iconContainer.nextElementSibling !== infoTextDiv) {
+        iconContainer.after(infoTextDiv);
+    }
 }
 
 function renderDropCardLayout(data, rewardImgUrl) {

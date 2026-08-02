@@ -278,3 +278,24 @@ function renderChannels() {
         });
     });
 }
+
+async function selectChannel(channelId) {
+    try {
+        console.debug('[Channel] Selecting channel:', channelId);
+        const response = await fetch('/api/channels/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel_id: channelId })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.error('Failed to select channel:', errorData.detail || 'Unknown error');
+            if (typeof addConsoleLine === 'function') addConsoleLine(`Error selecting channel: ${errorData.detail || 'Unknown error'}`);
+        }
+    } catch (error) {
+        console.error('Failed to select channel:', error);
+        if (typeof addConsoleLine === 'function') addConsoleLine(`Error selecting channel: ${error.message}`);
+    }
+}
+

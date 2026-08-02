@@ -1,10 +1,13 @@
 // Twitch Drops Miner Web Client
 // Socket.IO and API communication
 
+// ==================== Global State & Initialization ====================
+
+
+// DISABLE LOGGING 
 console.log = () => {};
 console.debug = () => {};
 
-let selectedInventoryGames = [];
 let availableGames = new Set(); // All games from campaigns
 let draggedElement = null;
 
@@ -85,200 +88,7 @@ async function fetchAndDisplayVersion() {
     }
 }
 
-// ==================== Game Dropdown & Tags ====================
-
-let gameDropdownFocusedIndex = -1;
-let gameDropdownVisible = false;
-
-function getAvailableGamesForDropdown() {
-    // Combine games from campaigns and availableGames Set
-    const gamesFromCampaigns = Object.values(state.campaigns || {}).map(c => c.game_name);
-    const gamesFromSettings = Array.from(availableGames || []);
-
-    // Merge and deduplicate
-    const allGames = [...new Set([...gamesFromCampaigns, ...gamesFromSettings])];
-
-    // Sort alphabetically
-    return allGames.sort((a, b) => a.localeCompare(b));
-}
-
-function renderGameDropdown(searchTerm = '') {
-    const dropdown = document.getElementById('game-dropdown-list');
-    if (!dropdown) return;
-
-    const allGames = getAvailableGamesForDropdown();
-
-    // Filter games by search term (case-insensitive)
-    const searchLower = searchTerm.toLowerCase().trim();
-    const filteredGames = searchLower
-        ? allGames.filter(game => game.toLowerCase().includes(searchLower))
-        : allGames;
-
-    dropdown.innerHTML = '';
-
-    if (filteredGames.length === 0) {
-        dropdown.replaceChildren(makeElement('div', { class: 'dropdown-item no-results' }, 'No games found'));
-        gameDropdownFocusedIndex = -1;
-        return;
-    }
-
-    filteredGames.forEach((gameName, index) => {
-        const isSelected = selectedInventoryGames.includes(gameName);
-        const isFocused = index === gameDropdownFocusedIndex;
-
-        const item = document.createElement('div');
-        item.className = 'dropdown-item' + (isFocused ? ' focused' : '');
-        item.dataset.gameName = gameName;
-        item.dataset.index = index;
-
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = isSelected;
-        checkbox.id = `game-dropdown-${index}`;
-
-        const label = document.createElement('label');
-        label.setAttribute('for', `game-dropdown-${index}`);
-        label.textContent = gameName;
-
-        item.appendChild(checkbox);
-        item.appendChild(label);
-
-        // Click handler for the entire item
-        item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleGameSelection(gameName);
-        });
-
-        dropdown.appendChild(item);
-    });
-}
-
-let inventorySaveTimeout = null;
-
-function toggleGameSelection(gameName) {
-    const index = selectedInventoryGames.indexOf(gameName);
-    if (index >= 0) {
-        selectedInventoryGames.splice(index, 1);
-    } else {
-        selectedInventoryGames.push(gameName);
-    }
-
-    console.debug('[Game Filter] Toggled inventory game selection:', gameName, 'Active selection:', selectedInventoryGames);
-
-    // 1. Immediate local UI update (Optimistic UI)
-    updateGameTagsDisplay();
-    const searchInput = document.getElementById('inventory-game-search');
-    renderGameDropdown(searchInput ? searchInput.value : '');
-    if (typeof renderInventory === 'function') renderInventory();
-
-    // 2. Buffer / Debounce for server save
-    if (inventorySaveTimeout) {
-        clearTimeout(inventorySaveTimeout);
-    }
-
-    inventorySaveTimeout = setTimeout(() => {
-        console.debug('[Game Filter] Flushing inventory selection to server...');
-        saveSettings();
-    }, 1000); // Wait 1 second before saving
-}
-
-function removeGameTag(gameName) {
-    const index = selectedInventoryGames.indexOf(gameName);
-    if (index >= 0) {
-        selectedInventoryGames.splice(index, 1);
-        console.debug('[Game Filter] Removed game tag:', gameName);
-        updateGameTagsDisplay();
-        const searchInput = document.getElementById('inventory-game-search');
-        renderGameDropdown(searchInput ? searchInput.value : '');
-        saveSettings();
-        if (typeof renderInventory === 'function') renderInventory();
-    }
-}
-
-function updateGameTagsDisplay() {
-    const container = document.getElementById('selected-game-tags');
-    if (!container) return;
-    container.innerHTML = '';
-
-    selectedInventoryGames.forEach(gameName => {
-        const tag = document.createElement('div');
-        tag.className = 'game-tag';
-
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'game-tag-name';
-        nameSpan.textContent = gameName;
-
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'game-tag-remove';
-        removeBtn.textContent = '×';
-        removeBtn.setAttribute('aria-label', `Remove ${gameName}`);
-        removeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            removeGameTag(gameName);
-        });
-
-        tag.appendChild(nameSpan);
-        tag.appendChild(removeBtn);
-        container.appendChild(tag);
-    });
-}
-
-function showGameDropdown() {
-    const dropdown = document.getElementById('game-dropdown-list');
-    if (!dropdown) return;
-    dropdown.style.display = 'block';
-    gameDropdownVisible = true;
-    gameDropdownFocusedIndex = -1;
-    const searchInput = document.getElementById('inventory-game-search');
-    renderGameDropdown(searchInput ? searchInput.value : '');
-}
-
-function closeGameDropdown() {
-    const dropdown = document.getElementById('game-dropdown-list');
-    if (!dropdown) return;
-    dropdown.style.display = 'none';
-    gameDropdownVisible = false;
-    gameDropdownFocusedIndex = -1;
-}
-
-function handleGameSearchKeydown(event) {
-    if (!gameDropdownVisible) return;
-
-    const dropdown = document.getElementById('game-dropdown-list');
-    if (!dropdown) return;
-
-    const items = dropdown.querySelectorAll('.dropdown-item:not(.no-results)');
-    const maxIndex = items.length - 1;
-    const searchInput = document.getElementById('inventory-game-search');
-    const searchValue = searchInput ? searchInput.value : '';
-
-    if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        gameDropdownFocusedIndex = Math.min(gameDropdownFocusedIndex + 1, maxIndex);
-        renderGameDropdown(searchValue);
-
-        const focusedItem = dropdown.querySelector('.dropdown-item.focused');
-        if (focusedItem) focusedItem.scrollIntoView({ block: 'nearest' });
-    } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        gameDropdownFocusedIndex = Math.max(gameDropdownFocusedIndex - 1, 0);
-        renderGameDropdown(searchValue);
-
-        const focusedItem = dropdown.querySelector('.dropdown-item.focused');
-        if (focusedItem) focusedItem.scrollIntoView({ block: 'nearest' });
-    } else if (event.key === 'Enter') {
-        event.preventDefault();
-        if (gameDropdownFocusedIndex >= 0 && gameDropdownFocusedIndex <= maxIndex) {
-            const focusedItem = items[gameDropdownFocusedIndex];
-            const gameName = focusedItem ? focusedItem.dataset.gameName : null;
-            if (gameName) toggleGameSelection(gameName);
-        }
-    } else if (event.key === 'Escape') {
-        event.preventDefault();
-        closeGameDropdown();
-        if (searchInput) searchInput.blur();
-    }
-}
+// ==================== Authentication & Login ====================
 
 function showLoginForm() {
     const loginForm = document.getElementById('login-form');
@@ -327,510 +137,45 @@ function updateLoginStatus(data) {
     console.debug('[Auth] Login status updated:', data.user_id ? `Authenticated (ID: ${data.user_id})` : 'Logged out / Pending');
 }
 
-function updateSettingsUI(settings) {
-    state.settings = settings || {};
-    
-    const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = Boolean(val); };
-    const setValue = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+async function submitLogin() {
+    const username = document.getElementById('username')?.value || '';
+    const password = document.getElementById('password')?.value || '';
+    const token = document.getElementById('2fa-token')?.value || '';
 
-    setChecked('dark-mode', settings.dark_mode);
-    setChecked('auto-sort-by-end', settings.auto_sort_by_end);
-    setChecked('mine-badges-first', settings.mine_badges_first);
-    setChecked('auto-add-all-games', settings.auto_add_all_games);
-    setValue('connection-quality', settings.connection_quality || 1);
-    setValue('minimum-refresh-interval', settings.minimum_refresh_interval_minutes || 30);
-
-    const proxyUrl = settings.proxy || '';
-    const proxyInput = document.getElementById('proxy-url');
-    if (proxyInput) proxyInput.value = proxyUrl;
-
-    const proxyIndicator = document.getElementById('proxy-indicator');
-    if (proxyIndicator) {
-        proxyIndicator.style.display = proxyUrl ? 'inline-flex' : 'none';
-        proxyIndicator.title = proxyUrl ? `Proxy active: ${proxyUrl}` : 'Proxy disabled';
-    }
-
-    if (settings.language) {
-        const languageSelect = document.getElementById('language');
-        if (languageSelect) languageSelect.value = settings.language;
-    }
-
-    if (settings.dark_mode) {
-        document.body.classList.add('dark-mode');
-    } else {
-        document.body.classList.remove('dark-mode');
-    }
-
-    if (settings.games_available) {
-        availableGames = new Set(settings.games_available);
-        if (settings.games_to_watch) {
-            settings.games_to_watch.forEach(game => availableGames.add(game));
-        }
-    }
-
-    if (settings.inventory_filters) {
-        setChecked('filter-active', settings.inventory_filters.show_active);
-        setChecked('filter-not-linked', settings.inventory_filters.show_not_linked);
-        setChecked('filter-upcoming', settings.inventory_filters.show_upcoming);
-        setChecked('filter-expired', settings.inventory_filters.show_expired);
-        setChecked('filter-finished', settings.inventory_filters.show_finished);
-
-        selectedInventoryGames = Array.isArray(settings.inventory_filters.game_name_search)
-            ? [...settings.inventory_filters.game_name_search]
-            : [];
-        updateGameTagsDisplay();
-
-        setChecked('filter-benefit-item', settings.inventory_filters.show_benefit_item !== false);
-        setChecked('filter-benefit-badge', settings.inventory_filters.show_benefit_badge !== false);
-        setChecked('filter-benefit-emote', settings.inventory_filters.show_benefit_emote !== false);
-        setChecked('filter-benefit-other', settings.inventory_filters.show_benefit_other !== false);
-    }
-
-    if (settings.mining_benefits) {
-        setChecked('mining-benefit-item', settings.mining_benefits.DIRECT_ENTITLEMENT);
-        setChecked('mining-benefit-badge', settings.mining_benefits.BADGE);
-        setChecked('mining-benefit-emote', settings.mining_benefits.EMOTE);
-        setChecked('mining-benefit-unknown', settings.mining_benefits.UNKNOWN);
-    }
-
-    renderGamesToWatch();
-    if (typeof renderChannels === 'function') renderChannels();
-    if (typeof renderInventory === 'function') renderInventory();
-    
-    applyAutoAddIfNeeded();
-    console.debug('[Settings] UI elements updated from settings state.');
-}
-
-function updateManualModeUI(manualModeInfo) {
-    const manualBadge = document.getElementById('manual-mode-badge');
-    const autoBadge = document.getElementById('auto-mode-badge');
-    const manualGameName = document.getElementById('manual-game-name');
-    const manualControls = document.getElementById('manual-mode-controls');
-    const manualModeGame = document.getElementById('manual-mode-game');
-
-    if (!manualBadge || !autoBadge) return;
-
-    if (manualModeInfo && manualModeInfo.active) {
-        manualBadge.classList.remove('hidden');
-        autoBadge.classList.add('hidden');
-        if (manualGameName) manualGameName.textContent = manualModeInfo.game_name || '';
-
-        if (manualControls) {
-            manualControls.classList.remove('hidden');
-            if (manualModeGame) manualModeGame.textContent = manualModeInfo.game_name || '';
-        }
-    } else {
-        manualBadge.classList.add('hidden');
-        autoBadge.classList.remove('hidden');
-
-        if (manualControls) {
-            manualControls.classList.add('hidden');
-        }
+    try {
+        console.debug('[Auth] Submitting credentials for user:', username);
+        await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, token })
+        });
+    } catch (error) {
+        console.error('Failed to submit login:', error);
     }
 }
 
-// ==================== Games to Watch / Ignore Management ====================
+async function confirmOAuth() {
+    try {
+        console.debug('[Auth] Confirming OAuth status...');
+        await fetch('/api/oauth/confirm', {
+            method: 'POST'
+        });
+        const oauthDisplay = document.getElementById('oauth-code-display');
+        if (oauthDisplay) oauthDisplay.style.display = 'none';
 
-let renderGamesDebounceTimer = null;
-
-function renderGamesToWatch() {
-    if (renderGamesDebounceTimer) {
-        clearTimeout(renderGamesDebounceTimer);
+        const t = state.translations;
+        const waitingAuth = t.gui?.login?.waiting_auth || 'Waiting for authentication...';
+        const loginStatus = document.getElementById('login-status');
+        if (loginStatus) {
+            loginStatus.textContent = waitingAuth;
+            loginStatus.setAttribute('translation-key', 'waiting_auth');
+        }
+    } catch (error) {
+        console.error('Failed to confirm OAuth:', error);
     }
-    
-    renderGamesDebounceTimer = setTimeout(() => {
-        renderGamesDebounceTimer = null;
-        _performRenderGamesToWatch();
-    }, 150);
 }
 
-function _performRenderGamesToWatch() {
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-    
-    const leftHeading = document.querySelector('.available-games h3');
-    const rightHeading = document.querySelector('.selected-games h3');
-
-    if (isIgnoreMode) {
-        if (leftHeading) {
-            leftHeading.textContent = 'Active / Auto-Mined Games';
-            leftHeading.style.color = '#2ecc71';
-        }
-        if (rightHeading) {
-            rightHeading.textContent = 'Ignore List (Blacklisted)';
-            rightHeading.style.color = '#ff4d4d';
-        }
-    } else {
-        if (leftHeading) {
-            leftHeading.textContent = 'Available Games';
-            leftHeading.style.color = '';
-        }
-        if (rightHeading) {
-            rightHeading.textContent = 'Selected Games (Priority Order)';
-            rightHeading.style.color = '#2ecc71';
-        }
-    }
-
-    const searchInput = document.getElementById('games-filter');
-    const filterText = searchInput ? searchInput.value.toLowerCase() : '';
-
-    if (isIgnoreMode) {
-        const ignoredGames = state?.settings?.ignored_games || [];
-        ignoredGames.forEach(game => availableGames.add(game));
-
-        const activeGames = Array.from(availableGames)
-            .filter(game => !ignoredGames.some(ig => ig.toLowerCase() === game.toLowerCase()))
-            .filter(game => game.toLowerCase().includes(filterText))
-            .sort((a, b) => a.localeCompare(b));
-
-        const blacklistedGames = ignoredGames
-            .filter(game => game.toLowerCase().includes(filterText))
-            .sort((a, b) => a.localeCompare(b));
-
-        renderAvailableGames(activeGames, filterText);
-        renderSelectedGames(blacklistedGames);
-    } else {
-        const watchedGames = state?.settings?.games_to_watch || [];
-        watchedGames.forEach(game => availableGames.add(game));
-
-        const availableList = Array.from(availableGames)
-            .filter(game => !watchedGames.includes(game))
-            .filter(game => game.toLowerCase().includes(filterText))
-            .sort((a, b) => a.localeCompare(b));
-
-        renderAvailableGames(availableList, filterText);
-        renderSelectedGames(watchedGames);
-    }
-
-    updateUIState();
-    console.debug('[Game List] Games rendered (debounced). Ignore mode:', isIgnoreMode);
-}
-
-function renderSelectedGames(games) {
-    const container = document.getElementById('selected-games-list');
-    if (!container) return;
-
-    const t = state.translations;
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-    
-    container.innerHTML = '';
-
-    if (!games || games.length === 0) {
-        const emptyMsg = isIgnoreMode
-            ? (t.gui?.settings?.no_games_ignored || 'No games on ignore list.')
-            : (t.gui?.settings?.no_games_selected || 'No games selected. Check games below to add them.');
-        container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
-        return;
-    }
-
-    const fragment = document.createDocumentFragment();
-
-    games.forEach((game, index) => {
-        const div = document.createElement('div');
-        div.className = 'sortable-item';
-        div.dataset.game = game;
-
-        if (isIgnoreMode) {
-            div.draggable = false;
-            div.replaceChildren(
-                makeElement('span', { class: 'game-name', style: 'flex-grow: 1;' }, game),
-                makeElement('button', { class: 'remove-btn', title: 'Remove from Ignore List' }, '✕')
-            );
-        } else {
-            div.draggable = true;
-            div.replaceChildren(
-                makeElement('span', { class: 'drag-handle' }, '☰'),
-                makeElement('span', { class: 'priority-number' }, String(index + 1)),
-                makeElement('span', { class: 'game-name' }, game),
-                makeElement('button', { class: 'remove-btn', title: 'Remove from Watch List' }, '✕')
-            );
-
-            div.addEventListener('dragstart', handleDragStart);
-            div.addEventListener('dragover', handleDragOver);
-            div.addEventListener('drop', handleDrop);
-            div.addEventListener('dragend', handleDragEnd);
-        }
-
-        const removeBtn = div.querySelector('.remove-btn');
-        if (removeBtn) {
-            removeBtn.addEventListener('click', () => {
-                removeGameFromWatch(game);
-            });
-        }
-
-        fragment.appendChild(div);
-    });
-
-    container.appendChild(fragment);
-}
-
-function renderAvailableGames(games, filterText) {
-    const container = document.getElementById('available-games-list');
-    if (!container) return;
-
-    const t = state.translations;
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-
-    container.innerHTML = '';
-
-    if (!games || games.length === 0) {
-        if (filterText) {
-            const emptyMsg = t.gui?.settings?.no_games_match || 'No games match your search.';
-            const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
-            container.replaceChildren(makeElement('p', { class: 'empty-message' }, `${emptyMsg}${addHint}`));
-        } else {
-            const emptyMsg = isIgnoreMode 
-                ? (t.gui?.settings?.no_active_games || 'No active games available.')
-                : (t.gui?.settings?.all_games_selected || 'All games are selected or no games available.');
-            container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
-        }
-        return;
-    }
-
-    const fragment = document.createDocumentFragment();
-
-    games.forEach(game => {
-        const label = document.createElement('label');
-        label.className = 'game-checkbox';
-
-        if (isIgnoreMode) {
-            const ignoreBtn = makeElement('button', { class: 'remove-btn', style: 'margin-right: 8px;', title: 'Add to Ignore List' }, '🚫');
-            ignoreBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                if (typeof toggleGameIgnore === 'function') {
-                    toggleGameIgnore(game, true);
-                } else {
-                    if (!state.settings) state.settings = {};
-                    if (!state.settings.ignored_games) state.settings.ignored_games = [];
-                    if (!state.settings.ignored_games.some(g => g.toLowerCase() === game.toLowerCase())) {
-                        state.settings.ignored_games.push(game);
-                    }
-                    renderGamesToWatch();
-                    saveSettings();
-                }
-            });
-
-            label.replaceChildren(
-                ignoreBtn,
-                makeElement('span', {}, game)
-            );
-        } else {
-            const isChecked = (state?.settings?.games_to_watch || []).includes(game);
-            const input = makeElement('input', { type: 'checkbox', value: game });
-            input.checked = isChecked;
-
-            input.addEventListener('change', (e) => {
-                toggleGameWatch(game, e.target.checked);
-            });
-
-            label.replaceChildren(
-                input,
-                makeElement('span', {}, game)
-            );
-        }
-
-        fragment.appendChild(label);
-    });
-
-    container.appendChild(fragment);
-}
-
-// Drag and drop handlers
-function handleDragStart(e) {
-    draggedElement = e.target;
-    e.target.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/html', e.target.innerHTML);
-}
-
-function handleDragOver(e) {
-    if (e.preventDefault) {
-        e.preventDefault();
-    }
-    e.dataTransfer.dropEffect = 'move';
-
-    const target = e.target.closest('.sortable-item');
-    if (target && target !== draggedElement) {
-        const container = target.parentNode;
-        const allItems = [...container.querySelectorAll('.sortable-item')];
-        const draggedIndex = allItems.indexOf(draggedElement);
-        const targetIndex = allItems.indexOf(target);
-
-        if (draggedIndex < targetIndex) {
-            target.parentNode.insertBefore(draggedElement, target.nextSibling);
-        } else {
-            target.parentNode.insertBefore(draggedElement, target);
-        }
-    }
-    return false;
-}
-
-function handleDrop(e) {
-    if (e.stopPropagation) {
-        e.stopPropagation();
-    }
-    return false;
-}
-
-function handleDragEnd(e) {
-    e.target.classList.remove('dragging');
-
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-    if (isIgnoreMode) return;
-
-    const container = document.getElementById('selected-games-list');
-    if (!container) return;
-
-    const items = container.querySelectorAll('.sortable-item');
-    const newOrder = Array.from(items).map(item => item.dataset.game);
-
-    if (state.settings) {
-        state.settings.games_to_watch = newOrder;
-    }
-
-    renderSelectedGames(newOrder);
-    if (typeof renderChannels === 'function') renderChannels();
-    saveSettings();
-    console.debug('[Game List] Priority order updated via drag-and-drop.');
-}
-
-let watchSaveTimeout = null;
-
-function toggleGameWatch(gameName, checked) {
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-    if (isIgnoreMode) return;
-
-    if (!state.settings) state.settings = {};
-    const games = state.settings.games_to_watch || [];
-
-    if (checked && !games.includes(gameName)) {
-        games.push(gameName);
-    } else if (!checked) {
-        const index = games.indexOf(gameName);
-        if (index > -1) {
-            games.splice(index, 1);
-        }
-    }
-
-    state.settings.games_to_watch = games;
-    console.debug('[Game List] Toggled watch status:', gameName, 'Checked:', checked);
-
-    // 1. Okamžitá lokální aktualizace rozhraní (Optimistic UI)
-    renderGamesToWatch();
-    if (typeof renderChannels === 'function') renderChannels();
-
-    // 2. Buffer / Debounce pro uložení na server (počká 1 sekundu na případné další kliknutí)
-    if (watchSaveTimeout) {
-        clearTimeout(watchSaveTimeout);
-    }
-
-    watchSaveTimeout = setTimeout(() => {
-        console.debug('[Game List] Flushing watch settings to server...');
-        saveSettings();
-    }, 1000);
-}
-
-function removeGameFromWatch(gameName) {
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-
-    if (isIgnoreMode) {
-        if (typeof toggleGameIgnore === 'function') {
-            toggleGameIgnore(gameName, false);
-            return;
-        }
-    } else {
-        if (!state.settings) state.settings = {};
-        const games = state.settings.games_to_watch || [];
-        const index = games.indexOf(gameName);
-        if (index > -1) {
-            games.splice(index, 1);
-            state.settings.games_to_watch = games;
-        }
-    }
-
-    console.debug('[Game List] Removed game from watch/ignore list:', gameName);
-    renderGamesToWatch();
-    if (typeof renderChannels === 'function') renderChannels();
-    saveSettings();
-}
-
-function selectAllGames() {
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-    if (!state.settings) state.settings = {};
-
-    if (isIgnoreMode) {
-        state.settings.ignored_games = [];
-    } else {
-        state.settings.games_to_watch = Array.from(availableGames).sort();
-    }
-
-    console.debug('[Game List] Selected all games.');
-    renderGamesToWatch();
-    if (typeof renderChannels === 'function') renderChannels();
-    saveSettings();
-}
-
-function deselectAllGames() {
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-    if (!state.settings) state.settings = {};
-
-    if (isIgnoreMode) {
-        state.settings.ignored_games = Array.from(availableGames).sort();
-    } else {
-        state.settings.games_to_watch = [];
-    }
-
-    console.debug('[Game List] Deselected all games.');
-    renderGamesToWatch();
-    if (typeof renderChannels === 'function') renderChannels();
-    saveSettings();
-}
-
-function addGameFromSearch() {
-    const searchInput = document.getElementById('games-filter');
-    if (!searchInput) return;
-
-    const gameName = searchInput.value.trim();
-    if (!gameName) return;
-
-    const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
-    if (!state.settings) state.settings = {};
-
-    if (isIgnoreMode) {
-        if (state.settings.ignored_games) {
-            state.settings.ignored_games = state.settings.ignored_games.filter(
-                g => g.toLowerCase() !== gameName.toLowerCase()
-            );
-        }
-    } else {
-        const games = state.settings.games_to_watch || [];
-        if (!games.includes(gameName)) {
-            games.push(gameName);
-            state.settings.games_to_watch = games;
-        }
-    }
-
-    availableGames.add(gameName);
-    searchInput.value = '';
-    console.debug('[Game List] Added game manually:', gameName);
-    renderGamesToWatch();
-    if (typeof renderChannels === 'function') renderChannels();
-    saveSettings();
-}
-
-function flashTitle() {
-    const originalTitle = document.title;
-    let count = 0;
-    const interval = setInterval(() => {
-        document.title = count % 2 === 0 ? '🔔 Attention!' : originalTitle;
-        count++;
-        if (count >= 10) {
-            document.title = originalTitle;
-            clearInterval(interval);
-        }
-    }, 1000);
-}
-
-// ==================== Automated process ====================
+// ==================== Automated Process & Sorting ====================
 
 function sortGamesByEnding() {
     if (!state.settings || !Array.isArray(state.settings.games_to_watch)) return;
@@ -882,88 +227,6 @@ function applyAutoSortIfNeeded() {
     }
 }
 
-let settingsSaveTimeout = null;
-
-async function toggleGameIgnore(game, isIgnored) {
-    if (!state.settings) state.settings = {};
-    if (!state.settings.ignored_games) {
-        state.settings.ignored_games = [];
-    }
-
-    if (isIgnored) {
-        if (!state.settings.ignored_games.includes(game)) {
-            state.settings.ignored_games.push(game);
-        }
-
-        if (state.currentDrop) {
-            const dropGame = state.currentDrop.game_name || state.currentDrop.game || state.currentDrop.game_title;
-            if (dropGame === game) {
-                state.watching_channel = null;
-
-                if (typeof clearDropProgress === 'function') {
-                    clearDropProgress();
-                } else {
-                    state.currentDrop = null;
-                }
-            }
-        }
-
-        if (Array.isArray(state.activeCampaignsQueue)) {
-            state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => (c.game_name || c.game) !== game);
-        }
-        if (Array.isArray(state.activeDropsQueue)) {
-            state.activeDropsQueue = state.activeDropsQueue.filter(ad => (ad.game_name || ad.game) !== game);
-        }
-        if (Array.isArray(state.liveMiningQueue)) {
-            state.liveMiningQueue = state.liveMiningQueue.filter(cid => {
-                const camp = state.campaigns ? state.campaigns[cid] : null;
-                return camp ? (camp.game_name || camp.game) !== game : true;
-            });
-        }
-
-        if (Array.isArray(state.wantedItemsTree)) {
-            state.wantedItemsTree = state.wantedItemsTree.filter(group => group.game_name !== game);
-        }
-
-        if (typeof clearWantedActiveState === 'function') {
-            clearWantedActiveState();
-        }
-
-    } else {
-        state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
-    }
-
-    // 1. Okamžitá lokální aktualizace rozhraní (Optimistic UI)
-    if (typeof renderGamesToWatch === 'function') {
-        renderGamesToWatch();
-    }
-    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
-        renderWantedItems(state.wantedItemsTree);
-    }
-    if (typeof renderWantedQueue === 'function') {
-        renderWantedQueue();
-    }
-    if (typeof refreshUI === 'function') {
-        refreshUI();
-    }
-
-    console.debug('[Game List] Updated game ignore status locally:', game, 'IsIgnored:', isIgnored);
-
-    // 2. Buffer / Debounce pro uložení na server (zkráceno na 1000ms pro svižnější odezvu)
-    if (settingsSaveTimeout) {
-        clearTimeout(settingsSaveTimeout);
-    }
-
-    settingsSaveTimeout = setTimeout(async () => {
-        console.debug('[Game List] Flushing batched ignore settings to server...');
-        await saveSettings();
-
-        if (typeof startCombinedRotation === 'function') {
-            startCombinedRotation(true);
-        }
-    }, 1000); 
-}
-
 function applyAutoAddIfNeeded() {
     if (state?.settings?.auto_add_all_games) {
         return;
@@ -999,26 +262,6 @@ function applyAutoAddIfNeeded() {
 
 // ==================== API Functions ====================
 
-async function selectChannel(channelId) {
-    try {
-        console.debug('[Channel] Selecting channel:', channelId);
-        const response = await fetch('/api/channels/select', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel_id: channelId })
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error('Failed to select channel:', errorData.detail || 'Unknown error');
-            if (typeof addConsoleLine === 'function') addConsoleLine(`Error selecting channel: ${errorData.detail || 'Unknown error'}`);
-        }
-    } catch (error) {
-        console.error('Failed to select channel:', error);
-        if (typeof addConsoleLine === 'function') addConsoleLine(`Error selecting channel: ${error.message}`);
-    }
-}
-
 async function exitManualMode() {
     try {
         console.debug('[Manual Mode] Exiting manual mode...');
@@ -1033,44 +276,6 @@ async function exitManualMode() {
     } catch (error) {
         console.error('Failed to exit manual mode:', error);
         if (typeof addConsoleLine === 'function') addConsoleLine(`Error exiting manual mode: ${error.message}`);
-    }
-}
-
-async function submitLogin() {
-    const username = document.getElementById('username')?.value || '';
-    const password = document.getElementById('password')?.value || '';
-    const token = document.getElementById('2fa-token')?.value || '';
-
-    try {
-        console.debug('[Auth] Submitting credentials for user:', username);
-        await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password, token })
-        });
-    } catch (error) {
-        console.error('Failed to submit login:', error);
-    }
-}
-
-async function confirmOAuth() {
-    try {
-        console.debug('[Auth] Confirming OAuth status...');
-        await fetch('/api/oauth/confirm', {
-            method: 'POST'
-        });
-        const oauthDisplay = document.getElementById('oauth-code-display');
-        if (oauthDisplay) oauthDisplay.style.display = 'none';
-
-        const t = state.translations;
-        const waitingAuth = t.gui?.login?.waiting_auth || 'Waiting for authentication...';
-        const loginStatus = document.getElementById('login-status');
-        if (loginStatus) {
-            loginStatus.textContent = waitingAuth;
-            loginStatus.setAttribute('translation-key', 'waiting_auth');
-        }
-    } catch (error) {
-        console.error('Failed to confirm OAuth:', error);
     }
 }
 
@@ -1201,6 +406,17 @@ async function fetchAndApplyTranslations() {
         console.error('Failed to fetch translations:', error);
     }
 }
+
+async function reloadCampaigns() {
+    try {
+        console.debug('[Campaigns] Requesting campaign data reload...');
+        await fetch('/api/reload', { method: 'POST' });
+    } catch (error) {
+        console.error('Failed to reload:', error);
+    }
+}
+
+// ==================== Translation & Localization ====================
 
 function applyTranslations(t) {
     const tabButtons = {
@@ -1481,16 +697,7 @@ function applyTranslations(t) {
     }
 }
 
-async function reloadCampaigns() {
-    try {
-        console.debug('[Campaigns] Requesting campaign data reload...');
-        await fetch('/api/reload', { method: 'POST' });
-    } catch (error) {
-        console.error('Failed to reload:', error);
-    }
-}
-
-// ==================== Tab and Button Management ====================
+// ==================== Tab and Navigation Management ====================
 
 function switchTab(tabName) {
     document.querySelectorAll('.tab-content').forEach(tab => {
@@ -1523,6 +730,82 @@ function updateUIState() {
     document.querySelectorAll('.game-checkbox').forEach(cb => {
         cb.disabled = isAutoAddEnabled;
     });
+}
+
+// ==================== DOM & UI Utilities ====================
+
+function flashTitle() {
+    const originalTitle = document.title;
+    let count = 0;
+    const interval = setInterval(() => {
+        document.title = count % 2 === 0 ? '🔔 Attention!' : originalTitle;
+        count++;
+        if (count >= 10) {
+            document.title = originalTitle;
+            clearInterval(interval);
+        }
+    }, 1000);
+}
+
+const TRUSTED_HELP_LINKS = new Set(['https://www.twitch.tv/drops/campaigns']);
+
+function makeElement(tag, attrs = {}, text = null, callback = null) {
+    const el = document.createElement(tag);
+    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
+    if (text !== null && text !== undefined) {
+        el.textContent = String(text);
+    }
+    if (callback) {
+        callback(el);
+    }
+    return el;
+}
+
+function makeImageElement(src, alt, className) {
+    const image = makeElement('img', { src, alt, class: className });
+    image.onerror = () => {
+        image.style.display = 'none';
+    };
+    return image;
+}
+
+function makeHelpList(tag, items) {
+    return makeElement(tag, {}, null, list => {
+        items.forEach(item => {
+            list.appendChild(makeElement('li', {}, null, li => appendTrustedHelpContent(li, item)));
+        });
+    });
+}
+
+function appendTrustedHelpContent(parent, text) {
+    const source = String(text);
+    const linkPattern = /<a\b[^>]*\bhref=(["'])(https:\/\/www\.twitch\.tv\/drops\/campaigns)\1[^>]*>(.*?)<\/a>/gi;
+    let lastIndex = 0;
+    let match;
+    let matched = false;
+
+    while ((match = linkPattern.exec(source)) !== null) {
+        matched = true;
+        if (match.index > lastIndex) {
+            parent.appendChild(document.createTextNode(source.slice(lastIndex, match.index)));
+        }
+        const href = match[2];
+        if (TRUSTED_HELP_LINKS.has(href)) {
+            parent.appendChild(makeElement('a', { href, target: '_blank', rel: 'noopener noreferrer' }, match[3]));
+        } else {
+            parent.appendChild(document.createTextNode(match[0]));
+        }
+        lastIndex = linkPattern.lastIndex;
+    }
+
+    if (!matched) {
+        parent.textContent = source;
+        return;
+    }
+
+    if (lastIndex < source.length) {
+        parent.appendChild(document.createTextNode(source.slice(lastIndex)));
+    }
 }
 
 // ==================== Event Listeners ====================
@@ -1727,81 +1010,3 @@ document.addEventListener('DOMContentLoaded', () => {
         Notification.requestPermission();
     }
 });
-
-// ==================== DOM Utilities ====================
-
-const TRUSTED_HELP_LINKS = new Set(['https://www.twitch.tv/drops/campaigns']);
-
-function makeElement(tag, attrs = {}, text = null, callback = null) {
-    const el = document.createElement(tag);
-    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
-    if (text !== null && text !== undefined) {
-        el.textContent = String(text);
-    }
-    if (callback) {
-        callback(el);
-    }
-    return el;
-}
-
-function makeImageElement(src, alt, className) {
-    const image = makeElement('img', { src, alt, class: className });
-    image.onerror = () => {
-        image.style.display = 'none';
-    };
-    return image;
-}
-
-function makeHelpList(tag, items) {
-    return makeElement(tag, {}, null, list => {
-        items.forEach(item => {
-            list.appendChild(makeElement('li', {}, null, li => appendTrustedHelpContent(li, item)));
-        });
-    });
-}
-
-function appendTrustedHelpContent(parent, text) {
-    const source = String(text);
-    const linkPattern = /<a\b[^>]*\bhref=(["'])(https:\/\/www\.twitch\.tv\/drops\/campaigns)\1[^>]*>(.*?)<\/a>/gi;
-    let lastIndex = 0;
-    let match;
-    let matched = false;
-
-    while ((match = linkPattern.exec(source)) !== null) {
-        matched = true;
-        if (match.index > lastIndex) {
-            parent.appendChild(document.createTextNode(source.slice(lastIndex, match.index)));
-        }
-        const href = match[2];
-        if (TRUSTED_HELP_LINKS.has(href)) {
-            parent.appendChild(makeElement('a', { href, target: '_blank', rel: 'noopener noreferrer' }, match[3]));
-        } else {
-            parent.appendChild(document.createTextNode(match[0]));
-        }
-        lastIndex = linkPattern.lastIndex;
-    }
-
-    if (!matched) {
-        parent.textContent = source;
-        return;
-    }
-
-    if (lastIndex < source.length) {
-        parent.appendChild(document.createTextNode(source.slice(lastIndex)));
-    }
-}
-
-function getStatusIconSVG(statusClass) {
-    const icons = {
-        'completed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
-        'ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
-        'drop-claimed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
-        'drop-ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
-        'drop-expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`,
-        'drop-active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
-        'active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
-        'upcoming': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
-        'expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`
-    };
-    return icons[statusClass] || '';
-}

@@ -2,20 +2,21 @@
 ////////////CHANNELS WATCHED/////////////////////////
 /////////////////////////////////////////////////////
 
-let isChannelsRenderScheduled = false;
+let renderChannelsTimeout = null;
 
 /**
- * Schedules channels rendering on the next animation frame to prevent DOM render spamming.
+ * Debounces channels rendering to prevent DOM render spamming during rapid websocket updates.
  */
 function scheduleRenderChannels() {
-    if (isChannelsRenderScheduled) return;
-    isChannelsRenderScheduled = true;
+    if (renderChannelsTimeout) {
+        clearTimeout(renderChannelsTimeout);
+    }
     
-    // Batch multiple render calls into a single animation frame
-    requestAnimationFrame(() => {
+    // Batch multiple fast updates and wait for them to settle before re-rendering
+    renderChannelsTimeout = setTimeout(() => {
         renderChannels();
-        isChannelsRenderScheduled = false;
-    });
+        renderChannelsTimeout = null;
+    }, 250);
 }
 
 function hasImportantChange(oldData, newData) {
@@ -24,15 +25,19 @@ function hasImportantChange(oldData, newData) {
     // Critical structural changes affecting order or badges
     if (oldData.game !== newData.game ||
         oldData.online !== newData.online ||
-        oldData.watching !== newData.watching ||
         oldData.drops_enabled !== newData.drops_enabled ||
         oldData.acl_based !== newData.acl_based) {
         return true;
     }
 
-    // Trigger full re-render for viewers only on significant jumps
-    const viewerDiff = Math.abs((oldData.viewers || 0) - (newData.viewers || 0));
-    return viewerDiff > 50; 
+    // Dynamic viewer change check (percentage + minimum threshold guard)
+    const oldViewers = oldData.viewers || 0;
+    const newViewers = newData.viewers || 0;
+    const viewerDiff = Math.abs(oldViewers - newViewers);
+
+    // Trigger full re-render only if change is at least 15% AND at least 5 viewers difference
+    const percentChange = oldViewers > 0 ? (viewerDiff / oldViewers) : 1;
+    return viewerDiff >= 5 && percentChange >= 0.15;
 }
 
 function updateChannel(channelData) {
@@ -44,21 +49,34 @@ function updateChannel(channelData) {
         return;
     }
 
+    // Preserve watching status if not explicitly passed
+    if (existing && channelData.watching === undefined) {
+        channelData.watching = existing.watching;
+    }
+
     // 2. Targeted DOM update if no structural/important changes occurred
     if (existing && !hasImportantChange(existing, channelData)) {
+        const watchingChanged = existing.watching !== channelData.watching;
         state.channels[channelData.id] = channelData;
 
-        const viewerEl = document.querySelector(`#channel-${channelData.id} .channel-info`);
-        if (viewerEl) {
-            const viewersText = channelData.viewers !== null ? `${channelData.viewers.toLocaleString()} viewers` : 'Offline';
-            
-            if (channelData.watching) {
-                viewerEl.replaceChildren(
-                    document.createTextNode(viewersText + ' • '),
-                    makeElement('strong', {}, 'WATCHING')
-                );
-            } else {
-                viewerEl.textContent = viewersText;
+        const channelEl = document.getElementById(`channel-${channelData.id}`);
+        if (channelEl) {
+            if (watchingChanged) {
+                channelEl.classList.toggle('watching', !!channelData.watching);
+            }
+
+            const viewerEl = channelEl.querySelector('.channel-info');
+            if (viewerEl) {
+                const viewersText = channelData.viewers !== null ? `${channelData.viewers.toLocaleString()} viewers` : 'Offline';
+                
+                if (channelData.watching) {
+                    viewerEl.replaceChildren(
+                        document.createTextNode(viewersText + ' • '),
+                        makeElement('strong', {}, 'WATCHING')
+                    );
+                } else {
+                    viewerEl.textContent = viewersText;
+                }
             }
         }
         return; // Skip full re-render
@@ -73,7 +91,14 @@ function updateChannel(channelData) {
 function removeChannel(channelId) {
     console.log(`[Channels] Removing channel ID: '${channelId}'`);
     delete state.channels[channelId];
-    scheduleRenderChannels();
+    
+    // Direct DOM removal if element exists to avoid full re-render
+    const el = document.getElementById(`channel-${channelId}`);
+    if (el) {
+        el.remove();
+    } else {
+        scheduleRenderChannels();
+    }
 }
 
 function clearChannels() {
@@ -84,17 +109,48 @@ function clearChannels() {
 
 function setWatchingChannel(channelId) {
     console.log(`[Channels] Setting active watching channel ID: '${channelId}'`);
-    Object.values(state.channels).forEach(ch => ch.watching = false);
-    if (state.channels[channelId]) {
-        state.channels[channelId].watching = true;
-    }
-    scheduleRenderChannels();
+    
+    // Update watching state and perform targeted DOM class toggles
+    Object.values(state.channels).forEach(ch => {
+        const isTarget = String(ch.id) === String(channelId);
+        if (ch.watching !== isTarget) {
+            ch.watching = isTarget;
+            
+            const el = document.getElementById(`channel-${ch.id}`);
+            if (el) {
+                el.classList.toggle('watching', isTarget);
+                const viewerEl = el.querySelector('.channel-info');
+                if (viewerEl) {
+                    const viewersText = ch.viewers !== null ? `${ch.viewers.toLocaleString()} viewers` : 'Offline';
+                    if (isTarget) {
+                        viewerEl.replaceChildren(
+                            document.createTextNode(viewersText + ' • '),
+                            makeElement('strong', {}, 'WATCHING')
+                        );
+                    } else {
+                        viewerEl.textContent = viewersText;
+                    }
+                }
+            }
+        }
+    });
 }
 
 function clearWatchingChannel() {
     console.log('[Channels] Clearing watching state for all channels');
-    Object.values(state.channels).forEach(ch => ch.watching = false);
-    scheduleRenderChannels();
+    Object.values(state.channels).forEach(ch => {
+        if (ch.watching) {
+            ch.watching = false;
+            const el = document.getElementById(`channel-${ch.id}`);
+            if (el) {
+                el.classList.remove('watching');
+                const viewerEl = el.querySelector('.channel-info');
+                if (viewerEl) {
+                    viewerEl.textContent = ch.viewers !== null ? `${ch.viewers.toLocaleString()} viewers` : 'Offline';
+                }
+            }
+        }
+    });
 }
 
 function renderChannels() {
@@ -193,7 +249,7 @@ function renderChannels() {
 
         group.channels.forEach(channel => {
             const div = document.createElement('div');
-            div.id = `channel-${channel.id}`; // Assigned ID for targeted updates
+            div.id = `channel-${channel.id}`;
             div.className = 'channel-item';
             if (channel.watching) div.classList.add('watching');
             if (channel.online) div.classList.add('online');

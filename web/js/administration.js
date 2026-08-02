@@ -101,14 +101,23 @@ function bindEvents() {
 }
 
 /**
- * Rekurzivně staví sklápěcí HTML strom z objektu
+ * Recursively builds collapsible HTML tree from object (Lazy Loaded & Zero Parse HTML)
  */
 function createTreeDOM(data, keyName = 'root') {
-    const wrapper = document.createElement('div');
-    wrapper.style.marginLeft = '12px';
-
     if (data === null || data === undefined) {
-        wrapper.innerHTML = `<span style="color: #ce9178;">${keyName}</span>: <span style="color: #569cd6;">${data}</span>`;
+        const wrapper = document.createElement('div');
+        wrapper.style.marginLeft = '12px';
+
+        const keySpan = document.createElement('span');
+        keySpan.style.color = '#ce9178';
+        keySpan.textContent = keyName;
+
+        const valSpan = document.createElement('span');
+        valSpan.style.color = '#569cd6';
+        valSpan.textContent = `: ${data}`;
+
+        wrapper.appendChild(keySpan);
+        wrapper.appendChild(valSpan);
         return wrapper;
     }
 
@@ -130,14 +139,47 @@ function createTreeDOM(data, keyName = 'root') {
         const summary = document.createElement('summary');
         summary.style.cursor = 'pointer';
         summary.style.color = '#4ec9b0';
-        summary.innerHTML = `<strong>${keyName}</strong> <span style="color: #888; font-size: 0.9em;">(${isArray ? `${count} items` : `${count} keys`})</span>`;
 
+        const strong = document.createElement('strong');
+        strong.textContent = keyName;
+
+        const countSpan = document.createElement('span');
+        countSpan.style.color = '#888';
+        countSpan.style.fontSize = '0.9em';
+        countSpan.textContent = ` (${isArray ? `${count} items` : `${count} keys`})`;
+
+        summary.appendChild(strong);
+        summary.appendChild(countSpan);
         details.appendChild(summary);
 
-        keys.forEach(k => {
-            const childNode = createTreeDOM(data[k], k);
-            if (childNode) details.appendChild(childNode);
-        });
+        let isRendered = false;
+
+        // Helper function to render children into a DocumentFragment
+        const renderChildren = () => {
+            if (isRendered) return;
+            const fragment = document.createDocumentFragment();
+
+            keys.forEach(k => {
+                const childNode = createTreeDOM(data[k], k);
+                if (childNode) fragment.appendChild(childNode);
+            });
+
+            details.appendChild(fragment);
+            isRendered = true;
+        };
+
+        // If search query is active, render immediately and auto-expand
+        if (searchQuery) {
+            renderChildren();
+            details.open = true;
+        } else {
+            // Lazy load children only when user expands the section
+            details.addEventListener('toggle', () => {
+                if (details.open) {
+                    renderChildren();
+                }
+            }, { once: true });
+        }
 
         return details;
     } else {
@@ -145,10 +187,24 @@ function createTreeDOM(data, keyName = 'root') {
             return null;
         }
 
+        const wrapper = document.createElement('div');
+        wrapper.style.marginLeft = '12px';
+
         let valColor = '#b5cea8';
         if (typeof data === 'string') valColor = '#ce9178';
 
-        wrapper.innerHTML = `<span style="color: #9cdcfe;">${keyName}</span>: <span style="color: ${valColor};">${JSON.stringify(data)}</span>`;
+        const keySpan = document.createElement('span');
+        keySpan.style.color = '#9cdcfe';
+        keySpan.textContent = keyName;
+
+        const valSpan = document.createElement('span');
+        valSpan.style.color = valColor;
+        valSpan.textContent = JSON.stringify(data);
+
+        wrapper.appendChild(keySpan);
+        wrapper.appendChild(document.createTextNode(': '));
+        wrapper.appendChild(valSpan);
+
         return wrapper;
     }
 }

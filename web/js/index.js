@@ -1,6 +1,9 @@
 // Twitch Drops Miner Web Client
 // Socket.IO and API communication
 
+console.log = () => {};
+console.debug = () => {};
+
 let selectedInventoryGames = [];
 let availableGames = new Set(); // All games from campaigns
 let draggedElement = null;
@@ -1602,26 +1605,55 @@ document.addEventListener('DOMContentLoaded', () => {
     const verifyProxyBtn = document.getElementById('verify-proxy-btn');
     if (verifyProxyBtn) verifyProxyBtn.addEventListener('click', verifyProxy);
 
-    const reloadBtn = document.getElementById('reload-btn');
-    if (reloadBtn) {
-        reloadBtn.addEventListener('click', () => {
-            saveSettings();
-            reloadBtn.disabled = true;
-            const originalText = reloadBtn.textContent;
-            reloadBtn.textContent = "Reloading...";
-            
-            if (typeof socket !== 'undefined') {
-                socket.emit('reload_campaigns');
-            } else {
-                reloadCampaigns();
-            }
+	const reloadBtn = document.getElementById('reload-btn');
+	if (reloadBtn) {
+		reloadBtn.addEventListener('click', async () => {
+			saveSettings();
 
-            setTimeout(() => {
-                reloadBtn.disabled = false;
-                reloadBtn.textContent = originalText;
-            }, 30000);
-        });
-    }
+			// 1. Lock button visually
+			reloadBtn.disabled = true;
+			const originalText = reloadBtn.textContent;
+			reloadBtn.textContent = "Reloading...";
+
+			if (typeof updateStatus === 'function') {
+				updateStatus('Reloading campaigns...');
+			}
+
+			// Helper function to restore original button state
+			let timeoutId;
+			const unlockButton = () => {
+				reloadBtn.disabled = false;
+				reloadBtn.textContent = originalText;
+				if (timeoutId) clearTimeout(timeoutId);
+				if (typeof socket !== 'undefined' && socket) {
+					socket.off('reload_complete', unlockButton);
+				}
+			};
+
+			// Safety fallback: unlock after 15s if backend fails/hangs
+			timeoutId = setTimeout(unlockButton, 15000);
+
+			try {
+				if (typeof socket !== 'undefined' && socket && socket.connected) {
+					// Listen once for the exact completion signal from Python
+					socket.once('reload_complete', unlockButton);
+					socket.emit('request_reload');
+				} else if (typeof reloadCampaigns === 'function') {
+					await reloadCampaigns();
+					unlockButton();
+				} else {
+					unlockButton();
+				}
+			} catch (err) {
+				console.error('Failed to trigger campaign reload:', err);
+
+				if (typeof updateStatus === 'function') {
+					updateStatus('Failed to reload campaigns');
+				}
+				unlockButton();
+			}
+		});
+	}
 
     const selectAllBtn = document.getElementById('select-all-btn');
     if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllGames);

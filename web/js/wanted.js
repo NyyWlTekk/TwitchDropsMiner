@@ -82,60 +82,11 @@ function performRenderWantedItems(tree) {
 // ==================== 2. DOM Builders & Components ====================
 
 /**
- * Creates a game group DOM element containing its campaigns.
+ * Evaluates the mining state of a campaign and returns relevant status flags and CSS classes.
  */
-function createGameGroupElement(gameGroup, index) {
-    const groupEl = makeElement('div', { 
-        class: 'wanted-game-group',
-        'data-game-name': gameGroup.game_name 
-    });
-
-    let iconUrl = gameGroup.game_icon;
-    if (iconUrl) {
-        iconUrl = iconUrl.replace('{width}', '40').replace('{height}', '53');
-    }
-
-    const headerChildren = [makeElement('span', { class: 'wanted-game-index' }, `#${index + 1}`)];
-    if (iconUrl) {
-        headerChildren.push(makeImageElement(iconUrl, gameGroup.game_name, 'wanted-game-icon'));
-    }
-    headerChildren.push(makeElement('span', { class: 'wanted-game-title' }, gameGroup.game_name));
-
-    if (gameGroup.total_remaining_minutes !== undefined) {
-        const hours = Math.floor(gameGroup.total_remaining_minutes / 60);
-        const mins = gameGroup.total_remaining_minutes % 60;
-        const timeText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
-
-        const badgeEl = makeElement('span', { 
-            class: 'wanted-game-time-badge',
-            'data-game-badge': gameGroup.game_name 
-        });
-        badgeEl.innerHTML = `${getStatusIconSVG('active')} ${timeText}`;
-        headerChildren.push(badgeEl);
-    }
-
-    const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', el => {
-        headerChildren.forEach(child => el.appendChild(child));
-    });
-    groupEl.appendChild(headerEl);
-
-    const campaignListEl = makeElement('div', { class: 'wanted-campaign-list' });
-    const campaigns = gameGroup.campaigns || [];
-    
-    campaigns.forEach(campaign => {
-        campaignListEl.appendChild(createCampaignCardElement(campaign, gameGroup.game_name));
-    });
-
-    groupEl.appendChild(campaignListEl);
-    return groupEl;
-}
-
-/**
- * Creates a single campaign card element with its drop items using modular helpers.
- */
-function createCampaignCardElement(campaign, gameName) {
+function evaluateCampaignMiningState(campaign, gameName) {
     const campaignId = campaign.campaign_id || campaign.id || '';
-    const drops = campaign.drops || [];
+    const drops = campaign.drops || campaign.drop_list || campaign.items || [];
 
     const isActivelyMining = checkIfCampaignIsActive(campaignId, drops, gameName);
     const hasProgress = checkIfCampaignHasProgress(drops, isActivelyMining);
@@ -147,12 +98,102 @@ function createCampaignCardElement(campaign, gameName) {
         cardClasses += ' in-progress';
     }
 
+    return {
+        campaignId,
+        drops,
+        isActivelyMining,
+        hasProgress,
+        cardClasses
+    };
+}
+
+/**
+ * Creates a visual status badge/indicator element for active mining or progress state.
+ */
+function createCampaignStatusIndicatorElement(isActivelyMining, hasProgress) {
+    if (isActivelyMining) {
+        const badgeEl = makeElement('span', { 
+            class: 'status-tag tag-mining',
+            style: 'margin-left: 6px;'
+        });
+        badgeEl.innerHTML = `${getStatusIconSVG('drop-active')} Mining`;
+        return badgeEl;
+    }
+    
+    if (hasProgress) {
+        const badgeEl = makeElement('span', { 
+            class: 'status-tag tag-in-progress',
+            style: 'margin-left: 6px;'
+        });
+        badgeEl.innerHTML = `${getStatusIconSVG('drop-progress')} In Progress`;
+        return badgeEl;
+    }
+
+    return null;
+}
+
+/**
+ * Creates a game group DOM element containing its campaigns.
+ */
+function createGameGroupElement(gameGroup, index) {
+    const gameName = gameGroup.game_name || gameGroup.name || '';
+    const groupEl = makeElement('div', { 
+        class: 'wanted-game-group',
+        'data-game-name': gameName 
+    });
+
+    let iconUrl = gameGroup.game_icon || gameGroup.icon || gameGroup.box_art_url;
+    if (iconUrl) {
+        iconUrl = iconUrl.replace('{width}', '40').replace('{height}', '53');
+    }
+
+    const headerChildren = [makeElement('span', { class: 'wanted-game-index' }, `#${index + 1}`)];
+    if (iconUrl) {
+        headerChildren.push(makeImageElement(iconUrl, gameName, 'wanted-game-icon'));
+    }
+    headerChildren.push(makeElement('span', { class: 'wanted-game-title' }, gameName));
+
+    if (gameGroup.total_remaining_minutes !== undefined) {
+        const hours = Math.floor(gameGroup.total_remaining_minutes / 60);
+        const mins = gameGroup.total_remaining_minutes % 60;
+        const timeText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+
+        const badgeEl = makeElement('span', { 
+            class: 'wanted-game-time-badge',
+            'data-game-badge': gameName 
+        });
+        badgeEl.innerHTML = `${getStatusIconSVG('active')} ${timeText}`;
+        headerChildren.push(badgeEl);
+    }
+
+    const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', el => {
+        headerChildren.forEach(child => el.appendChild(child));
+    });
+    groupEl.appendChild(headerEl);
+
+    const campaignListEl = makeElement('div', { class: 'wanted-campaign-list' });
+    const campaigns = gameGroup.campaigns || gameGroup.campaign_list || [];
+    
+    campaigns.forEach(campaign => {
+        campaignListEl.appendChild(createCampaignCardElement(campaign, gameName));
+    });
+
+    groupEl.appendChild(campaignListEl);
+    return groupEl;
+}
+
+/**
+ * Creates a single campaign card element with its drop items using modular helpers.
+ */
+function createCampaignCardElement(campaign, gameName) {
+    const campaignState = evaluateCampaignMiningState(campaign, gameName);
+
     return makeElement('div', {
-        class: cardClasses,
-        'data-campaign-id': String(campaignId)
+        class: campaignState.cardClasses,
+        'data-campaign-id': String(campaignState.campaignId)
     }, '', cardEl => {
-        const headerEl = createCampaignHeaderElement(campaign, drops);
-        const bodyEl = createCampaignBodyElement(drops);
+        const headerEl = createCampaignHeaderElement(campaign, campaignState.drops, campaignState);
+        const bodyEl = createCampaignBodyElement(campaignState.drops, campaignState);
 
         cardEl.appendChild(headerEl);
         cardEl.appendChild(bodyEl);
@@ -162,7 +203,7 @@ function createCampaignCardElement(campaign, gameName) {
 /**
  * Creates the campaign card header element including titles, badges, and dates.
  */
-function createCampaignHeaderElement(campaign, drops) {
+function createCampaignHeaderElement(campaign, drops, campaignState = null) {
     return makeElement('div', { class: 'wanted-card-header' }, '', h => {
         const titleRow = makeElement('div', { class: 'wanted-card-header-main' }, '', row => {
             row.appendChild(makeElement('a', {
@@ -170,17 +211,27 @@ function createCampaignHeaderElement(campaign, drops) {
                 target: '_blank',
                 rel: 'noopener noreferrer',
                 class: 'wanted-card-campaign-link',
-                title: campaign.name || 'Campaign'
-            }, campaign.name || 'Campaign'));
+                title: campaign.name || campaign.campaign_name || 'Campaign'
+            }, campaign.name || campaign.campaign_name || 'Campaign'));
 
-            const claimedCount = calculateClaimedDropsCount(campaign, drops);
-            const totalCount = campaign.total_drops_count || drops.length;
+            const claimedCount = typeof calculateClaimedDropsCount === 'function' 
+                ? calculateClaimedDropsCount(campaign, drops)
+                : (drops || []).filter(d => Boolean(d.is_claimed ?? d.isClaimed ?? d.claimed)).length;
+            
+            const totalCount = campaign.total_drops_count || campaign.totalDropsCount || (drops ? drops.length : 0);
             row.appendChild(makeElement('span', { class: 'wanted-campaign-badge' }, `(${claimedCount}/${totalCount})`));
+
+            if (campaignState) {
+                const statusBadge = createCampaignStatusIndicatorElement(campaignState.isActivelyMining, campaignState.hasProgress);
+                if (statusBadge) {
+                    row.appendChild(statusBadge);
+                }
+            }
         });
         h.appendChild(titleRow);
 
         if (typeof formatCampaignDates === 'function') {
-            const dateText = formatCampaignDates(campaign.starts_at, campaign.ends_at);
+            const dateText = formatCampaignDates(campaign.starts_at || campaign.startsAt, campaign.ends_at || campaign.endsAt);
             if (dateText) {
                 const datesEl = makeElement('div', { class: 'wanted-campaign-dates' });
                 datesEl.innerHTML = `${getStatusIconSVG('upcoming')} ${dateText}`;
@@ -193,46 +244,79 @@ function createCampaignHeaderElement(campaign, drops) {
 /**
  * Creates the body element containing all drop items container.
  */
-function createCampaignBodyElement(drops) {
+function createCampaignBodyElement(drops, campaignState = null) {
     const dropContainer = makeElement('div', { class: 'wanted-drops-container' });
 
-    // Seřazení dropů vzestupně podle požadovaného času (minut)
     const sortedDrops = [...(drops || [])].sort((a, b) => {
-        const timeA = a.required_minutes ?? a.requiredMinutes ?? a.required_time ?? a.needed_minutes ?? 0;
-        const timeB = b.required_minutes ?? b.requiredMinutes ?? b.required_time ?? b.needed_minutes ?? 0;
+        const timeA = Number(a.required_minutes ?? a.requiredMinutes ?? a.required_time ?? a.needed_minutes ?? a.duration ?? a.total_minutes ?? 0);
+        const timeB = Number(b.required_minutes ?? b.requiredMinutes ?? b.required_time ?? b.needed_minutes ?? b.duration ?? b.total_minutes ?? 0);
         return timeA - timeB;
     });
 
     sortedDrops.forEach((drop, index) => {
         if (typeof createDropItemElement === 'function') {
-            dropContainer.appendChild(createDropItemElement(drop, index + 1));
+            dropContainer.appendChild(createDropItemElement(drop, index + 1, campaignState));
         }
     });
 
     return makeElement('div', { class: 'wanted-card-body' }, '', b => b.appendChild(dropContainer));
 }
 
-function createDropItemElement(drop, index = 1) {
-    const rawUuid = drop.id || drop.drop_id || getDropUniqueId(drop, index);
-    const textId = getDropUniqueId(drop, index);
+/**
+ * Creates an individual drop item element with state sync for active mining progress.
+ */
+function createDropItemElement(drop, index = 1, campaignState = null) {
+    const rawUuid = drop.id || drop.drop_id || (typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : `drop-${index}`);
+    const textId = typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : rawUuid;
+
+    const isClaimed = Boolean(drop.is_claimed ?? drop.isClaimed ?? drop.claimed ?? false);
+    const canClaim = Boolean(drop.can_claim ?? drop.canClaim ?? false);
+    
+    // 1. Základní vytažení minut z objektu dropu
+    let current = Math.round(Number(drop.current_minutes ?? drop.currentMinutes ?? drop.current_time ?? drop.progress ?? 0));
+    const required = Number(drop.required_minutes ?? drop.requiredMinutes ?? drop.required_time ?? drop.needed_minutes ?? drop.duration ?? drop.total_minutes ?? 0);
+
+    // 2. Synchronizace živého času z aktivního stavu těžení (state.currentDrop)
+    const activeDrop = state?.currentDrop || state?.current_drop;
+    if (activeDrop && !isClaimed) {
+        const activeDropId = activeDrop.drop_id || activeDrop.id;
+        const activeCampaignId = activeDrop.campaign_id || activeDrop.parent_campaign_id || state?.currentDrop?.campaign_id;
+
+        const dropId = drop.id || drop.drop_id;
+        const dropCampaignId = drop.campaign_id || drop.parent_campaign_id || campaignState?.campaignId;
+
+        const isDirectActiveDrop = dropId && activeDropId && String(dropId).trim() === String(activeDropId).trim();
+        const isSameCampaign = (campaignState?.isActivelyMining) || (dropCampaignId && activeCampaignId && String(dropCampaignId).trim() === String(activeCampaignId).trim());
+
+        // Pokud jde o aktivně těžený drop nebo kampaň právě těží, přebíráme nejvyšší živý čas ze stavu
+        if (isDirectActiveDrop || isSameCampaign) {
+            const liveMinutes = Math.round(Number(activeDrop.current_minutes ?? activeDrop.currentMinutes ?? activeDrop.current_time ?? activeDrop.progress ?? 0));
+            if (liveMinutes > current) {
+                current = liveMinutes;
+            }
+        }
+    }
 
     const element = makeElement('div', {
-        class: `wanted-drop-item ${drop.is_claimed ? 'is-claimed' : ''}`,
+        class: `wanted-drop-item ${isClaimed ? 'is-claimed' : ''}`,
         'data-drop-id': String(rawUuid),
         'data-text-id': String(textId)
     }, '', el => {
         const infoEl = makeElement('div', { class: 'wanted-drop-info' }, '', info => {
-            const displayName = index ? `Drop ${index}: ${drop.name}` : drop.name;
+            const dropName = drop.name || drop.title || 'Drop';
+            const displayName = index ? `Drop ${index}: ${dropName}` : dropName;
             info.appendChild(makeElement('span', { class: 'wanted-drop-name' }, displayName));
 
-            const rawName = (drop.name || '').toLowerCase();
+            const rawName = (dropName || '').toLowerCase();
             const normalizedDropName = rawName.replace(/^\d+[\.\)]?\s*/, '').trim();
 
-            (drop.benefits || []).forEach(benefit => {
+            const benefits = drop.benefits || drop.rewards || [];
+            benefits.forEach(benefit => {
                 if (benefit) {
-                    const cleanBenefit = benefit.trim().toLowerCase();
+                    const benefitText = typeof benefit === 'string' ? benefit : (benefit.name || benefit.title || '');
+                    const cleanBenefit = benefitText.trim().toLowerCase();
                     if (cleanBenefit && !normalizedDropName.includes(cleanBenefit) && cleanBenefit !== normalizedDropName) {
-                        info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
+                        info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefitText));
                     }
                 }
             });
@@ -240,14 +324,12 @@ function createDropItemElement(drop, index = 1) {
         el.appendChild(infoEl);
 
         const statusEl = makeElement('div', { class: 'wanted-drop-status' });
-        const current = Math.round(drop.current_minutes || 0);
-        const required = drop.required_minutes || 0;
 
-        if (drop.is_claimed) {
-            const label = state.translations?.gui?.wanted?.claimed || 'Claimed';
+        if (isClaimed) {
+            const label = state?.translations?.gui?.wanted?.claimed || 'Claimed';
             statusEl.innerHTML = `<span class="status-tag tag-claimed">${getStatusIconSVG('drop-claimed')} ${label}</span>`;
-        } else if (drop.can_claim || (required > 0 && current >= required)) {
-            const label = state.translations?.gui?.wanted?.ready || 'Ready to claim!';
+        } else if (canClaim || (required > 0 && current >= required)) {
+            const label = state?.translations?.gui?.wanted?.ready || 'Ready to claim!';
             statusEl.innerHTML = `<span class="status-tag tag-ready">${getStatusIconSVG('drop-ready')} ${label}</span>`;
         } else if (required > 0) {
             statusEl.innerHTML = `<span class="status-tag tag-progress">${getStatusIconSVG('drop-active')} ${current} / ${required} min</span>`;
@@ -258,7 +340,6 @@ function createDropItemElement(drop, index = 1) {
     return element;
 }
 
-
 // ==================== 3. State & Active Checks ====================
 
 /**
@@ -267,19 +348,20 @@ function createDropItemElement(drop, index = 1) {
 function checkIfCampaignIsActive(campaignId, drops, gameName) {
     if (!campaignId && (!drops || drops.length === 0)) return false;
 
-    // 1. Bezpečné vytažení aktivních ID ze stavu (podporuje různé formáty zápisu)
+    // 1. Safely extract active IDs from state
     const activeDropId = state?.currentDrop?.drop_id || state?.currentDrop?.id || 
                          state?.current_drop?.drop_id || state?.current_drop?.id;
                          
-    const activeCampaignId = state?.currentDrop?.campaign_id || state?.current_drop?.campaign_id ||
-                             state?.current_drop?.campaign_id;
+    const activeCampaignId = state?.currentDrop?.campaign_id || state?.current_drop?.campaign_id;
 
-    // 2. Přímé porovnání podle ID kampaně (pokud se shoduje, kampaň aktivně těží)
+    const hasSpecificActiveTarget = Boolean(activeCampaignId || activeDropId);
+
+    // 2. Direct comparison by campaign ID
     if (activeCampaignId && campaignId && String(campaignId).trim() === String(activeCampaignId).trim()) {
         return true;
     }
 
-    // 3. Přímé porovnání podle ID konkrétního dropu uvnitř kampaně
+    // 3. Direct comparison by drop ID inside drops array
     if (activeDropId && drops && drops.length > 0) {
         const hasMatchingDrop = drops.some(drop => {
             const dropId = drop.id || drop.drop_id;
@@ -290,7 +372,13 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
         }
     }
 
-    // 4. Sekundární kontrola podle názvu hry jako záloha
+    // If a specific active campaign/drop exists in state but doesn't match this campaign,
+    // do not fall back to game matching (another campaign in the same game is actively mining).
+    if (hasSpecificActiveTarget) {
+        return false;
+    }
+
+    // 4. Secondary fallback check by game name (only used when no specific active target ID exists in state)
     let currentWatchedGame = null;
     if (typeof getWatchedChannelObject === 'function') {
         const wObj = getWatchedChannelObject();

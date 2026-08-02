@@ -53,17 +53,49 @@ function isClaimed(item) {
 function getCampaignAndDrops(queueItem) {
     if (!queueItem) return { campaign: null, drops: [] };
 
+    // Helper for fast normalization of drops structure
+    const normalizeDrops = (dropsData) => {
+        if (!dropsData) return [];
+        return Array.isArray(dropsData) ? dropsData : Object.values(dropsData);
+    };
+
     if (queueItem.drops) {
-        const drops = Array.isArray(queueItem.drops) ? queueItem.drops : Object.values(queueItem.drops);
-        return { campaign: queueItem, drops };
+        return { campaign: queueItem, drops: normalizeDrops(queueItem.drops) };
     }
 
-    if (state.campaigns && queueItem.campaign_id) {
-        const campaignsArray = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        const found = campaignsArray.find(c => c && (c.id === queueItem.campaign_id || c.campaign_id === queueItem.campaign_id));
+    const campId = queueItem.campaign_id;
+    if (state && state.campaigns && campId) {
+        let found = null;
+        const campaigns = state.campaigns;
+
+        // 1. Direct O(1) lookup attempt if campaigns is an object keyed by ID
+        if (!Array.isArray(campaigns) && campaigns[campId]) {
+            found = campaigns[campId];
+        } else {
+            // 2. Fast iteration without allocating Object.values() array
+            if (Array.isArray(campaigns)) {
+                for (let i = 0; i < campaigns.length; i++) {
+                    const c = campaigns[i];
+                    if (c && (c.id === campId || c.campaign_id === campId)) {
+                        found = c;
+                        break;
+                    }
+                }
+            } else {
+                for (const key in campaigns) {
+                    if (Object.prototype.hasOwnProperty.call(campaigns, key)) {
+                        const c = campaigns[key];
+                        if (c && (c.id === campId || c.campaign_id === campId)) {
+                            found = c;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         if (found && found.drops) {
-            const drops = Array.isArray(found.drops) ? found.drops : Object.values(found.drops);
-            return { campaign: found, drops };
+            return { campaign: found, drops: normalizeDrops(found.drops) };
         }
     }
 
@@ -110,43 +142,140 @@ function formatTime(secs) {
 }
 
 /**
- * Resolves drop reward/asset image URL
+ * Helper to extract image URL from any drop or reward object structure
  */
-function resolveDropRewardImageUrl(data, targetId = null) {
-    let rewardImgUrl = data.image_url || data.reward_image_url || data.icon_url || data.benefit_icon_url ||
-        data.reward?.image_url || data.reward?.icon_url || data.benefit?.image_url || data.benefits?.[0]?.image_url ||
-        data.benefit_edges?.[0]?.node?.asset_url || data.benefit_edges?.[0]?.node?.image_url;
+function extractUrlFromObject(obj) {
+    if (!obj) return null;
 
-    if (!rewardImgUrl && targetId && state.campaigns && data.campaign_id) {
-        const camp = state.campaigns[data.campaign_id] || 
-            Object.values(state.campaigns).find(c => c && (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
-        
-        if (camp && camp.drops) {
-            const foundDrop = camp.drops.find(d => (d.id || d.drop_id) === targetId);
-            if (foundDrop) {
-                rewardImgUrl = foundDrop.image_url || foundDrop.reward_image_url || foundDrop.icon_url || 
-                               foundDrop.benefit_icon_url || foundDrop.reward?.image_url || foundDrop.reward?.icon_url ||
-                               foundDrop.image || foundDrop.thumbnail || foundDrop.url || foundDrop.benefits?.[0]?.image_url ||
-                               foundDrop.benefits?.[0]?.icon_url || foundDrop.benefits?.[0]?.thumbnail ||
-                               foundDrop.benefits?.[0]?.url || foundDrop.benefits?.[0]?.asset_url ||
-                               foundDrop.benefit_edges?.[0]?.node?.image_url || foundDrop.benefit_edges?.[0]?.node?.asset_url;
-            }
+    // Direct properties lookup
+    let url = obj.image_url || obj.reward_image_url || obj.icon_url || obj.benefit_icon_url || 
+              obj.image || obj.thumbnail || obj.url;
+    if (url) return url;
+
+    // Nested reward or benefit objects
+    if (obj.reward) {
+        url = obj.reward.image_url || obj.reward.icon_url;
+        if (url) return url;
+    }
+
+    if (obj.benefit) {
+        url = obj.benefit.image_url || obj.benefit.icon_url;
+        if (url) return url;
+    }
+
+    // Benefits array fallback
+    const benefits = obj.benefits;
+    if (Array.isArray(benefits) && benefits.length > 0) {
+        const b = benefits[0];
+        if (b) {
+            url = b.image_url || b.icon_url || b.thumbnail || b.url || b.asset_url;
+            if (url) return url;
         }
     }
-    return rewardImgUrl;
+
+    // GraphQL / Edge structures
+    const benefitEdges = obj.benefit_edges;
+    if (Array.isArray(benefitEdges) && benefitEdges.length > 0) {
+        const node = benefitEdges[0]?.node;
+        if (node) {
+            url = node.asset_url || node.image_url;
+            if (url) return url;
+        }
+    }
+
+    return null;
 }
 
 /**
- * Preloads queue images
+ * Resolves drop reward/asset image URL accurately and efficiently
+ */
+function resolveDropRewardImageUrl(data, targetId = null) {
+    if (!data) return null;
+
+    // 1. Try resolving directly from the passed data object
+    let rewardImgUrl = extractUrlFromObject(data);
+    if (rewardImgUrl) return rewardImgUrl;
+
+    // 2. Fallback lookup in state.campaigns if image is missing and IDs are provided
+    const campId = data.campaign_id;
+    if (targetId && state && state.campaigns && campId) {
+        let camp = null;
+        const campaigns = state.campaigns;
+
+        // O(1) lookup attempt
+        if (!Array.isArray(campaigns) && campaigns[campId]) {
+            camp = campaigns[campId];
+        } else if (Array.isArray(campaigns)) {
+            for (let i = 0; i < campaigns.length; i++) {
+                const c = campaigns[i];
+                if (c && (c.id === campId || c.campaign_id === campId)) {
+                    camp = c;
+                    break;
+                }
+            }
+        } else {
+            for (const key in campaigns) {
+                if (Object.prototype.hasOwnProperty.call(campaigns, key)) {
+                    const c = campaigns[key];
+                    if (c && (c.id === campId || c.campaign_id === campId)) {
+                        camp = c;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Fast drop lookup inside campaign drops array
+        if (camp && camp.drops && Array.isArray(camp.drops)) {
+            const drops = camp.drops;
+            const dropsLen = drops.length;
+            for (let i = 0; i < dropsLen; i++) {
+                const d = drops[i];
+                if (d && (d.id === targetId || d.drop_id === targetId)) {
+                    rewardImgUrl = extractUrlFromObject(d);
+                    if (rewardImgUrl) break;
+                }
+            }
+        }
+    }
+
+    return rewardImgUrl;
+}
+
+// Tracking Set to prevent re-instantiating images for already requested URLs
+const _preloadedUrls = new Set();
+
+/**
+ * Preloads queue images efficiently without redundant network requests
  */
 function preloadQueueImages(queue) {
-    if (!Array.isArray(queue)) return;
-    queue.forEach(dropItem => {
-        if (dropItem && dropItem.image_url) {
+    if (!Array.isArray(queue) || queue.length === 0) return;
+
+    const cache = (typeof imageCache !== 'undefined') ? imageCache : null;
+    const len = queue.length;
+
+    for (let i = 0; i < len; i++) {
+        const dropItem = queue[i];
+        if (!dropItem) continue;
+
+        const url = dropItem.image_url || dropItem.imageUrl;
+        if (!url || _preloadedUrls.has(url)) continue;
+
+        // Mark URL as preloaded globally
+        _preloadedUrls.add(url);
+
+        // Populate global imageCache template if available
+        if (cache) {
+            if (!cache.has(url)) {
+                const imgEl = document.createElement('img');
+                imgEl.src = url;
+                cache.set(url, imgEl);
+            }
+        } else {
             const img = new Image();
-            img.src = dropItem.image_url;
+            img.src = url;
         }
-    });
+    }
 }
 
 // ==========================================
@@ -201,67 +330,88 @@ function syncAnyDropProgress(incomingIdStr, data) {
  * Calculates total requirements for the overall progress bar from full inventory (state.campaigns)
  */
 function calculateOverallStats() {
-    let stats = { totalCurrent: 0, totalRequired: 0, totalRemainingSecs: 0 };
+    const stats = { totalCurrent: 0, totalRequired: 0, totalRemainingSecs: 0 };
     
     if (!state || !state.campaigns) return stats;
 
-    const campaignsList = Array.isArray(state.campaigns) 
-        ? state.campaigns 
-        : Object.values(state.campaigns);
+    // Fast grouping using Map to avoid Object.values allocation
+    const gamesMap = new Map();
+    const campaigns = state.campaigns;
 
-    if (campaignsList.length === 0) return stats;
-
-    const gamesMap = {};
-
-    campaignsList.forEach(campaign => {
+    // Helper to process a single campaign entry
+    const registerCampaign = (campaign) => {
         if (!campaign) return;
-        
         if (campaign.is_unlinked || campaign.status === 'unlinked' || campaign.linked === false) {
             return;
         }
 
         const gameKey = campaign.game_name || campaign.gameName || 'Unknown Game';
-        if (!gamesMap[gameKey]) {
-            gamesMap[gameKey] = { campaigns: [] };
+        let group = gamesMap.get(gameKey);
+        if (!group) {
+            group = [];
+            gamesMap.set(gameKey, group);
         }
-        gamesMap[gameKey].campaigns.push(campaign);
-    });
+        group.push(campaign);
+    };
 
-    Object.values(gamesMap).forEach(gameGroup => {
-        if (!gameGroup.campaigns || !Array.isArray(gameGroup.campaigns)) return;
-        let maxReq = 0, maxCur = 0, maxRemSecs = 0;
+    // Iterate campaigns based on data type without creating array copies
+    if (Array.isArray(campaigns)) {
+        for (let i = 0; i < campaigns.length; i++) {
+            registerCampaign(campaigns[i]);
+        }
+    } else {
+        for (const key in campaigns) {
+            if (Object.prototype.hasOwnProperty.call(campaigns, key)) {
+                registerCampaign(campaigns[key]);
+            }
+        }
+    }
 
-        gameGroup.campaigns.forEach(campaign => {
-            if (!campaign || !campaign.drops || !Array.isArray(campaign.drops)) return;
-            let campReq = 0, campCur = 0, campRemSecs = 0;
+    if (gamesMap.size === 0) return stats;
 
-            campaign.drops.forEach(drop => {
-                if (!drop) return;
-                if (drop.is_unlinked || drop.status === 'unlinked') return;
+    // Aggregate stats per game group
+    for (const campaignList of gamesMap.values()) {
+        let maxReq = 0;
+        let maxCur = 0;
+        let maxRemSecs = 0;
 
-                const req = Number(drop.required_minutes || drop.requiredMinutes || drop.duration || 0);
-                let cur = Number(drop.current_minutes || drop.currentMinutes || 0);
-                const isItemClaimedFlag = Boolean(drop.is_claimed || drop.claimed || drop.isClaimed);
+        for (let i = 0; i < campaignList.length; i++) {
+            const campaign = campaignList[i];
+            const drops = campaign.drops;
+            if (!drops || !Array.isArray(drops)) continue;
 
-                if (isItemClaimedFlag) cur = req;
-                if (cur > req) cur = req;
+            let campReq = 0;
+            let campCur = 0;
+            let campRemSecs = 0;
+
+            for (let j = 0; j < drops.length; j++) {
+                const drop = drops[j];
+                if (!drop || drop.is_unlinked || drop.status === 'unlinked') continue;
+
+                const req = Number(drop.required_minutes || drop.requiredMinutes || drop.duration) || 0;
+                let cur = Number(drop.current_minutes || drop.currentMinutes) || 0;
+                const isClaimed = Boolean(drop.is_claimed || drop.claimed || drop.isClaimed);
+
+                if (isClaimed || cur > req) {
+                    cur = req;
+                }
 
                 campReq += req;
                 campCur += cur;
-                campRemSecs += (isItemClaimedFlag ? 0 : Math.max(0, req - cur)) * 60;
-            });
+                campRemSecs += isClaimed ? 0 : Math.max(0, req - cur) * 60;
+            }
 
             if (campReq > maxReq) {
                 maxReq = campReq;
                 maxCur = campCur;
                 maxRemSecs = campRemSecs;
             }
-        });
+        }
 
         stats.totalRequired += maxReq;
         stats.totalCurrent += maxCur;
         stats.totalRemainingSecs += maxRemSecs;
-    });
+    }
 
     return stats;
 }
@@ -448,25 +598,42 @@ function updateDropTitle(data) {
     dropNameEl.textContent = `${displayGameName} (${displayIndex}/${queueLength})`;
 }
 
+// Fallback cache map if global imageCache is not defined in the scope
+const _fallbackImageCache = (typeof imageCache !== 'undefined') ? imageCache : new Map();
+
+/**
+ * Helper to retrieve or create cached image DOM elements safely and efficiently
+ */
 function getCachedImage(url, alt, className, styles = {}) {
     if (!url) return null;
-    
-    if (typeof imageCache !== 'undefined' && imageCache.has(url)) {
-        const cachedImg = imageCache.get(url).cloneNode(true);
-        Object.assign(cachedImg.style, styles);
-        return cachedImg;
+
+    // Use global imageCache if defined, otherwise fallback to local Map
+    const cache = (typeof imageCache !== 'undefined') ? imageCache : _fallbackImageCache;
+
+    // Retrieve base template image element from cache or create a new clean one
+    let templateImg = cache.get(url);
+    if (!templateImg) {
+        templateImg = document.createElement('img');
+        templateImg.src = url;
+        cache.set(url, templateImg);
     }
 
-    const imgEl = document.createElement('img');
-    imgEl.src = url;
+    // Clone base template (false is faster as <img> elements have no child nodes)
+    const imgEl = templateImg.cloneNode(false);
+
+    // Apply specific attributes for this call
     if (alt) imgEl.alt = alt;
     if (className) imgEl.className = className;
-    Object.assign(imgEl.style, styles);
 
-    if (typeof imageCache !== 'undefined') {
-        imageCache.set(url, imgEl);
+    // Apply inline styles only if styles object is populated
+    if (styles && typeof styles === 'object') {
+        const styleKeys = Object.keys(styles);
+        if (styleKeys.length > 0) {
+            Object.assign(imgEl.style, styles);
+        }
     }
-    return imgEl.cloneNode(true);
+
+    return imgEl;
 }
 
 function renderDropGameHeader(data) {
@@ -505,6 +672,17 @@ function renderDropGameHeader(data) {
             flexShrink: '0'
         });
         if (imgEl) children.push(imgEl);
+    } else {
+        // Placeholder čtvereček pro ikonu hry, pokud chybí obrázek
+        const placeholderImg = document.createElement('div');
+        placeholderImg.className = 'game-icon-placeholder';
+        placeholderImg.style.width = '42px';
+        placeholderImg.style.height = '56px';
+        placeholderImg.style.borderRadius = '6px';
+        placeholderImg.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+        placeholderImg.style.border = '1px dashed rgba(255, 255, 255, 0.15)';
+        placeholderImg.style.flexShrink = '0';
+        children.push(placeholderImg);
     }
 
     if (typeof makeElement === 'function') {
@@ -601,8 +779,11 @@ function renderDropCardLayout(data, rewardImgUrl) {
         cardOuter.appendChild(rightCol);
     }
 
+    // Načtení obrázku nebo vytvoření placeholder čtverečku
+    let targetLeftEl = null;
+
     if (rewardImgUrl && typeof getCachedImage === 'function') {
-        const cachedRewardImg = getCachedImage(rewardImgUrl, data.drop_name || '', 'drop-reward-icon', {
+        targetLeftEl = getCachedImage(rewardImgUrl, data.drop_name || '', 'drop-reward-icon', {
             width: '72px',
             height: 'auto',
             maxHeight: '100%',
@@ -612,19 +793,28 @@ function renderDropCardLayout(data, rewardImgUrl) {
             flexShrink: '0',
             display: 'block'
         });
+    }
 
-        if (cachedRewardImg) {
-            cachedRewardImg.id = 'drop-card-left-img';
-            if (!leftImg || leftImg !== cachedRewardImg) {
-                if (leftImg && cardOuter.contains(leftImg)) {
-                    leftImg.replaceWith(cachedRewardImg);
-                } else {
-                    cardOuter.insertBefore(cachedRewardImg, rightCol);
-                }
-            }
+    // Pokud obrázek není k dispozici, vytvoříme placeholder
+    if (!targetLeftEl) {
+        targetLeftEl = document.createElement('div');
+        targetLeftEl.style.width = '72px';
+        targetLeftEl.style.height = '72px';
+        targetLeftEl.style.borderRadius = '6px';
+        targetLeftEl.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+        targetLeftEl.style.border = '1px dashed rgba(255, 255, 255, 0.15)';
+        targetLeftEl.style.flexShrink = '0';
+        targetLeftEl.style.alignSelf = 'center';
+    }
+
+    targetLeftEl.id = 'drop-card-left-img';
+
+    if (!leftImg || leftImg !== targetLeftEl) {
+        if (leftImg && cardOuter.contains(leftImg)) {
+            leftImg.replaceWith(targetLeftEl);
+        } else {
+            cardOuter.insertBefore(targetLeftEl, rightCol);
         }
-    } else if (leftImg) {
-        leftImg.remove();
     }
 }
 
@@ -941,34 +1131,57 @@ function updateCampaignProgressData(data, liveCurrentMins) {
     let totalCampaignRequired = 0;
 
     if (state.campaigns && data.campaign_id) {
-        const campaign = state.campaigns[data.campaign_id] || 
-            Object.values(state.campaigns).find(c => c && (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
-            
+        // Direct lookup with fallback loop to avoid array allocations (Object.values)
+        let campaign = state.campaigns[data.campaign_id];
+        if (!campaign) {
+            for (const key in state.campaigns) {
+                const c = state.campaigns[key];
+                if (c && (c.id === data.campaign_id || c.campaign_id === data.campaign_id)) {
+                    campaign = c;
+                    break;
+                }
+            }
+        }
+
         if (campaign) {
             const drops = extractCampaignDrops(campaign);
             const campName = campaign.name || campaign.campaign_name || 'Campaign';
-            
-            drops.forEach((d) => {
-                if ((d.drop_id || d.id) === targetDropId) {
-                    d.current_minutes = currentDropCurrent;
-                }
-            });
+            const dropsCount = drops.length;
 
-            const maxCampaignCurrent = drops.length > 0 ? Math.max(...drops.map(d => Number(d.current_minutes) || 0)) : currentDropCurrent;
-            
-            totalCampaignRequired = drops.length > 0 ? Math.max(...drops.map(d => Number(d.required_minutes || d.duration || d.total_minutes) || 0)) : 0;
-            totalCampaignCurrent = maxCampaignCurrent;
-
-            drops.forEach(d => {
-                d.current_minutes = maxCampaignCurrent;
-            });
-
+            let maxCurrent = currentDropCurrent;
+            let maxRequired = 0;
             let dropVisualIndex = 1;
-            const foundIdx = drops.findIndex(d => (d.drop_id || d.id) === targetDropId);
-            if (foundIdx !== -1) dropVisualIndex = foundIdx + 1;
+
+            // Single pass iteration replacing multiple forEach, map, and findIndex calls
+            for (let i = 0; i < dropsCount; i++) {
+                const d = drops[i];
+                const dId = d.drop_id || d.id;
+
+                if (dId === targetDropId) {
+                    d.current_minutes = currentDropCurrent;
+                    dropVisualIndex = i + 1;
+                }
+
+                const curMins = Number(d.current_minutes) || 0;
+                const reqMins = Number(d.required_minutes || d.duration || d.total_minutes) || 0;
+
+                if (curMins > maxCurrent) maxCurrent = curMins;
+                if (reqMins > maxRequired) maxRequired = reqMins;
+            }
+
+            totalCampaignCurrent = maxCurrent;
+            totalCampaignRequired = dropsCount > 0 ? maxRequired : 0;
+
+            // Update remaining drops in array
+            for (let i = 0; i < dropsCount; i++) {
+                drops[i].current_minutes = maxCurrent;
+            }
 
             if (campaignTitle) {
-                campaignTitle.textContent = `${campName} • Drop ${dropVisualIndex}/${drops.length}`;
+                const newTitle = `${campName} • Drop ${dropVisualIndex}/${dropsCount}`;
+                if (campaignTitle.textContent !== newTitle) {
+                    campaignTitle.textContent = newTitle;
+                }
             }
         }
     }
@@ -978,21 +1191,31 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         totalCampaignRequired = Number(data.required_minutes || data.duration || data.total_minutes) || 0;
     }
 
+    // Apply updates and minimize DOM mutations by checking current state
     if (totalCampaignRequired > 0) {
-        if (cardContainer) cardContainer.style.display = 'block';
+        if (cardContainer && cardContainer.style.display !== 'block') {
+            cardContainer.style.display = 'block';
+        }
 
         const percentage = Math.min(100, Math.round((totalCampaignCurrent / totalCampaignRequired) * 100));
-        campaignFill.style.width = `${percentage}%`;
-        campaignFill.textContent = percentage > 0 ? `${percentage}%` : '';
-        campaignText.textContent = `${totalCampaignCurrent} / ${totalCampaignRequired} min`;
+        const newWidth = `${percentage}%`;
+        const newFillText = percentage > 0 ? `${percentage}%` : '';
+        const newProgressText = `${totalCampaignCurrent} / ${totalCampaignRequired} min`;
+
+        if (campaignFill.style.width !== newWidth) campaignFill.style.width = newWidth;
+        if (campaignFill.textContent !== newFillText) campaignFill.textContent = newFillText;
+        if (campaignText.textContent !== newProgressText) campaignText.textContent = newProgressText;
     } else {
-        if (cardContainer) cardContainer.style.display = 'none';
-        campaignFill.style.width = '0%';
-        campaignFill.textContent = '';
-        campaignText.textContent = '';
+        if (cardContainer && cardContainer.style.display !== 'none') {
+            cardContainer.style.display = 'none';
+        }
+        if (campaignFill.style.width !== '0%') campaignFill.style.width = '0%';
+        if (campaignFill.textContent !== '') campaignFill.textContent = '';
+        if (campaignText.textContent !== '') campaignText.textContent = '';
     }
 
-    if (typeof state.wantedItemsTree !== 'undefined' && typeof renderWantedItems === 'function') {
+    // Re-render wanted queue items when progress updates
+    if (typeof state !== 'undefined' && typeof state.wantedItemsTree !== 'undefined' && typeof renderWantedItems === 'function') {
         renderWantedItems(state.wantedItemsTree);
     }
 }

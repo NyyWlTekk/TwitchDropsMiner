@@ -253,62 +253,93 @@ function handleConnectError(error) {
     }
 }
 
+// Variables for buffering and throttling UI updates
+let pendingStatusText = null;
+let isRafScheduled = false;
 let lastLoggedCampaignProgress = -1;
 
 /**
  * Handles status update payload from server.
  */
 function handleStatusUpdate(data) {
-    if (data && data.status) {
-        const statusText = data.status;
-        let shouldLog = true;
-
-        // Throttle repetitive campaign inventory progress logs in console
-        if (statusText.includes('Adding campaigns to inventory...')) {
-            const match = statusText.match(/\((\d+)\/(\d+)\)/);
-            if (match) {
-                const current = parseInt(match[1], 10);
-                const total = parseInt(match[2], 10);
-                const percent = Math.floor((current / total) * 100);
-
-                // Log only at start, 25% steps, and completion
-                const isQuarterStep = percent % 25 === 0 && percent !== lastLoggedCampaignProgress;
-                shouldLog = current === 1 || current === total || isQuarterStep;
-
-                if (shouldLog) {
-                    lastLoggedCampaignProgress = percent;
-                }
-            }
-        } else {
-            // Reset state when status message changes to something else
-            lastLoggedCampaignProgress = -1;
+    if (!data || !data.status) {
+        if (data) {
+            updateQueueAndState(data);
         }
+        return;
+    }
 
-        if (shouldLog) {
-            console.log('[Status] Received update:', statusText);
-        }
+    const statusText = data.status;
+    let shouldLog = true;
 
-        // Always update UI status text regardless of console logging
-        updateStatus(statusText);
+    // Throttle repetitive campaign inventory progress logs in console
+    if (statusText.startsWith('Adding campaigns to inventory...')) {
+        const match = statusText.match(/\((\d+)\/(\d+)\)/);
+        if (match) {
+            const current = parseInt(match[1], 10);
+            const total = parseInt(match[2], 10);
+            const percent = Math.floor((current / total) * 100);
 
-        // Auto-clear drop UI if status indicates idle or non-mining state
-        const statusLower = statusText.toLowerCase();
-        if (statusLower.includes('idle') || statusLower.includes('no active campaigns') || statusLower.includes('offline')) {
-            if (typeof clearDropProgress === 'function') {
-                clearDropProgress();
+            // Log only at start, 25% steps, and completion
+            const isQuarterStep = percent % 25 === 0 && percent !== lastLoggedCampaignProgress;
+            shouldLog = current === 1 || current === total || isQuarterStep;
+
+            if (shouldLog) {
+                lastLoggedCampaignProgress = percent;
             }
+        }
+    } else {
+        // Reset state when status message changes to something else
+        lastLoggedCampaignProgress = -1;
+    }
+
+    if (shouldLog) {
+        console.log('[Status] Received update:', statusText);
+    }
+
+    // Buffer UI updates using requestAnimationFrame to prevent DOM thrashing
+    scheduleStatusUpdate(statusText);
+
+    // Auto-clear drop UI if status indicates idle or non-mining state
+    const statusLower = statusText.toLowerCase();
+    if (statusLower.includes('idle') || statusLower.includes('no active campaigns') || statusLower.includes('offline')) {
+        if (typeof clearDropProgress === 'function') {
+            clearDropProgress();
         }
     }
 
-    if (data) {
-        if (data.queue_count !== undefined || data.rotation_index !== undefined) {
-            if (typeof state !== 'undefined') {
-                if (data.queue_count !== undefined) state.queue_count = data.queue_count;
-                if (data.rotation_index !== undefined) state.rotation_index = data.rotation_index;
+    updateQueueAndState(data);
+}
+
+/**
+ * Throttles UI status updates to match browser render frequency (60 FPS).
+ */
+function scheduleStatusUpdate(statusText) {
+    pendingStatusText = statusText;
+
+    if (!isRafScheduled) {
+        isRafScheduled = true;
+        requestAnimationFrame(() => {
+            if (pendingStatusText !== null) {
+                updateStatus(pendingStatusText);
+                pendingStatusText = null;
             }
-        }
-        syncAdminState();
+            isRafScheduled = false;
+        });
     }
+}
+
+/**
+ * Helper function to update queue count, rotation index and sync admin state.
+ */
+function updateQueueAndState(data) {
+    if (data.queue_count !== undefined || data.rotation_index !== undefined) {
+        if (typeof state !== 'undefined') {
+            if (data.queue_count !== undefined) state.queue_count = data.queue_count;
+            if (data.rotation_index !== undefined) state.rotation_index = data.rotation_index;
+        }
+    }
+    syncAdminState();
 }
 
 // ----------------------------------------------------------------------------
@@ -552,7 +583,13 @@ function handleChannelsBatchUpdate(data) {
         }
     }
 
-    if (typeof renderChannels === 'function') renderChannels();
+    // Use scheduled/debounced render to prevent DOM thrashing on bulk reloads
+    if (typeof scheduleRenderChannels === 'function') {
+        scheduleRenderChannels();
+    } else if (typeof renderChannels === 'function') {
+        renderChannels();
+    }
+    
     syncAdminState();
 }
 

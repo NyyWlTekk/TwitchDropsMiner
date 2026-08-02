@@ -386,6 +386,7 @@ async def request_login(sid):
 @sio.event
 async def request_reload(sid):
     """Client requested application reload"""
+    logger.info("Received request_reload event from sid=%s", sid)
     if twitch_client:
         from src.config import State
 

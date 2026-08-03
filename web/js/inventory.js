@@ -43,9 +43,10 @@ function renderGameDropdown(searchTerm = '', force = false) {
     const selectedGames = Array.isArray(selectedInventoryGames) ? selectedInventoryGames : [];
     const focusedIdx = typeof gameDropdownFocusedIndex !== 'undefined' ? gameDropdownFocusedIndex : -1;
 
-    // Structural Fingerprint Check: Serialize selected games to capture actual state changes
+    // Structural Fingerprint Check: Serialize filtered and selected games to capture actual state changes
+    const filteredHash = filteredGames.join('|');
     const selectedHash = selectedGames.join('|');
-    const currentHash = `${searchLower}_${filteredGames.length}_${focusedIdx}_${selectedHash}`;
+    const currentHash = `${searchLower}_${filteredHash}_${focusedIdx}_${selectedHash}`;
 
     if (!force && lastGameDropdownHash === currentHash) {
         return;
@@ -69,7 +70,11 @@ function renderGameDropdown(searchTerm = '', force = false) {
         const isFocused = index === focusedIdx;
 
         const item = document.createElement('div');
-        item.className = 'dropdown-item' + (isFocused ? ' focused' : '');
+        // Added 'selected' class so CSS can style the background of checked items
+        item.className = 'dropdown-item' 
+            + (isFocused ? ' focused' : '') 
+            + (isSelected ? ' selected' : '');
+            
         item.dataset.gameName = gameName;
         item.dataset.index = index;
 
@@ -287,7 +292,7 @@ function getInventoryFilters() {
 // Determines the precise lifecycle state of a campaign
 function getCampaignStatus(campaign, now = Date.now()) {
     if (!campaign) {
-        return { isActive: false, isUpcoming: false, isExpired: false, isFinished: false };
+        return { isActive: false, isUpcoming: false, isExpired: false, isFinished: false, isReady: false };
     }
 
     // Bezpečný převod data na timestamp s ochranou proti NaN
@@ -327,11 +332,31 @@ function getCampaignStatus(campaign, now = Date.now()) {
 
     const isFinished = realTotal > 0 && realClaimed >= realTotal;
 
+    // 5. Check Ready To Claim (Natěženo 100 %, nevyzvednuto, kampaň nevypršela)
+    const hasClaimableDrop = dropsList.some(d => {
+        const isClaimed = d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED';
+        if (isClaimed) return false;
+
+        const isClaimableFlag = d.is_claimable || d.claimable || d.isClaimable || d.status === 'READY_TO_CLAIM' || d.status === 'CLAIMABLE';
+        const isProgressFull = (d.current_minutes && d.required_minutes && d.current_minutes >= d.required_minutes);
+
+        return isClaimableFlag || isProgressFull;
+    });
+
+    const isReady = !isExpired && !isFinished && (
+        hasClaimableDrop || 
+        campaign.has_claimable_drops === true || 
+        campaign.is_ready === true || 
+        campaign.status === 'READY' ||
+        campaign.status === 'READY_TO_CLAIM'
+    );
+
     return {
         isActive,
         isUpcoming,
         isExpired,
-        isFinished
+        isFinished,
+        isReady
     };
 }
 
@@ -491,7 +516,7 @@ function clearInventoryFilters() {
 }
 
 // Renders a single benefit item
-function createBenefitItem(benefit, statusClass = '') {
+function renderBenefitItem(benefit, statusClass = '') {
     const className = statusClass ? `benefit-item ${statusClass}` : 'benefit-item';
     
     return makeElement('div', { class: className }, '', el => {
@@ -507,7 +532,7 @@ function createBenefitItem(benefit, statusClass = '') {
 }
 
 // Renders a single drop item with progress and benefits
-function createDropItem(drop, t) {
+function renderDropItem(drop, t) {
     let statusClass = '';
     if (drop.is_claimed) {
         statusClass = 'drop-claimed';
@@ -542,7 +567,7 @@ function createDropItem(drop, t) {
     const benefitsList = makeElement('div', { class: 'benefits-list' });
     if (drop.benefits && drop.benefits.length > 0) {
         drop.benefits.forEach(benefit => {
-            const benefitEl = createBenefitItem(benefit, statusClass);
+            const benefitEl = renderBenefitItem(benefit, statusClass);
             
             const iconHTML = getStatusIconSVG(statusClass);
             if (iconHTML) {
@@ -581,22 +606,27 @@ function createDropItem(drop, t) {
     return dropItem;
 }
 
-function createDropBlock(drop, t) {
-    let statusClass = '';
-    if (drop.is_claimed) statusClass = 'drop-claimed';
-    else if (drop.can_claim) statusClass = 'drop-ready';
-    else if (drop.progress > 0) statusClass = 'drop-active';
-    else statusClass = 'drop-expired';
+function renderDropBlock(drop, t) {
+    let statusClass = 'drop-upcoming';
+    if (drop.is_claimed) {
+        statusClass = 'drop-claimed';
+    } else if (drop.can_claim) {
+        statusClass = 'drop-ready';
+    } else if (drop.is_expired) {
+        statusClass = 'drop-expired';
+    } else if ((drop.progress || 0) > 0 || drop.current_minutes > 0) {
+        statusClass = 'drop-active';
+    }
 
     const dropBlock = document.createElement('div');
     dropBlock.className = `drop-block ${statusClass}`;
-    dropBlock.appendChild(createDropItem(drop, t));
+    dropBlock.appendChild(renderDropItem(drop, t));
 
     return dropBlock;
 }
 
 // Renders header section for a campaign card
-function createCardHeaderSection(campaign, statusClass, t) {
+function renderCardHeaderSection(campaign, statusClass, t) {
     const campaignHeader = makeElement('div', { class: 'campaign-header' });
 
     if (campaign.game_box_art_url) {
@@ -637,7 +667,7 @@ function createCardHeaderSection(campaign, statusClass, t) {
 }
 
 // Renders info section (status, counters, timing)
-function createCardInfoSection(campaign, statusText, t) {
+function renderCardInfoSection(campaign, statusText, t) {
     const infoSection = makeElement('div', { class: 'campaign-info' });
 
     const dropsList = campaign.drops || campaign.time_based_drops || [];
@@ -682,7 +712,7 @@ function createCardInfoSection(campaign, statusText, t) {
 }
 
 // Renders campaign drops section
-function createCardDropsSection(campaign, t) {
+function renderCardDropsSection(campaign, t) {
     const dropsBox = makeElement('div', { class: 'campaign-drops' });
     const currentDrop = (typeof state !== 'undefined' && state.currentDrop) || null;
 
@@ -706,7 +736,7 @@ function createCardDropsSection(campaign, t) {
 
             const hasProgress = !isActivelyMining && !isFinished && current > 0;
 
-            const dropBlock = createDropBlock(drop, t);
+            const dropBlock = renderDropBlock(drop, t);
             
             if (dropId && dropBlock && typeof dropBlock.setAttribute === 'function') {
                 dropBlock.setAttribute('data-drop-id', String(dropId));
@@ -726,15 +756,31 @@ function createCardDropsSection(campaign, t) {
 }
 
 // Builds the final HTML element for a single campaign card
-function createCampaignCard(campaign, t) {
+// Builds the final HTML element for a single campaign card
+function renderCampaignCard(campaign, t) {
     const status = getCampaignStatus(campaign);
+    const isLinked = campaign.linked !== undefined ? campaign.linked : (campaign.is_account_connected !== undefined ? campaign.is_account_connected : true);
 
-    let statusClass = 'expired';
-    let statusText = t.gui?.inventory?.status?.expired || 'Expired';
+    let statusClass = 'upcoming';
+    let statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
 
-    if (status.isFinished) {
+    // Status evaluation hierarchy
+    if (!isLinked) {
+        statusClass = 'not-linked';
+        statusText = t.gui?.inventory?.status?.not_linked || 'Not Linked';
+    } else if (status.isExpired) {
+        statusClass = 'expired';
+        statusText = t.gui?.inventory?.status?.expired || 'Expired';
+    } else if (status.isFinished) {
         statusClass = 'completed';
         statusText = t.gui?.inventory?.status?.completed || 'Completed';
+    } else if (status.isReady) {
+        // Orange status for ready to claim drops
+        statusClass = 'ready';
+        statusText = t.gui?.inventory?.status?.ready || 'Ready to Claim';
+    } else if (campaign.is_mining_in_progress) {
+        statusClass = 'in-progress';
+        statusText = t.gui?.inventory?.status?.in_progress || 'In Progress';
     } else if (status.isActive) {
         statusClass = 'active';
         statusText = t.gui?.inventory?.status?.active || 'Active';
@@ -745,10 +791,10 @@ function createCampaignCard(campaign, t) {
 
     const card = makeElement('div', { class: `campaign-card ${statusClass}` });
     
-    const campaignInfo = createCardInfoSection(campaign, statusText, t);
-    campaignInfo.prepend(createCardHeaderSection(campaign, statusClass, t));
+    const campaignInfo = renderCardInfoSection(campaign, statusText, t);
+    campaignInfo.prepend(renderCardHeaderSection(campaign, statusClass, t));
 
-    const dropsBox = createCardDropsSection(campaign, t);
+    const dropsBox = renderCardDropsSection(campaign, t);
 
     card.replaceChildren(campaignInfo, dropsBox);
     return card;
@@ -786,10 +832,24 @@ function renderInventory(force = false) {
 
         const sortedCampaigns = sortCampaigns(filteredCampaigns);
 
-        // Fingerprint guard
-        const currentHash = `${sortedCampaigns.length}_${sortedCampaigns.map(c => c.id || c.game_name).join(',')}_${JSON.stringify(filters)}`;
+        // Enhanced Fingerprint Guard: Includes campaign state, live progress, claimed counts, account link status, and isReady state
+        const campaignStateFingerprint = sortedCampaigns.map(c => {
+            const id = c.id || c.game_name || '';
+            const progress = c.current_minutes || c.progress || 0;
+            const claimed = c.claimed_drops_count || c.claimed || 0;
+            const status = c.status || '';
+            const isLinked = c.is_account_connected !== undefined ? c.is_account_connected : (c.linked !== undefined ? c.linked : true);
+            
+            // Check if campaign is in READY TO CLAIM state
+            const isReadyState = typeof getCampaignStatus === 'function' ? getCampaignStatus(c).isReady : false;
+
+            return `${id}:${status}:${progress}:${claimed}:${isLinked}:${isReadyState}`;
+        }).join('|');
+
+        const currentHash = `${sortedCampaigns.length}_${campaignStateFingerprint}_${JSON.stringify(filters)}`;
+
         if (!force && lastInventoryRenderHash === currentHash) {
-            console.log('[Inventory Debug] Render skipped (identical data and filters - fingerprint match).');
+            console.log('[Inventory Debug] Render skipped (identical data, live status, and filters - fingerprint match).');
             return;
         }
         lastInventoryRenderHash = currentHash;
@@ -803,14 +863,15 @@ function renderInventory(force = false) {
 
         if (sortedCampaigns.length === 0) {
             console.log('[Inventory Debug] WARNING: Filters rejected ALL campaigns!');
-            container.replaceChildren(makeElement('p', { class: 'empty-message' }, 'No campaigns match the current filters.'));
+            const noMatchMsg = t.gui?.inventory?.no_matching_campaigns || 'No campaigns match the current filters.';
+            container.replaceChildren(makeElement('p', { class: 'empty-message' }, noMatchMsg));
             return;
         }
 
         const fragment = document.createDocumentFragment();
         sortedCampaigns.forEach((campaign, idx) => {
             try {
-                fragment.appendChild(createCampaignCard(campaign, t));
+                fragment.appendChild(renderCampaignCard(campaign, t));
             } catch (err) {
                 console.error(`[Inventory Debug] ERROR creating card for campaign #${idx} (${campaign.game_name}):`, err);
             }

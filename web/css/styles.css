@@ -672,20 +672,49 @@ header h1 {
     display: flex;
     flex-direction: column;
     height: 100%; 
+    transition: border-color 0.2s, background-color 0.2s;
 }
 
-.campaign-card.active { border-color: var(--active-color); }
-.campaign-card.upcoming { border-color: var(--warning-color); }
-.campaign-card.expired { border-color: var(--error-color); }
-.campaign-card.ready { border-color: var(--warning-color); }
+/* Base card status default borders */
+.campaign-card.upcoming { border-color: #444; }
+
+/* Purple highlight for ACTIVE campaigns */
+.campaign-card.active { 
+    border-color: var(--active-color, #9147ff); 
+    background-color: rgba(var(--active-rgb, 145, 71, 255), 0.05);
+}
+
+/* Yellow highlight when mining is actively IN PROGRESS (> 0%) */
+.campaign-card.in-progress { 
+    border-color: var(--warning-color); 
+    background-color: rgba(var(--warning-rgb, 241, 196, 15), 0.05);
+}
+
+/* Orange highlight for READY to claim campaigns */
+.campaign-card.ready { 
+    border-color: #e67e22; 
+    background-color: rgba(230, 126, 34, 0.05);
+}
+
+/* Red highlight for EXPIRED or NOT-LINKED campaigns */
+.campaign-card.expired,
+.campaign-card.not-linked { 
+    border-color: var(--error-color); 
+    background-color: rgba(var(--error-rgb, 231, 76, 60), 0.05);
+}
+
+/* Green highlight for COMPLETED campaigns */
 .campaign-card.completed { 
     border-color: var(--success-color);
-    background-color: rgba(var(--success-rgb), 0.05); 
+    background-color: rgba(var(--success-rgb, 46, 204, 113), 0.05); 
 }
 
-.campaign-card.active .campaign-status { color: var(--active-color); }
-.campaign-card.upcoming .campaign-status { color: var(--warning-color); }
-.campaign-card.expired .campaign-status { color: var(--error-color); }
+/* Status Icon & Text Colors */
+.campaign-card.active .campaign-status { color: var(--active-color, #9147ff); }
+.campaign-card.in-progress .campaign-status { color: var(--warning-color); }
+.campaign-card.ready .campaign-status { color: #e67e22; }
+.campaign-card.expired .campaign-status,
+.campaign-card.not-linked .campaign-status { color: var(--error-color); }
 .campaign-card.completed .campaign-status { color: var(--success-color); }
 
 .campaign-header-icon { 
@@ -697,12 +726,17 @@ header h1 {
     fill: currentColor; 
     stroke: currentColor; 
 }
-.campaign-card.active .campaign-header-icon { color: var(--active-color); }
-.campaign-card.upcoming .campaign-header-icon { color: var(--warning-color); }
-.campaign-card.expired .campaign-header-icon { color: var(--error-color); }
+
+/* Header icon colors strictly adhering to card state */
+.campaign-card.active .campaign-header-icon { color: var(--active-color, #9147ff); }
+.campaign-card.in-progress .campaign-header-icon { color: var(--warning-color); }
+.campaign-card.ready .campaign-header-icon { color: #e67e22; }
+.campaign-card.expired .campaign-header-icon,
+.campaign-card.not-linked .campaign-header-icon { color: var(--error-color); }
 .campaign-card.completed .campaign-header-icon { color: var(--success-color); }
 .campaign-status .campaign-header-icon { color: inherit; }
 
+/* Header Layout & Dynamic Status Tints */
 .campaign-header {
     padding: 10px 12px; 
     background: var(--bg-secondary);
@@ -710,6 +744,29 @@ header h1 {
     align-items: center;
     flex-direction: row;
     gap: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    transition: background-color 0.2s;
+}
+
+.campaign-card.active .campaign-header {
+    background-color: rgba(var(--active-rgb, 145, 71, 255), 0.12);
+}
+
+.campaign-card.in-progress .campaign-header {
+    background-color: rgba(var(--warning-rgb, 241, 196, 15), 0.12);
+}
+
+.campaign-card.ready .campaign-header {
+    background-color: rgba(230, 126, 34, 0.12);
+}
+
+.campaign-card.completed .campaign-header {
+    background-color: rgba(var(--success-rgb, 46, 204, 113), 0.12);
+}
+
+.campaign-card.expired .campaign-header,
+.campaign-card.not-linked .campaign-header {
+    background-color: rgba(var(--error-rgb, 231, 76, 60), 0.12);
 }
 
 .campaign-text-wrapper {
@@ -853,10 +910,18 @@ header h1 {
     border-radius: 0 4px 4px 0;
 }
 
-.campaign-group-container.ready { border-left-color: var(--warning-color); }
-.campaign-group-container.active { border-left-color: var(--active-color); }
+/* Status accent borders for drop group containers */
+.campaign-group-container.active { border-left-color: var(--active-color, #9147ff); }
+.campaign-group-container.in-progress { border-left-color: var(--warning-color); }
+.campaign-group-container.ready { border-left-color: #e67e22; }
 .campaign-group-container.claimed { border-left-color: var(--success-color); }
+.campaign-group-container.expired,
+.campaign-card.expired .campaign-group-container,
+.campaign-card.not-linked .campaign-group-container { 
+    border-left-color: var(--error-color); 
+}
 
+/* Drop items inside campaign groups */
 .campaign-group-container .wanted-drop-item {
     background: transparent !important;
     border: none !important;
@@ -878,6 +943,12 @@ header h1 {
     border-bottom: 1px solid #333;
 }
 
+/* Colored titles for expired or non-linked campaigns */
+.campaign-card.expired .campaign-drop-title,
+.campaign-card.not-linked .campaign-drop-title {
+    color: var(--error-color);
+}
+
 .empty-message-small {
     color: var(--text-secondary);
     font-style: italic;
@@ -885,7 +956,6 @@ header h1 {
     padding: 20px;
     grid-column: 1 / -1;
 }
-
 
 /* ===================================================================
    09. DROP PROGRESS & BENEFIT ITEMS

@@ -388,7 +388,6 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
     const activeCampaignIds = new Set();
     const activeDropIds = new Set();
 
-    // Check primary active drop
     const currentDrop = state?.currentDrop || state?.current_drop;
     if (currentDrop) {
         if (currentDrop.campaign_id) activeCampaignIds.add(String(currentDrop.campaign_id).trim());
@@ -397,7 +396,6 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
         if (currentDrop.drop_id) activeDropIds.add(String(currentDrop.drop_id).trim());
     }
 
-    // Check active campaigns queue (for parallel mining)
     const campaignQueue = state?.activeCampaignsQueue || state?.active_campaigns_queue || [];
     if (Array.isArray(campaignQueue)) {
         campaignQueue.forEach(ac => {
@@ -406,7 +404,6 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
         });
     }
 
-    // Check active drops queue (for parallel mining)
     const dropQueue = state?.activeDropsQueue || state?.active_drops_queue || [];
     if (Array.isArray(dropQueue)) {
         dropQueue.forEach(ad => {
@@ -454,7 +451,9 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
         const channelGame = watchedChannel.game_name || watchedChannel.game || watchedChannel.game_title;
         if (channelGame && gameName) {
             const isSameGame = channelGame.trim().toLowerCase() === gameName.trim().toLowerCase();
-            if (isSameGame && (watchedChannel.is_online || watchedChannel.online || state?.isMining)) {
+            // FIX: In manual mode, state.isMining is false. 
+            // We just verify if the user is currently watching the game stream.
+            if (isSameGame) {
                 return true;
             }
         }
@@ -653,7 +652,8 @@ function syncWantedItemsProgress(data) {
         state.wantedItemsTree = [];
     }
 
-    const sharedCurrentMins = Number(data.current_minutes) || 0;
+    // FIX: Allow sharedCurrentMins to be undefined if no progress data was given
+    const sharedCurrentMins = data.current_minutes !== undefined ? Number(data.current_minutes) : undefined;
     let anyDomUpdated = false;
 
     const activeGameName = data.game_name || state.currentDrop?.game_name || state.current_drop?.game_name;
@@ -676,11 +676,15 @@ function syncWantedItemsProgress(data) {
                 );
 
                 if (matchedDrop) {
-                    // Unified order of keys exactly according to renderDropItemElement
                     const domDropId = getDropUniqueId(matchedDrop);
                     
-                    // Use updated minutes from the object, or fallback to sharedCurrentMins
-                    const currentMins = Number(matchedDrop.current_minutes ?? matchedDrop.currentMinutes ?? sharedCurrentMins);
+                    // Use updated minutes from the object, fallback to shared if valid, otherwise preserve old
+                    let currentMins = matchedDrop.current_minutes ?? matchedDrop.currentMinutes;
+                    if (currentMins === undefined && sharedCurrentMins !== undefined) {
+                        currentMins = sharedCurrentMins;
+                    }
+                    currentMins = Number(currentMins || 0);
+
                     const reqMins = Number(matchedDrop.required_minutes || matchedDrop.requiredMinutes || 0);
                     const isClaimed = Boolean(matchedDrop.is_claimed ?? matchedDrop.claimed ?? false);
 
@@ -697,7 +701,6 @@ function syncWantedItemsProgress(data) {
         processGameGroupSync(gameGroup);
     });
 
-    // Trigger fallback ONLY if the container in DOM is completely empty but we have data
     const container = document.getElementById('wanted-items-list');
     if (!anyDomUpdated && container && container.children.length === 0 && state.wantedItemsTree.length > 0) {
         renderWantedItems(state.wantedItemsTree, true);
@@ -713,12 +716,88 @@ function normalizeSyncData(data) {
     if (typeof data === 'string') {
         const dropId = data;
 
-        const activeDrop = (state.activeDropsQueue || []).find(d => String(d.drop_id || d.id) === String(dropId)) ||
-                           ((state.currentDrop && String(state.currentDrop.drop_id || state.currentDrop.id) === String(dropId)) ? state.currentDrop : null);
+        // 1. Check active queues first
+        let activeDrop = (state.activeDropsQueue || []).find(d => String(d.drop_id || d.id) === String(dropId)) ||
+                         ((state.currentDrop && String(state.currentDrop.drop_id || state.currentDrop.id) === String(dropId)) ? state.currentDrop : null);
 
-        return activeDrop ? { ...activeDrop } : { drop_id: dropId, current_minutes: activeDrop?.current_minutes || 0 };
+        // 2. Fallback to existing tree to avoid wiping progress to 0 in manual mode
+        if (!activeDrop && state.wantedItemsTree) {
+            for (const group of state.wantedItemsTree) {
+                for (const camp of (group.campaigns || [])) {
+                    const found = (camp.drops || []).find(d => String(d.id || d.drop_id || d.uuid) === String(dropId));
+                    if (found) {
+                        activeDrop = found;
+                        break;
+                    }
+                }
+                if (activeDrop) break;
+            }
+        }
+
+        // FIX: Do not fallback to 0 if not found, let it be undefined so it won't overwrite progress
+        const currentMins = activeDrop && activeDrop.current_minutes !== undefined 
+            ? Number(activeDrop.current_minutes) 
+            : undefined;
+            
+        return activeDrop ? { ...activeDrop, current_minutes: currentMins } : { drop_id: dropId, current_minutes: currentMins };
     }
     return data;
+}
+
+/**
+ * Updates drops and stats for a single campaign and synchronizes progress across its drops.
+ */
+function updateSingleCampaign(campaign, data, sharedCurrentMins) {
+    const campaignId = campaign.campaign_id || campaign.id;
+
+    const hasMatchingDrop = (campaign.drops || []).some(d => {
+        const dId = d.drop_id || d.id;
+        return (data.drop_id && String(dId) === String(data.drop_id)) || (data.drop_name && d.name === data.drop_name);
+    });
+
+    const isCampaignMatch = (data.campaign_id && String(campaignId) === String(data.campaign_id)) || hasMatchingDrop;
+
+    if (!isCampaignMatch || !campaign.drops || !Array.isArray(campaign.drops)) return false;
+
+    let dropChanged = false;
+
+    campaign.drops.forEach((drop) => {
+        const dropId = drop.drop_id || drop.id;
+        const isMatchingDrop = (data.drop_id && String(dropId) === String(data.drop_id)) || 
+                               (data.drop_name && drop.name === data.drop_name);
+
+        const reqMins = Number(drop.required_minutes) || 0;
+
+        if (isMatchingDrop) {
+            // FIX: Only apply sharedCurrentMins if it was actually provided in sync data!
+            if (sharedCurrentMins !== undefined && !Number.isNaN(sharedCurrentMins)) {
+                if (drop.current_minutes !== sharedCurrentMins) {
+                    dropChanged = true;
+                }
+                drop.current_minutes = sharedCurrentMins;
+
+                if (reqMins > 0) {
+                    const effectiveMins = Math.min(sharedCurrentMins, reqMins);
+                    drop.progress = Math.min(100, (effectiveMins / reqMins) * 100);
+                    drop.can_claim = sharedCurrentMins >= reqMins && !drop.is_claimed;
+                }
+            }
+
+            if (data.is_claimed !== undefined && drop.is_claimed !== data.is_claimed) {
+                drop.is_claimed = data.is_claimed;
+                dropChanged = true;
+            }
+        } else if (drop.is_claimed) {
+            if (drop.current_minutes !== reqMins) {
+                drop.current_minutes = reqMins;
+                drop.progress = 100;
+                dropChanged = true;
+            }
+        }
+    });
+
+    campaign.claimed_drops_count = campaign.drops.filter(d => d.is_claimed).length;
+    return dropChanged;
 }
 
 /**

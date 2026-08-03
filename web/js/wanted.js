@@ -111,21 +111,23 @@ function evaluateCampaignMiningState(campaign, gameName) {
  * Creates a visual status badge/indicator element for active mining or progress state.
  */
 function renderCampaignStatusIndicatorElement(isActivelyMining, hasProgress) {
+    const t = state?.translations?.gui?.wanted;
+
     if (isActivelyMining) {
         const badgeEl = makeElement('span', { 
-            class: 'status-tag tag-mining',
-            style: 'margin-left: 6px;'
+            class: 'status-tag tag-mining'
         });
-        badgeEl.innerHTML = `${getStatusIconSVG('drop-active')} Mining`;
+        const label = t?.mining || 'Mining';
+        badgeEl.innerHTML = `${getStatusIconSVG('drop-active')} ${label}`;
         return badgeEl;
     }
     
     if (hasProgress) {
         const badgeEl = makeElement('span', { 
-            class: 'status-tag tag-in-progress',
-            style: 'margin-left: 6px;'
+            class: 'status-tag tag-in-progress'
         });
-        badgeEl.innerHTML = `${getStatusIconSVG('drop-progress')} In Progress`;
+        const label = t?.in_progress || 'In Progress';
+        badgeEl.innerHTML = `${getStatusIconSVG('drop-progress')} ${label}`;
         return badgeEl;
     }
 

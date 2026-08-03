@@ -20,6 +20,7 @@ function renderWantedItems(tree, force = false) {
             clearTimeout(wantedRenderDebounceTimer);
             wantedRenderDebounceTimer = null;
         }
+        lastRenderedTreeHash = '';
         performRenderWantedItems(state.wantedItemsTree);
         return;
     }
@@ -218,10 +219,10 @@ function renderCampaignHeaderElement(campaign, drops, campaignState = null, exis
     const startsAt = campaign.starts_at || campaign.startsAt || '';
     const endsAt = campaign.ends_at || campaign.endsAt || '';
 
-    // Complete Hash: Zahrnuje kompletně všechny proměnné, které ovlivňují HTML výstup
+    // Complete Hash: Includes absolutely all variables that affect the HTML output
     const currentHash = `${campaign.id || campaignName}_${campaignUrl}_${claimedCount}_${totalCount}_${campaignState?.isActivelyMining}_${campaignState?.hasProgress}_${startsAt}_${endsAt}`;
 
-    // Pokud existující hlavička má stejný hash, vracíme ji a ukončujeme re-render
+    // If the existing header has the same hash, return it and stop the re-render
     if (existingHeader && existingHeader.dataset.hash === currentHash) {
         return existingHeader;
     }
@@ -259,10 +260,10 @@ function renderCampaignHeaderElement(campaign, drops, campaignState = null, exis
         }
     });
 
-    // Uložení nového hashu do elementu
+    // Save the new hash to the element
     newHeader.dataset.hash = currentHash;
 
-    // Pokud byl předán starý element spojený s DOMem, nahradíme ho
+    // If an old element connected to the DOM was passed, replace it
     if (existingHeader && existingHeader.parentNode) {
         existingHeader.replaceWith(newHeader);
     }
@@ -295,34 +296,31 @@ function renderCampaignBodyElement(drops, campaignState = null) {
  * Creates an individual drop item element with state sync for active mining progress.
  */
 function renderDropItemElement(drop, index = 1, campaignState = null) {
-    const rawUuid = drop.id || drop.drop_id || (typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : `drop-${index}`);
+    // 1. More rigorous ID extraction to avoid fallback to drop-1
+    const rawUuid = drop.id || drop.drop_id || drop.uuid || drop.benefit_id || 
+                    (typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : `drop-${index}`);
+    
     const textId = typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : rawUuid;
 
     const isClaimed = Boolean(drop.is_claimed ?? drop.isClaimed ?? drop.claimed ?? false);
     const canClaim = Boolean(drop.can_claim ?? drop.canClaim ?? false);
     
-    // 1. Basic minutes extraction from drop object
+    // Base minutes from the drop object
     let current = Math.round(Number(drop.current_minutes ?? drop.currentMinutes ?? drop.current_time ?? drop.progress ?? 0));
     const required = Number(drop.required_minutes ?? drop.requiredMinutes ?? drop.required_time ?? drop.needed_minutes ?? drop.duration ?? drop.total_minutes ?? 0);
 
-    // 2. Sync live time from active mining state (state.currentDrop)
+    // 2. Fix for live time synchronization (ONLY for the specific active drop!)
     const activeDrop = state?.currentDrop || state?.current_drop;
     if (activeDrop && !isClaimed) {
-        const activeDropId = activeDrop.drop_id || activeDrop.id;
-        const activeCampaignId = activeDrop.campaign_id || activeDrop.parent_campaign_id || state?.currentDrop?.campaign_id;
+        const activeDropId = String(activeDrop.drop_id || activeDrop.id || '').trim();
+        const dropId = String(rawUuid).trim();
 
-        const dropId = drop.id || drop.drop_id;
-        const dropCampaignId = drop.campaign_id || drop.parent_campaign_id || campaignState?.campaignId;
+        const isDirectActiveDrop = activeDropId && dropId && activeDropId === dropId;
 
-        const isDirectActiveDrop = dropId && activeDropId && String(dropId).trim() === String(activeDropId).trim();
-        const isSameCampaign = (campaignState?.isActivelyMining) || (dropCampaignId && activeCampaignId && String(dropCampaignId).trim() === String(activeCampaignId).trim());
-
-        // If active drop or campaign is currently mining, take higher live minutes from state
-        if (isDirectActiveDrop || isSameCampaign) {
+        // We sync live time exclusively for the drop that is actually being mined!
+        if (isDirectActiveDrop) {
             const liveMinutes = Math.round(Number(activeDrop.current_minutes ?? activeDrop.currentMinutes ?? activeDrop.current_time ?? activeDrop.progress ?? 0));
-            if (liveMinutes > current) {
-                current = liveMinutes;
-            }
+            current = liveMinutes;
         }
     }
 
@@ -378,53 +376,88 @@ function renderDropItemElement(drop, index = 1, campaignState = null) {
 // ==================== 3. State & Active Checks ====================
 
 /**
- * Checks if a campaign is actively mining, with priority on exact ID matching from the state.
+ * Checks if a campaign is actively mining, taking into account single active drop,
+ * active queues (parallel mining), and current watched channel.
  */
 function checkIfCampaignIsActive(campaignId, drops, gameName) {
-    if (!campaignId && (!drops || drops.length === 0)) return false;
+    if (!campaignId && (!drops || !drops.length)) return false;
 
-    // 1. Safely extract active IDs from state
-    const activeDropId = state?.currentDrop?.drop_id || state?.currentDrop?.id || 
-                         state?.current_drop?.drop_id || state?.current_drop?.id;
-                         
-    const activeCampaignId = state?.currentDrop?.campaign_id || state?.current_drop?.campaign_id;
+    const campaignIdStr = campaignId ? String(campaignId).trim() : null;
 
-    const hasSpecificActiveTarget = Boolean(activeCampaignId || activeDropId);
+    // 1. Collect ALL active Campaign IDs and Drop IDs from state & active queues
+    const activeCampaignIds = new Set();
+    const activeDropIds = new Set();
 
-    // 2. Direct comparison by campaign ID
-    if (activeCampaignId && campaignId && String(campaignId).trim() === String(activeCampaignId).trim()) {
+    // Check primary active drop
+    const currentDrop = state?.currentDrop || state?.current_drop;
+    if (currentDrop) {
+        if (currentDrop.campaign_id) activeCampaignIds.add(String(currentDrop.campaign_id).trim());
+        if (currentDrop.parent_campaign_id) activeCampaignIds.add(String(currentDrop.parent_campaign_id).trim());
+        if (currentDrop.id) activeDropIds.add(String(currentDrop.id).trim());
+        if (currentDrop.drop_id) activeDropIds.add(String(currentDrop.drop_id).trim());
+    }
+
+    // Check active campaigns queue (for parallel mining)
+    const campaignQueue = state?.activeCampaignsQueue || state?.active_campaigns_queue || [];
+    if (Array.isArray(campaignQueue)) {
+        campaignQueue.forEach(ac => {
+            const acId = ac.campaign_id || ac.id;
+            if (acId) activeCampaignIds.add(String(acId).trim());
+        });
+    }
+
+    // Check active drops queue (for parallel mining)
+    const dropQueue = state?.activeDropsQueue || state?.active_drops_queue || [];
+    if (Array.isArray(dropQueue)) {
+        dropQueue.forEach(ad => {
+            const adCampId = ad.campaign_id || ad.parent_campaign_id;
+            if (adCampId) activeCampaignIds.add(String(adCampId).trim());
+
+            const adDropId = ad.drop_id || ad.id;
+            if (adDropId) activeDropIds.add(String(adDropId).trim());
+        });
+    }
+
+    // 2. Direct match by campaign ID
+    if (campaignIdStr && activeCampaignIds.has(campaignIdStr)) {
         return true;
     }
 
-    // 3. Direct comparison by drop ID inside drops array
-    if (activeDropId && drops && drops.length > 0) {
+    // 3. Direct match by drop ID inside drops array
+    if (drops && drops.length > 0 && activeDropIds.size > 0) {
         const hasMatchingDrop = drops.some(drop => {
             const dropId = drop.id || drop.drop_id;
-            return dropId && String(dropId).trim() === String(activeDropId).trim();
+            return dropId && activeDropIds.has(String(dropId).trim());
         });
         if (hasMatchingDrop) {
             return true;
         }
     }
 
-    // If a specific active campaign/drop exists in state but doesn't match this campaign,
-    // do not fall back to game matching (another campaign in the same game is actively mining).
-    if (hasSpecificActiveTarget) {
-        return false;
-    }
-
-    // 4. Secondary fallback check by game name (only used when no specific active target ID exists in state)
-    let currentWatchedGame = null;
+    // 4. Secondary check against watched channel
+    let watchedChannel = null;
     if (typeof getWatchedChannelObject === 'function') {
-        const wObj = getWatchedChannelObject();
-        if (wObj) currentWatchedGame = wObj.game_name || wObj.game || wObj.game_title;
+        watchedChannel = getWatchedChannelObject();
     }
-    if (!currentWatchedGame) {
-        currentWatchedGame = state?.watchedChannel?.game || state?.currentChannel?.game || state?.watching_channel?.game;
+    if (!watchedChannel) {
+        watchedChannel = state?.watchedChannel || state?.currentChannel || state?.watching_channel;
     }
 
-    if (currentWatchedGame && gameName) {
-        return currentWatchedGame.trim().toLowerCase() === gameName.trim().toLowerCase();
+    if (watchedChannel) {
+        // Match by campaign ID attached to watched channel
+        const channelCampId = watchedChannel.campaign_id || watchedChannel.campaignId;
+        if (campaignIdStr && channelCampId && String(channelCampId).trim() === campaignIdStr) {
+            return true;
+        }
+
+        // Match by game name if channel is currently being watched
+        const channelGame = watchedChannel.game_name || watchedChannel.game || watchedChannel.game_title;
+        if (channelGame && gameName) {
+            const isSameGame = channelGame.trim().toLowerCase() === gameName.trim().toLowerCase();
+            if (isSameGame && (watchedChannel.is_online || watchedChannel.online || state?.isMining)) {
+                return true;
+            }
+        }
     }
 
     return false;
@@ -437,12 +470,12 @@ function checkIfCampaignHasProgress(drops, isActivelyMining) {
     if (isActivelyMining) return false;
     
     return drops.some(d => {
-        // Bezpečné vytažení minut s fallbacky na různé formáty zápisu v API/datech
+        // Safe extraction of minutes with fallbacks to different formats in API/data
         const current = Math.round(
             d.current_minutes ?? d.currentMinutes ?? d.current_time ?? d.progress ?? 0
         );
         
-        // Bezpečné ověření, zda je drop claimnutý
+        // Safe check whether the drop is claimed
         const isClaimed = d.is_claimed ?? d.isClaimed ?? d.claimed ?? false;
 
         return current > 0 && !isClaimed;
@@ -453,16 +486,36 @@ function checkIfCampaignHasProgress(drops, isActivelyMining) {
  * Checks if parallel mining is active in the game group based on active queues.
  */
 function checkParallelMiningState(gameGroup) {
-    if (!gameGroup || !gameGroup.campaigns) return false;
+    if (!gameGroup || !Array.isArray(gameGroup.campaigns)) return false;
+
+    // Retrieve active queues with fallbacks for both naming conventions
+    const activeCampaigns = state?.activeCampaignsQueue || state?.active_campaigns_queue || [];
+    const activeDrops = state?.activeDropsQueue || state?.active_drops_queue || [];
 
     const activeCampaignsInGroup = gameGroup.campaigns.filter(c => {
         const cId = c.campaign_id || c.id;
-        const isInActiveQueue = (state.activeCampaignsQueue || []).some(ac => String(ac.campaign_id || ac.id) === String(cId));
-        const hasActiveDrop = (state.activeDropsQueue || []).some(ad => {
-            const adCampId = ad.campaign_id || ad.parent_campaign_id;
-            if (adCampId && String(adCampId) === String(cId)) return true;
-            return (c.drops || []).some(d => String(d.drop_id || d.id) === String(ad.drop_id || ad.id));
+        if (!cId) return false;
+
+        const cleanCId = String(cId).trim();
+
+        // 1. Check if campaign exists in active campaigns queue
+        const isInActiveQueue = activeCampaigns.some(ac => {
+            const acId = ac.campaign_id || ac.id;
+            return acId && String(acId).trim() === cleanCId;
         });
+
+        // 2. Check if any active drop in queue belongs to this campaign
+        const hasActiveDrop = activeDrops.some(ad => {
+            const adCampId = ad.campaign_id || ad.parent_campaign_id;
+            if (adCampId && String(adCampId).trim() === cleanCId) return true;
+
+            const adDropId = ad.drop_id || ad.id;
+            return adDropId && (c.drops || []).some(d => {
+                const dId = d.drop_id || d.id;
+                return dId && String(dId).trim() === String(adDropId).trim();
+            });
+        });
+
         return isInActiveQueue || hasActiveDrop;
     });
 
@@ -529,7 +582,7 @@ function formatCampaignDates(startIso, endIso) {
  * Generates a consistent unique ID for a drop item element.
  */
 function getDropUniqueId(drop, index = 1) {
-    return drop.drop_id || drop.id || `drop-${index}-${drop.name}`;
+    return String(drop.id || drop.drop_id || drop.uuid || `drop-${index}`).trim();
 }
 
 
@@ -539,20 +592,32 @@ function getDropUniqueId(drop, index = 1) {
  * Updates a specific drop status in the DOM directly if target element is found.
  */
 function updateDropStatusInDOM(dropId, currentMins, requiredMins, isClaimed) {
-    if (!dropId) return false;
+    if (!dropId) {
+        return false;
+    }
 
-    const escapedId = CSS.escape(String(dropId));
+    const rawId = String(dropId).trim();
+    const escapedId = CSS.escape(rawId);
+    
+    // Try finding by data-drop-id or data-text-id
     let dropEl = document.querySelector(`.wanted-drop-item[data-drop-id="${escapedId}"]`);
     if (!dropEl) {
         dropEl = document.querySelector(`.wanted-drop-item[data-text-id="${escapedId}"]`);
     }
-    if (!dropEl) return false;
+
+    // FIX: If the element does not exist in the DOM (e.g. hidden campaign), silently return false 
+    // and DO NOT SPAM console.warn, which could trigger fallback re-renders.
+    if (!dropEl) {
+        return false;
+    }
 
     const statusEl = dropEl.querySelector('.wanted-drop-status');
-    if (!statusEl) return false;
+    if (!statusEl) {
+        return false;
+    }
 
     currentMins = Math.round(currentMins || 0);
-    requiredMins = requiredMins || 0;
+    requiredMins = Number(requiredMins) || 0;
 
     let newHTML = '';
     if (isClaimed) {
@@ -562,10 +627,17 @@ function updateDropStatusInDOM(dropId, currentMins, requiredMins, isClaimed) {
         const label = state.translations?.gui?.wanted?.ready || 'Ready to claim!';
         newHTML = `<span class="status-tag tag-ready">${getStatusIconSVG('drop-ready')} ${label}</span>`;
     } else if (requiredMins > 0) {
-        newHTML = `<span class="status-tag tag-progress">${getStatusIconSVG('drop-active')} ${currentMins} / ${requiredMins} min</span>`;
+        const progressPercent = Math.min(100, Math.max(0, Math.round((currentMins / requiredMins) * 100)));
+        newHTML = `
+            <span class="status-tag tag-progress">${getStatusIconSVG('drop-active')} ${currentMins} / ${requiredMins} min</span>
+            <div class="wanted-drop-progress">
+                <div class="wanted-drop-progress-bar" style="width: ${progressPercent}%;"></div>
+            </div>
+        `;
     }
 
-    if (statusEl.innerHTML !== newHTML) {
+    // Direct DOM update only if content actually changed
+    if (statusEl.innerHTML.trim() !== newHTML.trim()) {
         statusEl.innerHTML = newHTML;
     }
     return true;
@@ -585,7 +657,7 @@ function syncWantedItemsProgress(data) {
     let anyDomUpdated = false;
 
     const activeGameName = data.game_name || state.currentDrop?.game_name || state.current_drop?.game_name;
-    const targetDropId = data.drop_id || data.id;
+    const targetDropId = data.drop_id || data.id || data.uuid;
 
     state.wantedItemsTree.forEach((gameGroup) => {
         if (!gameGroup.campaigns || !Array.isArray(gameGroup.campaigns)) return;
@@ -593,16 +665,26 @@ function syncWantedItemsProgress(data) {
         const isThisGameActive = activeGameName && gameGroup.game_name === activeGameName;
 
         gameGroup.campaigns.forEach((campaign) => {
-            const updated = updateSingleCampaign(campaign, data, sharedCurrentMins);
-            if (updated && targetDropId) {
+            // Update state tree structure
+            updateSingleCampaign(campaign, data, sharedCurrentMins);
+
+            if (targetDropId) {
+                const targetIdStr = String(targetDropId).trim();
                 const matchedDrop = campaign.drops?.find(d => 
-                    String(d.drop_id || d.id || '') === String(targetDropId) ||
+                    String(d.id || d.drop_id || d.uuid || '').trim() === targetIdStr ||
                     (data.drop_name && d.name === data.drop_name)
                 );
 
                 if (matchedDrop) {
-                    const domDropId = matchedDrop.drop_id || matchedDrop.id || targetDropId;
-                    if (updateDropStatusInDOM(domDropId, sharedCurrentMins, matchedDrop.required_minutes, matchedDrop.is_claimed)) {
+                    // Unified order of keys exactly according to renderDropItemElement
+                    const domDropId = getDropUniqueId(matchedDrop);
+                    
+                    // Use updated minutes from the object, or fallback to sharedCurrentMins
+                    const currentMins = Number(matchedDrop.current_minutes ?? matchedDrop.currentMinutes ?? sharedCurrentMins);
+                    const reqMins = Number(matchedDrop.required_minutes || matchedDrop.requiredMinutes || 0);
+                    const isClaimed = Boolean(matchedDrop.is_claimed ?? matchedDrop.claimed ?? false);
+
+                    if (updateDropStatusInDOM(domDropId, currentMins, reqMins, isClaimed)) {
                         anyDomUpdated = true;
                     }
                 }
@@ -615,8 +697,11 @@ function syncWantedItemsProgress(data) {
         processGameGroupSync(gameGroup);
     });
 
-    // Schedule debounced render if needed (will be skipped automatically if tree hash hasn't structurally changed)
-    renderWantedItems(state.wantedItemsTree);
+    // Trigger fallback ONLY if the container in DOM is completely empty but we have data
+    const container = document.getElementById('wanted-items-list');
+    if (!anyDomUpdated && container && container.children.length === 0 && state.wantedItemsTree.length > 0) {
+        renderWantedItems(state.wantedItemsTree, true);
+    }
 
     return anyDomUpdated;
 }
@@ -725,21 +810,28 @@ function updateGameGroupBadge(gameName, totalRemainingMins) {
     }
 }
 
+// ==================== 6. Icons & Assets ====================
 
-
-// NEED REWORK
-
+/**
+ * Returns consistent SVG assets mapped by status class.
+ */
 function getStatusIconSVG(statusClass) {
+    const svgCheck = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`;
+    const svgBox = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`;
+    const svgCross = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
+    const svgClock = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`;
+
     const icons = {
-        'completed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
-        'ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
-        'drop-claimed': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
-        'drop-ready': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`,
-        'drop-expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`,
-        'drop-active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
-        'active': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
-        'upcoming': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
-        'expired': `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`
+        'completed': svgCheck,
+        'drop-claimed': svgCheck,
+        'ready': svgBox,
+        'drop-ready': svgBox,
+        'drop-expired': svgCross,
+        'expired': svgCross,
+        'drop-active': svgClock,
+        'active': svgClock,
+        'upcoming': svgClock
     };
+    
     return icons[statusClass] || '';
 }

@@ -27,7 +27,6 @@ if (state.campaignRotationIndex === undefined) state.campaignRotationIndex = 0;
 if (!state.activeDropsQueue) state.activeDropsQueue = [];
 if (state.dropRotationIndex === undefined) state.dropRotationIndex = 0;
 if (!state.rotationTimer) state.rotationTimer = null;
-if (!state.countdownTimer) state.countdownTimer = null;
 if (!state.campaigns) state.campaigns = {};
 
 let dropTotalSeconds = 0;
@@ -53,7 +52,6 @@ function isClaimed(item) {
 function getCampaignAndDrops(queueItem) {
     if (!queueItem) return { campaign: null, drops: [] };
 
-    // Helper to normalize drops structure and inject parent campaign ID into children
     const normalizeDrops = (dropsData, parentCampId) => {
         if (!dropsData) return [];
         const dropsArr = Array.isArray(dropsData) ? dropsData : Object.values(dropsData);
@@ -65,7 +63,6 @@ function getCampaignAndDrops(queueItem) {
         });
     };
 
-    // Extract campaign ID with fallback for both camelCase and snake_case
     const itemCampId = queueItem.campaign_id || queueItem.campaignId || queueItem.id || '';
 
     if (queueItem.drops) {
@@ -79,11 +76,9 @@ function getCampaignAndDrops(queueItem) {
         let found = null;
         const campaigns = state.campaigns;
 
-        // 1. Direct O(1) lookup attempt if campaigns is an object keyed by ID
         if (!Array.isArray(campaigns) && campaigns[itemCampId]) {
             found = campaigns[itemCampId];
         } else {
-            // 2. Fast iteration without allocating Object.values() array
             if (Array.isArray(campaigns)) {
                 for (let i = 0; i < campaigns.length; i++) {
                     const c = campaigns[i];
@@ -114,7 +109,6 @@ function getCampaignAndDrops(queueItem) {
         }
     }
 
-    // Fallback: single drop item (ensure campaign ID is preserved)
     const normalizedFallback = itemCampId ? { ...queueItem, campaign_id: itemCampId, campaignId: itemCampId } : queueItem;
     return { campaign: queueItem, drops: [normalizedFallback] };
 }
@@ -164,12 +158,10 @@ function formatTime(secs) {
 function extractUrlFromObject(obj) {
     if (!obj) return null;
 
-    // Direct properties lookup
     let url = obj.image_url || obj.reward_image_url || obj.icon_url || obj.benefit_icon_url || 
               obj.image || obj.thumbnail || obj.url;
     if (url) return url;
 
-    // Nested reward or benefit objects
     if (obj.reward) {
         url = obj.reward.image_url || obj.reward.icon_url;
         if (url) return url;
@@ -180,7 +172,6 @@ function extractUrlFromObject(obj) {
         if (url) return url;
     }
 
-    // Benefits array fallback
     const benefits = obj.benefits;
     if (Array.isArray(benefits) && benefits.length > 0) {
         const b = benefits[0];
@@ -190,7 +181,6 @@ function extractUrlFromObject(obj) {
         }
     }
 
-    // GraphQL / Edge structures
     const benefitEdges = obj.benefit_edges;
     if (Array.isArray(benefitEdges) && benefitEdges.length > 0) {
         const node = benefitEdges[0]?.node;
@@ -209,17 +199,14 @@ function extractUrlFromObject(obj) {
 function resolveDropRewardImageUrl(data, targetId = null) {
     if (!data) return null;
 
-    // 1. Try resolving directly from the passed data object
     let rewardImgUrl = extractUrlFromObject(data);
     if (rewardImgUrl) return rewardImgUrl;
 
-    // 2. Fallback lookup in state.campaigns if image is missing and IDs are provided
     const campId = data.campaign_id;
     if (targetId && state && state.campaigns && campId) {
         let camp = null;
         const campaigns = state.campaigns;
 
-        // O(1) lookup attempt
         if (!Array.isArray(campaigns) && campaigns[campId]) {
             camp = campaigns[campId];
         } else if (Array.isArray(campaigns)) {
@@ -242,7 +229,6 @@ function resolveDropRewardImageUrl(data, targetId = null) {
             }
         }
 
-        // Fast drop lookup inside campaign drops array
         if (camp && camp.drops && Array.isArray(camp.drops)) {
             const drops = camp.drops;
             const dropsLen = drops.length;
@@ -259,7 +245,6 @@ function resolveDropRewardImageUrl(data, targetId = null) {
     return rewardImgUrl;
 }
 
-// Tracking Set to prevent re-instantiating images for already requested URLs
 const _preloadedUrls = new Set();
 
 /**
@@ -278,10 +263,8 @@ function preloadQueueImages(queue) {
         const url = dropItem.image_url || dropItem.imageUrl;
         if (!url || _preloadedUrls.has(url)) continue;
 
-        // Mark URL as preloaded globally
         _preloadedUrls.add(url);
 
-        // Populate global imageCache template if available
         if (cache) {
             if (!cache.has(url)) {
                 const imgEl = document.createElement('img');
@@ -303,30 +286,32 @@ function preloadQueueImages(queue) {
  * Unified entry point for updating drop progress in active queue and wanted tree simultaneously
  */
 function syncAnyDropProgress(incomingIdStr, data) {
-    if (!state) return;
+    if (!state || !data || typeof data !== 'object' || data.gathering) return;
 
-    if (!data || typeof data !== 'object' || data.gathering || data.current_minutes === undefined) {
-        return;
-    }
+    const currMins = data.current_minutes !== undefined ? data.current_minutes : data.currentMinutes;
+    const reqMins = data.required_minutes !== undefined ? data.required_minutes : data.requiredMinutes;
+    const remSecs = data.remaining_seconds !== undefined ? data.remaining_seconds : data.remainingSeconds;
+
+    if (currMins === undefined && remSecs === undefined) return;
 
     if (Array.isArray(state.activeDropsQueue)) {
         const activeQueueDrop = state.activeDropsQueue.find(d => String(d.drop_id || d.id) === incomingIdStr);
         if (activeQueueDrop) {
-            if (data.current_minutes !== undefined) activeQueueDrop.current_minutes = data.current_minutes;
-            if (data.required_minutes !== undefined) activeQueueDrop.required_minutes = data.required_minutes;
-            if (data.remaining_seconds !== undefined) activeQueueDrop.remaining_seconds = data.remaining_seconds;
+            if (currMins !== undefined) activeQueueDrop.current_minutes = currMins;
+            if (reqMins !== undefined) activeQueueDrop.required_minutes = reqMins;
+            if (remSecs !== undefined) activeQueueDrop.remaining_seconds = remSecs;
             if (data.is_claimed !== undefined) activeQueueDrop.is_claimed = data.is_claimed;
 
-            const reqMins = activeQueueDrop.required_minutes || 0;
-            const currMins = activeQueueDrop.current_minutes || 0;
+            const activeReq = activeQueueDrop.required_minutes || 0;
+            const activeCur = activeQueueDrop.current_minutes || 0;
 
-            if (reqMins > 0) {
-                activeQueueDrop.progress = Math.min(100, (currMins / reqMins) * 100);
-                activeQueueDrop.can_claim = currMins >= reqMins && !activeQueueDrop.is_claimed;
+            if (activeReq > 0) {
+                activeQueueDrop.progress = Math.min(100, (activeCur / activeReq) * 100);
+                activeQueueDrop.can_claim = activeCur >= activeReq && !activeQueueDrop.is_claimed;
             }
 
             if (typeof renderAllProgressBars === 'function') {
-                renderAllProgressBars(currMins, activeQueueDrop);
+                renderAllProgressBars(activeCur, activeQueueDrop);
             }
         }
     }
@@ -335,7 +320,9 @@ function syncAnyDropProgress(incomingIdStr, data) {
         if (typeof syncWantedItemsProgress === 'function') {
             syncWantedItemsProgress({
                 drop_id: incomingIdStr,
-                ...data
+                ...data,
+                current_minutes: currMins,
+                remaining_seconds: remSecs
             });
         } else {
             console.warn("[SYNC_WANTED] syncWantedItemsProgress function is not defined yet, skipping update.");
@@ -351,11 +338,9 @@ function calculateOverallStats() {
     
     if (!state || !state.campaigns) return stats;
 
-    // Fast grouping using Map to avoid Object.values allocation
     const gamesMap = new Map();
     const campaigns = state.campaigns;
 
-    // Helper to process a single campaign entry
     const registerCampaign = (campaign) => {
         if (!campaign) return;
         if (campaign.is_unlinked || campaign.status === 'unlinked' || campaign.linked === false) {
@@ -371,7 +356,6 @@ function calculateOverallStats() {
         group.push(campaign);
     };
 
-    // Iterate campaigns based on data type without creating array copies
     if (Array.isArray(campaigns)) {
         for (let i = 0; i < campaigns.length; i++) {
             registerCampaign(campaigns[i]);
@@ -386,7 +370,6 @@ function calculateOverallStats() {
 
     if (gamesMap.size === 0) return stats;
 
-    // Aggregate stats per game group
     for (const campaignList of gamesMap.values()) {
         let maxReq = 0;
         let maxCur = 0;
@@ -463,11 +446,13 @@ function mapDropsForQueue(drops, parentData) {
 
         const curMins = d.current_minutes !== undefined ? d.current_minutes : (parentData.current_minutes || 0);
         const reqMins = d.required_minutes || parentData.required_minutes || 1;
+        const dropName = d.name || d.drop_name || d.title || d.dropName || 'Drop';
 
         return {
             ...parentData,
             drop_id: d.id || d.drop_id,
-            drop_name: d.name || d.drop_name,
+            drop_name: dropName,
+            name: dropName,
             image_url: dropImg,
             current_minutes: curMins,
             required_minutes: reqMins,
@@ -509,25 +494,17 @@ function clearWantedActiveState() {
 function clearDropProgress() {
     logProgressOnce('ui_clear_executed', '🧹 [UI CLEAR] Executing clearDropProgress() - resetting RAM state and UI');
 
-    // 1. Reset BOTH RAM state variants
     state.currentDrop = null;
     state.current_drop = null;
     state.activeDropsQueue = [];
     dropTotalSeconds = 0;
-    
-    if (state.countdownTimer) {
-        clearInterval(state.countdownTimer);
-        state.countdownTimer = null;
-    }
 
-    // 2. Reset progress bar UI elements
     const noDropMessage = document.getElementById('no-drop-message');
     const dropInfo = document.getElementById('drop-info');
     
     if (noDropMessage) noDropMessage.style.display = 'block';
     if (dropInfo) dropInfo.style.display = 'none';
 
-    // Clear game header and reward icon
     const dropGameEl = document.getElementById('drop-game');
     if (dropGameEl) {
         dropGameEl.innerHTML = '';
@@ -556,41 +533,50 @@ function clearDropProgress() {
     const timeEl = document.getElementById('progress-time');
     if (timeEl) timeEl.textContent = 'Time remaining: 0:00';
 
-    // 3. Clear active visual classes
     if (typeof clearWantedActiveState === 'function') {
         clearWantedActiveState();
     }
 
-    // 4. Re-render wanted tree safely without triggering cascade clears
     if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
         renderWantedItems(state.wantedItemsTree);
     }
 }
 
-// společná funkce pro update času pro - WANTED A PROGRESS BARY
-
 function updateRemainingTime(initialSeconds, currentData = null) {
-    if (state.countdownTimer) {
-        clearInterval(state.countdownTimer);
-        state.countdownTimer = null;
-    }
-
     const drop = currentData || state.currentDrop || state.current_drop || {};
+    if (!drop) return;
+
+    const remaining = Math.max(0, Math.floor(initialSeconds));
+    const reqSecs = Number(drop.required_minutes || drop.requiredMinutes || 0) * 60;
+
     const timeEl = document.getElementById('progress-time');
-    
-    if (timeEl) {
-        const remaining = Math.max(0, Math.floor(initialSeconds));
-        const reqSecs = Number(drop.required_minutes || 0) * 60;
+    if (timeEl && typeof formatTime === 'function') {
         timeEl.textContent = `Time remaining: ${formatTime(remaining)} / ${formatTime(reqSecs)}`;
     }
 
-    if (state.currentDrop) state.currentDrop.remaining_seconds = Math.max(0, Math.floor(initialSeconds));
-    if (state.current_drop) state.current_drop.remaining_seconds = Math.max(0, Math.floor(initialSeconds));
+    const elapsedSeconds = reqSecs > 0 ? Math.max(0, reqSecs - remaining) : 0;
+    const currentMinutes = Math.floor(elapsedSeconds / 60);
 
+    drop.remaining_seconds = remaining;
+    drop.current_minutes = currentMinutes;
+
+    if (state.currentDrop) {
+        state.currentDrop.remaining_seconds = remaining;
+        state.currentDrop.current_minutes = currentMinutes;
+    }
+    if (state.current_drop) {
+        state.current_drop.remaining_seconds = remaining;
+        state.current_drop.current_minutes = currentMinutes;
+    }
+
+    // FIX: Call syncWantedItemsProgress ONLY when minute changes to prevent redundant re-renders
     if (typeof syncWantedItemsProgress === 'function') {
-        const treeUpdated = syncWantedItemsProgress(drop);
-        if (treeUpdated && typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
-            renderWantedItems(state.wantedItemsTree);
+        const dropId = drop.id || drop.drop_id;
+        if (!window._lastSyncedMinutes) window._lastSyncedMinutes = {};
+        
+        if (dropId && window._lastSyncedMinutes[dropId] !== currentMinutes) {
+            window._lastSyncedMinutes[dropId] = currentMinutes;
+            syncWantedItemsProgress(drop);
         }
     }
 }
@@ -599,7 +585,7 @@ function updateDropTitle(data) {
     const dropNameEl = document.getElementById('drop-name');
     if (!dropNameEl) return;
 
-    const displayGameName = data.game_name || 'Drop';
+    const displayGameName = data.game_name || data.gameName || 'Drop';
 
     const validCampaigns = (state.activeCampaignsQueue || []).filter(c => {
         if (!c || isClaimed(c)) return false;
@@ -624,19 +610,13 @@ function updateDropTitle(data) {
     dropNameEl.textContent = `${displayGameName} (${displayIndex}/${queueLength})`;
 }
 
-// Fallback cache map if global imageCache is not defined in the scope
 const _fallbackImageCache = (typeof imageCache !== 'undefined') ? imageCache : new Map();
 
-/**
- * Helper to retrieve or create cached image DOM elements safely and efficiently
- */
 function getCachedImage(url, alt, className, styles = {}) {
     if (!url) return null;
 
-    // Use global imageCache if defined, otherwise fallback to local Map
     const cache = (typeof imageCache !== 'undefined') ? imageCache : _fallbackImageCache;
 
-    // Retrieve base template image element from cache or create a new clean one
     let templateImg = cache.get(url);
     if (!templateImg) {
         templateImg = document.createElement('img');
@@ -644,14 +624,11 @@ function getCachedImage(url, alt, className, styles = {}) {
         cache.set(url, templateImg);
     }
 
-    // Clone base template (false is faster as <img> elements have no child nodes)
     const imgEl = templateImg.cloneNode(false);
 
-    // Apply specific attributes for this call
     if (alt) imgEl.alt = alt;
     if (className) imgEl.className = className;
 
-    // Apply inline styles only if styles object is populated
     if (styles && typeof styles === 'object') {
         const styleKeys = Object.keys(styles);
         if (styleKeys.length > 0) {
@@ -662,9 +639,6 @@ function getCachedImage(url, alt, className, styles = {}) {
     return imgEl;
 }
 
-/**
- * Resets and hides the header container when invalid or empty data is provided.
- */
 function resetDropHeader(dropGameEl, reason = 'invalid or missing data') {
     if (lastDropHeaderHash !== 'empty') {
         console.log(`[DropHeader Debug] Resetting header due to: ${reason}`);
@@ -674,9 +648,6 @@ function resetDropHeader(dropGameEl, reason = 'invalid or missing data') {
     }
 }
 
-/**
- * Extracts campaign information, title text, subtitle, and effective campaign ID.
- */
 function resolveCampaignData(data) {
     const rawCampaignId = data.campaign_id || data.campaignId || '';
     let foundCampaign = (state?.campaigns && rawCampaignId) ? state.campaigns[rawCampaignId] : null;
@@ -698,14 +669,11 @@ function resolveCampaignData(data) {
     const effectiveCampaignId = rawCampaignId || foundCampaign?.id || foundCampaign?.campaign_id || '';
     const titleText = data.campaign_name || data.campaignName || data.game_name || data.gameName || data.game || 
                       foundCampaign?.campaign_name || foundCampaign?.campaignName || foundCampaign?.game_name || foundCampaign?.gameName || '';
-    const subTextContent = data.drop_name || data.dropName || '';
+    const subTextContent = data.drop_name || data.dropName || data.name || data.title || '';
 
     return { foundCampaign, effectiveCampaignId, titleText, subTextContent };
 }
 
-/**
- * Extracts and builds the box art icon URL from data or fallback campaign.
- */
 function extractIconUrl(data, foundCampaign) {
     const extractBoxArt = (obj) => {
         if (!obj) return null;
@@ -720,9 +688,6 @@ function extractIconUrl(data, foundCampaign) {
     return rawBoxArt ? rawBoxArt.replace('{width}', '52').replace('{height}', '70') : null;
 }
 
-/**
- * Ensures cached DOM containers exist and are properly attached to the parent.
- */
 function ensureHeaderContainers(dropGameEl) {
     dropGameEl.style.display = 'flex';
     dropGameEl.style.alignItems = 'center';
@@ -754,22 +719,14 @@ function ensureHeaderContainers(dropGameEl) {
     }
 
     if (!dropGameEl.contains(cachedIconContainer) || !dropGameEl.contains(cachedInfoTextDiv)) {
-        console.log('[DropHeader Debug] DOM element missing container! Invoking replaceChildren (DOM reset/rebuild).', {
-            hasIconContainer: dropGameEl.contains(cachedIconContainer),
-            hasInfoTextDiv: dropGameEl.contains(cachedInfoTextDiv)
-        });
         dropGameEl.replaceChildren(cachedIconContainer, cachedInfoTextDiv);
     }
 }
 
-/**
- * Updates the game icon image element inside cachedIconContainer.
- */
 function updateHeaderIcon(iconUrl) {
     let imgEl = cachedIconContainer.querySelector('img');
     if (iconUrl) {
         if (!imgEl) {
-            console.log('[DropHeader Debug] <img> element missing inside cachedIconContainer. Creating new <img> tag.');
             imgEl = document.createElement('img');
             imgEl.className = 'game-icon';
             imgEl.style.width = '100%';
@@ -779,18 +736,13 @@ function updateHeaderIcon(iconUrl) {
             cachedIconContainer.appendChild(imgEl);
         }
         if (imgEl.src !== iconUrl) {
-            console.log(`[DropHeader Debug] Image src updated from "${imgEl.src}" to "${iconUrl}"`);
             imgEl.src = iconUrl;
         }
     } else if (imgEl) {
-        console.log('[DropHeader Debug] Removing <img> element because iconUrl is null.');
         imgEl.remove();
     }
 }
 
-/**
- * Updates the main title and link anchor node inside cachedInfoTextDiv.
- */
 function updateHeaderTitle(effectiveCampaignId, titleText) {
     let titleNode = cachedInfoTextDiv.querySelector('.drop-campaign-title');
     
@@ -820,13 +772,9 @@ function updateHeaderTitle(effectiveCampaignId, titleText) {
     }
 }
 
-/**
- * Updates subtitle node inside cachedInfoTextDiv.
- */
 function updateHeaderSubtitle(subTextContent) {
     let subText = cachedInfoTextDiv.querySelector('.drop-sub-name');
     if (!subText) {
-        console.log('[DropHeader Debug] Subtitle node missing. Creating span.drop-sub-name.');
         subText = document.createElement('span');
         subText.className = 'drop-sub-name';
         subText.style.fontSize = '0.9em';
@@ -842,20 +790,15 @@ let lastDropHeaderHash = null;
 let cachedIconContainer = null;
 let cachedInfoTextDiv = null;
 
-/**
- * Main render function for the drop game header.
- */
 function renderDropGameHeader(data, force = false) {
     const dropGameEl = document.getElementById('drop-game');
     if (!dropGameEl) return;
 
-    // 1. Data sanity check
     if (!data || typeof data !== 'object') {
         resetDropHeader(dropGameEl, 'invalid data object');
         return;
     }
 
-    // 2. Resolve campaign details & titles
     const { foundCampaign, effectiveCampaignId, titleText, subTextContent } = resolveCampaignData(data);
 
     if (!titleText && !effectiveCampaignId) {
@@ -863,45 +806,29 @@ function renderDropGameHeader(data, force = false) {
         return;
     }
 
-    // 3. Extract icon image URL
     const iconUrl = extractIconUrl(data, foundCampaign);
 
-    // 4. Ensure container structure is ready in DOM
     ensureHeaderContainers(dropGameEl);
 
-    // 5. Hash Guard to prevent redundant updates
     const currentHash = `${effectiveCampaignId}_${titleText}_${subTextContent}_${iconUrl}`;
     if (!force && lastDropHeaderHash === currentHash) {
         return;
     }
 
-    console.log(`[DropHeader Debug] Executing FULL UPDATE. force=${force}`, {
-        oldHash: lastDropHeaderHash,
-        newHash: currentHash
-    });
-
     lastDropHeaderHash = currentHash;
 
-    // 6. Update individual DOM components
     updateHeaderIcon(iconUrl);
     updateHeaderTitle(effectiveCampaignId, titleText);
     updateHeaderSubtitle(subTextContent);
 }
 
-/**
- * Resets the drop label text when invalid data is provided.
- */
 function resetDropCardLayout(currentDropLabel, reason = 'invalid data') {
     if (lastDropCardLayoutHash !== 'empty') {
-        console.log(`[DropCardLayout Debug] Resetting drop card layout due to: ${reason}`);
         currentDropLabel.textContent = '';
         lastDropCardLayoutHash = 'empty';
     }
 }
 
-/**
- * Computes active drop queue, sorts by required minutes, and calculates current index and queue length.
- */
 function calculateDropQueueInfo(data, currentId) {
     let activeDrops = [];
     const { drops } = typeof getCampaignAndDrops === 'function' 
@@ -915,7 +842,6 @@ function calculateDropQueueInfo(data, currentId) {
         activeDrops = [...state.activeDropsQueue];
     }
 
-    // Seřazení od nejmenšího času po největší
     const getDropMinutes = (d) => Number(d.required_minutes || d.total_minutes || d.requiredMinutes || 0);
     activeDrops.sort((a, b) => getDropMinutes(a) - getDropMinutes(b));
 
@@ -930,9 +856,6 @@ function calculateDropQueueInfo(data, currentId) {
     return { dropIdx, dropQueueLen };
 }
 
-/**
- * Finds or establishes the outer .drop-card-container element.
- */
 function ensureDropCardOuterContainer(currentDropLabel) {
     let cardOuter = currentDropLabel.closest('.drop-card-container');
 
@@ -947,7 +870,6 @@ function ensureDropCardOuterContainer(currentDropLabel) {
                 if (parent.contains(targetElement)) {
                     cardOuter = parent;
                     cardOuter.classList.add('drop-card-container');
-                    console.log('[DropCardLayout Debug] Established new .drop-card-container parent.');
                     break;
                 }
                 parent = parent.parentElement;
@@ -957,13 +879,9 @@ function ensureDropCardOuterContainer(currentDropLabel) {
     return cardOuter;
 }
 
-/**
- * Builds and attaches the right column structure inside cardOuter if missing.
- */
 function ensureDropCardRightCol(cardOuter) {
     let rightCol = cardOuter.querySelector('#drop-card-right-col');
     if (!rightCol) {
-        console.log('[DropCardLayout Debug] Creating #drop-card-right-col and restructuring layout to 2 columns.');
         rightCol = document.createElement('div');
         rightCol.id = 'drop-card-right-col';
         rightCol.style.flex = '1';
@@ -984,9 +902,6 @@ function ensureDropCardRightCol(cardOuter) {
     return rightCol;
 }
 
-/**
- * Resolves the left image element or placeholder element for the drop card.
- */
 function resolveDropCardLeftImage(rawImgUrl, dropName) {
     let targetLeftEl = null;
 
@@ -1004,7 +919,6 @@ function resolveDropCardLeftImage(rawImgUrl, dropName) {
     }
 
     if (!targetLeftEl) {
-        console.log('[DropCardLayout Debug] Image URL missing or getCachedImage unavailable. Creating placeholder.');
         targetLeftEl = document.createElement('div');
         targetLeftEl.className = 'image-placeholder';
     }
@@ -1013,13 +927,9 @@ function resolveDropCardLeftImage(rawImgUrl, dropName) {
     return targetLeftEl;
 }
 
-/**
- * Atomically swaps or appends the left image element in the DOM.
- */
 function updateDropCardLeftImage(cardOuter, targetLeftEl, rightCol) {
     const existingLeftImg = cardOuter.querySelector('#drop-card-left-img');
     if (existingLeftImg !== targetLeftEl) {
-        console.log('[DropCardLayout Debug] Swapping left image element in DOM.');
         if (existingLeftImg) {
             existingLeftImg.replaceWith(targetLeftEl);
         } else {
@@ -1030,56 +940,37 @@ function updateDropCardLeftImage(cardOuter, targetLeftEl, rightCol) {
 
 let lastDropCardLayoutHash = null;
 
-/**
- * Main render function for the drop card layout.
- */
 function renderDropCardLayout(data, rewardImgUrl, force = false) {
     const currentDropLabel = document.getElementById('current-drop-label');
     if (!currentDropLabel) return;
 
-    // 1. Data sanity check
     if (!data || typeof data !== 'object') {
         resetDropCardLayout(currentDropLabel, 'invalid data object');
         return;
     }
 
     const currentId = data.drop_id || data.id || '';
-    const dropName = data.drop_name || '';
+    const dropName = data.drop_name || data.dropName || data.name || data.title || 'Drop';
     const rawImgUrl = rewardImgUrl || '';
 
-    // 2. Hash Guard
     const currentHash = `${currentId}_${dropName}_${rawImgUrl}`;
     if (!force && lastDropCardLayoutHash === currentHash) {
         return;
     }
 
-    console.log(`[DropCardLayout Debug] Executing FULL UPDATE. force=${force}`, {
-        oldHash: lastDropCardLayoutHash,
-        newHash: currentHash
-    });
-
-    // 3. Compute queue position & update label
     const { dropIdx, dropQueueLen } = calculateDropQueueInfo(data, currentId);
     const newLabelText = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${dropName}`;
     if (currentDropLabel.textContent !== newLabelText) {
         currentDropLabel.textContent = newLabelText;
     }
 
-    // 4. Locate outer container
     const cardOuter = ensureDropCardOuterContainer(currentDropLabel);
-    if (!cardOuter) {
-        console.log('[DropCardLayout Debug] Could not locate or create card outer container.');
-        return;
-    }
+    if (!cardOuter) return;
 
-    // 5. Build/Ensure right column layout
     const rightCol = ensureDropCardRightCol(cardOuter);
-
-    // 6. Resolve and update left image element
     const targetLeftEl = resolveDropCardLeftImage(rawImgUrl, dropName);
     updateDropCardLeftImage(cardOuter, targetLeftEl, rightCol);
 
-    // 7. Save successful render hash
     lastDropCardLayoutHash = currentHash;
 }
 
@@ -1128,23 +1019,29 @@ function updateGameHeaderTimeBadge(groupIdx, remainingMinutes) {
  * Updates the single active drop display with caching, queue matching, and DOM rendering.
  */
 function updateSingleDropDisplay(data, isFromRotation = false) {
+    if (!data) return;
     const targetId = data.drop_id || data.id;
 
     const activeDrop = state.currentDrop || state.current_drop;
-    if (activeDrop && (activeDrop.drop_id || activeDrop.id) === targetId) {
+    const activeId = activeDrop ? (activeDrop.drop_id || activeDrop.id) : null;
+    const isCurrentDrop = activeId && String(activeId) === String(targetId);
+
+    // 1. PING-PONG GUARD: Ignore updates for non-active drops unless explicitly coming from rotation
+    if (!isFromRotation && activeId && !isCurrentDrop) {
+        return;
+    }
+
+    if (activeDrop && isCurrentDrop) {
         data = { ...activeDrop, ...data };
     } else if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
         const queueItem = state.activeDropsQueue.find(d => (d.drop_id || d.id) === targetId);
         if (queueItem) data = { ...queueItem, ...data };
     }
 
-    if (!isFromRotation && state.rotationTimer) {
-        return;
-    }
+    const reqMins = Number(data.required_minutes ?? data.requiredMinutes ?? 0);
+    const curMins = Number(data.current_minutes ?? data.currentMinutes ?? 0);
 
-    const reqMins = Number(data.required_minutes ?? 0);
-    const curMins = Number(data.current_minutes ?? 0);
-
+    // Drop completion check
     if (isClaimed(data) || (reqMins > 0 && curMins >= reqMins)) {
         logProgressOnce(`drop_finished_${targetId}`, `🎉 [DROP COMPLETE] Drop '${data.drop_name || targetId}' is claimed or finished. Removing from queue.`);
         if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
@@ -1155,14 +1052,27 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
         return;
     }
 
-    // Direct replacement of both state variables
+    // 2. SECONDS PERSISTENCE: Maintain smooth countdown timers without jumping backward
+    let remSecs;
+    if (data.remaining_seconds !== undefined && data.remaining_seconds !== null) {
+        remSecs = Number(data.remaining_seconds);
+    } else if (isCurrentDrop && activeDrop?.remaining_seconds !== undefined && activeDrop?.remaining_seconds !== null) {
+        remSecs = activeDrop.remaining_seconds;
+    } else {
+        remSecs = Math.max(0, (reqMins - curMins) * 60);
+    }
+
+    data.remaining_seconds = remSecs;
+
+    if (typeof debugTime === 'function') {
+        debugTime('2. DISPLAY_UPDATE', data);
+    }
+    
+    // Save state
     state.currentDrop = data;
     state.current_drop = data;
 
-    let remSecs = data.remaining_seconds !== undefined && data.remaining_seconds !== null 
-        ? Number(data.remaining_seconds) 
-        : Math.max(0, (reqMins - curMins) * 60);
-
+    // Toggle container visibility
     const noDropMessage = document.getElementById('no-drop-message');
     const dropInfo = document.getElementById('drop-info');
     if (noDropMessage) noDropMessage.style.display = 'none';
@@ -1170,14 +1080,18 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
 
     const rewardImgUrl = resolveDropRewardImageUrl(data, targetId);
 
+    // 3. DOM RENDERING: Internal hash caching prevents redundant DOM touch
     updateDropTitle(data);
     renderDropGameHeader(data);
     renderDropCardLayout(data, rewardImgUrl);
+
+    // Update live elements (timer & progress bar)
     renderAllProgressBars(curMins, data);
     updateRemainingTime(remSecs, data);
 }
 
-function switchCampaignDisplay(data, isManualSwitch = false) {
+// Added 3rd parameter 'shouldUpdateDisplay' defaulting to true
+function switchCampaignDisplay(data, isManualSwitch = false, shouldUpdateDisplay = true) {
     if (data) {
         const now = Date.now();
         
@@ -1249,13 +1163,19 @@ function switchCampaignDisplay(data, isManualSwitch = false) {
     const newDropId = initialActiveDrop ? (initialActiveDrop.drop_id || initialActiveDrop.id) : null;
     const dropChanged = !previousDropId || !newDropId || previousDropId !== newDropId;
 
-    updateSingleDropDisplay(initialActiveDrop, dropChanged);
+    // Trigger UI update ONLY if shouldUpdateDisplay is true
+    if (shouldUpdateDisplay) {
+        updateSingleDropDisplay(initialActiveDrop, dropChanged);
+    }
 }
 
 /**
- * Updates UI and state with incoming drop progress data.
+ * Updates UI and state with incoming drop progress data from tick/socket
  */
 function updateDropProgress(dropData) {
+    if (typeof debugTime === 'function') {
+        debugTime('1. INCOMING_TICK', dropData);
+    }
     if (!dropData || typeof dropData !== 'object' || Object.keys(dropData).length === 0) {
         logProgressOnce('warn_empty_data', '⚠️ [UI UPDATE] Empty dropData received. Clearing drop UI.', true);
         if (typeof clearDropProgress === 'function') clearDropProgress();
@@ -1287,20 +1207,19 @@ function updateDropProgress(dropData) {
         }
     }
 
-    // STRICT GUARD: Refuse rendering if watched channel is playing a different game
-    if (watchedGame && dropGame && watchedGame.trim().toLowerCase() !== dropGame.trim().toLowerCase()) {
-        logProgressOnce(
-            `mismatch_${dropGame}_vs_${watchedGame}`,
-            `🚨 [UI GUARD MISMATCH] Refusing to render drop for '${dropGame}' because watched channel plays '${watchedGame}'. Clearing drop UI.`,
-            true
-        );
-        if (typeof clearDropProgress === 'function') clearDropProgress();
-        return;
+    if (watchedGame && dropGame) {
+        const cleanWatched = watchedGame.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const cleanDrop = dropGame.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (cleanWatched !== cleanDrop && !cleanWatched.includes(cleanDrop) && !cleanDrop.includes(cleanWatched)) {
+            logProgressOnce(
+                `mismatch_${dropGame}_vs_${watchedGame}`,
+                `⚠️ [UI GUARD MISMATCH] Game title mismatch ('${dropGame}' vs watched '${watchedGame}'), but continuing sync.`
+            );
+        }
     }
 
     logProgressOnce(`render_${dropGame}`, `✅ [UI UPDATE] Rendering drop progress for '${dropGame || 'Unknown Game'}'`);
 
-    // Process live mining queue
     if (!state.liveMiningQueue) state.liveMiningQueue = [];
     const activeCampId = validDrop.campaign_id;
     
@@ -1320,8 +1239,16 @@ function updateDropProgress(dropData) {
         state.activeCampaignsQueue = state.liveMiningQueue.map(cid => state.campaigns[cid]).filter(Boolean);
     }
 
-    // Save state (explicit copy into both variables)
-    const incomingIdStr = String(validDrop.drop_id || validDrop.id);
+    const incomingIdStr = String(validDrop.drop_id || validDrop.id || '');
+    const currentMins = Math.round(Number(validDrop.current_minutes ?? validDrop.currentMinutes ?? validDrop.progress ?? 0));
+    const reqMins = Number(validDrop.required_minutes ?? validDrop.requiredMinutes ?? 0);
+    const remSecs = validDrop.remaining_seconds !== undefined 
+        ? Number(validDrop.remaining_seconds) 
+        : Math.max(0, (reqMins - currentMins) * 60);
+
+    validDrop.current_minutes = currentMins;
+    validDrop.remaining_seconds = remSecs;
+
     state.currentDrop = { ...validDrop };
     state.current_drop = { ...validDrop };
 
@@ -1332,7 +1259,7 @@ function updateDropProgress(dropData) {
 
     const campaignTitleEl = document.getElementById('campaign-title') || document.querySelector('.campaign-header-title');
     if (campaignTitleEl && dropGame) {
-        campaignTitleEl.textContent = `${dropGame} (1/1)`;
+        campaignTitleEl.textContent = dropGame;
     }
 
     const dropGameEl = document.getElementById('drop-game');
@@ -1347,12 +1274,12 @@ function updateDropProgress(dropData) {
     });
 
     const timeRemainingEl = document.getElementById('progress-time');
-    if (timeRemainingEl && (validDrop.current_minutes === undefined || validDrop.current_minutes === 0)) {
-        if (!validDrop.time_remaining) {
-            timeRemainingEl.style.display = 'none';
-        } else {
-            timeRemainingEl.style.display = 'block';
-        }
+    if (timeRemainingEl) {
+        timeRemainingEl.style.display = 'block';
+    }
+
+    if (typeof renderAllProgressBars === 'function') {
+        renderAllProgressBars(currentMins, validDrop);
     }
 
     if (typeof syncAnyDropProgress === 'function') {
@@ -1364,17 +1291,16 @@ function updateDropProgress(dropData) {
     }
 
     if (typeof updateCampaignProgressData === 'function') {
-        updateCampaignProgressData(validDrop, validDrop.current_minutes || 0);
+        updateCampaignProgressData(validDrop, currentMins);
     }
 
     if (typeof syncWantedItemsProgress === 'function') {
-        const treeUpdated = syncWantedItemsProgress({
+        syncWantedItemsProgress({
             drop_id: incomingIdStr,
-            ...validDrop
+            ...validDrop,
+            current_minutes: currentMins,
+            remaining_seconds: remSecs
         });
-        if (treeUpdated && typeof renderWantedItems === 'function') {
-            renderWantedItems(state.wantedItemsTree);
-        }
     }
 }
 
@@ -1390,13 +1316,12 @@ function updateCampaignProgressData(data, liveCurrentMins) {
                           campaignFill.parentElement?.parentElement;
 
     const currentDropCurrent = liveCurrentMins !== undefined ? liveCurrentMins : (Number(data.current_minutes) || 0);
-    const targetDropId = data.drop_id || data.id;
+    const targetDropId = String(data.drop_id || data.id || '');
 
-    let totalCampaignCurrent = 0;
-    let totalCampaignRequired = 0;
+    let totalCampaignCurrent = currentDropCurrent;
+    let totalCampaignRequired = Number(data.required_minutes || data.duration || data.total_minutes) || 0;
 
     if (state.campaigns && data.campaign_id) {
-        // Direct lookup with fallback loop to avoid array allocations (Object.values)
         let campaign = state.campaigns[data.campaign_id];
         if (!campaign) {
             for (const key in state.campaigns) {
@@ -1413,34 +1338,20 @@ function updateCampaignProgressData(data, liveCurrentMins) {
             const campName = campaign.name || campaign.campaign_name || 'Campaign';
             const dropsCount = drops.length;
 
-            let maxCurrent = currentDropCurrent;
-            let maxRequired = 0;
             let dropVisualIndex = 1;
 
-            // Single pass iteration replacing multiple forEach, map, and findIndex calls
             for (let i = 0; i < dropsCount; i++) {
                 const d = drops[i];
-                const dId = d.drop_id || d.id;
+                const dId = String(d.drop_id || d.id || '');
 
                 if (dId === targetDropId) {
                     d.current_minutes = currentDropCurrent;
                     dropVisualIndex = i + 1;
                 }
-
-                const curMins = Number(d.current_minutes) || 0;
-                const reqMins = Number(d.required_minutes || d.duration || d.total_minutes) || 0;
-
-                if (curMins > maxCurrent) maxCurrent = curMins;
-                if (reqMins > maxRequired) maxRequired = reqMins;
             }
 
-            totalCampaignCurrent = maxCurrent;
-            totalCampaignRequired = dropsCount > 0 ? maxRequired : 0;
-
-            // Update remaining drops in array
-            for (let i = 0; i < dropsCount; i++) {
-                drops[i].current_minutes = maxCurrent;
-            }
+            totalCampaignCurrent = currentDropCurrent;
+            totalCampaignRequired = Number(data.required_minutes || data.duration) || totalCampaignRequired;
 
             if (campaignTitle) {
                 const newTitle = `${campName} • Drop ${dropVisualIndex}/${dropsCount}`;
@@ -1451,12 +1362,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         }
     }
 
-    if (totalCampaignRequired === 0) {
-        totalCampaignCurrent = currentDropCurrent;
-        totalCampaignRequired = Number(data.required_minutes || data.duration || data.total_minutes) || 0;
-    }
-
-    // Apply updates and minimize DOM mutations by checking current state
     if (totalCampaignRequired > 0) {
         if (cardContainer && cardContainer.style.display !== 'block') {
             cardContainer.style.display = 'block';
@@ -1474,14 +1379,6 @@ function updateCampaignProgressData(data, liveCurrentMins) {
         if (cardContainer && cardContainer.style.display !== 'none') {
             cardContainer.style.display = 'none';
         }
-        if (campaignFill.style.width !== '0%') campaignFill.style.width = '0%';
-        if (campaignFill.textContent !== '') campaignFill.textContent = '';
-        if (campaignText.textContent !== '') campaignText.textContent = '';
-    }
-
-    // Re-render wanted queue items when progress updates
-    if (typeof state !== 'undefined' && typeof state.wantedItemsTree !== 'undefined' && typeof renderWantedItems === 'function') {
-        renderWantedItems(state.wantedItemsTree);
     }
 }
 
@@ -1538,6 +1435,14 @@ function updateOverallProgress() {
 }
 
 /**
+ * Helper to safely retrieve drop ID from any object
+ */
+function getDropId(drop) {
+    if (!drop) return null;
+    return drop.drop_id || drop.id || drop.dropId || null;
+}
+
+/**
  * Executes a single tick of rotation process
  */
 function executeRotationStep() {
@@ -1549,31 +1454,27 @@ function executeRotationStep() {
         if (fallbackCamp) validCampaigns = [fallbackCamp];
     }
 
-    // Get currently watched game
     let watchedGame = null;
     if (typeof getWatchedChannelObject === 'function') {
         const wObj = getWatchedChannelObject();
         if (wObj) watchedGame = wObj.game_name || wObj.game || wObj.game_title;
     }
 
-    // Filter out completed, ignored, or mismatched game campaigns from rotation
     validCampaigns = validCampaigns.filter(c => {
         if (!c || isClaimed(c)) return false;
 
         const gameName = c.game_name || c.game || c.gameName;
         
-        // Skip ignored games
         if (typeof isGameIgnored === 'function' && isGameIgnored(gameName)) {
             return false;
         }
 
-        // ROTATION GUARD: Do not start rotation for a game other than watched!
         if (watchedGame && gameName) {
             if (watchedGame.trim().toLowerCase() !== gameName.trim().toLowerCase()) {
                 logProgressOnce(
-					`rot_skip_${gameName}_${watchedGame}`,
-					`ℹ️ [ROTATION GUARD] Skipping '${gameName}' campaign (Watching '${watchedGame}')`
-				);
+                    `rot_skip_${gameName}_${watchedGame}`,
+                    `ℹ️ [ROTATION GUARD] Skipping '${gameName}' campaign (Watching '${watchedGame}')`
+                );
                 return false;
             }
         }
@@ -1596,8 +1497,6 @@ function executeRotationStep() {
     let drops = extractCampaignDrops(currentCampaign);
     const activeDrops = drops.filter(d => !isClaimed(d));
 
-    switchCampaignDisplay(currentCampaign, false);
-
     if (activeDrops.length > 0) {
         if (state.dropRotationIndex === undefined || state.dropRotationIndex >= activeDrops.length || state.dropRotationIndex < 0) {
             state.dropRotationIndex = 0;
@@ -1608,8 +1507,32 @@ function executeRotationStep() {
         currentDrop.campaign_id = currentCampaign.id || currentCampaign.campaign_id;
         currentDrop.campaign_name = currentCampaign.name || currentCampaign.campaign_name;
         currentDrop.game_name = currentCampaign.game_name || currentCampaign.gameName;
+        currentDrop.drop_name = currentDrop.name || currentDrop.drop_name || currentDrop.title || currentDrop.dropName || 'Drop';
+
+        // FIX: Safe ID comparison and live WebSocket data sync
+        const existingDrop = state.currentDrop || state.current_drop;
+        const existingId = getDropId(existingDrop);
+        const currentId = getDropId(currentDrop);
+
+        if (existingId && currentId && existingId === currentId) {
+            if (existingDrop.current_minutes !== undefined) currentDrop.current_minutes = existingDrop.current_minutes;
+            if (existingDrop.remaining_seconds !== undefined) currentDrop.remaining_seconds = existingDrop.remaining_seconds;
+            if (existingDrop.required_minutes !== undefined) currentDrop.required_minutes = existingDrop.required_minutes;
+            if (existingDrop.progress !== undefined) currentDrop.progress = existingDrop.progress;
+
+            // FIX 1: Transfer drop names from WebSocket if missing in campaign object
+            if (existingDrop.name && !currentDrop.name) currentDrop.name = existingDrop.name;
+            if (existingDrop.title && !currentDrop.title) currentDrop.title = existingDrop.title;
+            if (existingDrop.drop_name && !currentDrop.drop_name) currentDrop.drop_name = existingDrop.drop_name;
+        }
         
-        updateSingleDropDisplay(currentDrop, true);
+        const hasChanged = !existingId || existingId !== currentId;
+
+        // FIX 2: Prepare campaign active drops without immediate UI overwrite
+        switchCampaignDisplay(currentCampaign, false, false);
+
+        // Primary re-render with synchronized data
+        updateSingleDropDisplay(currentDrop, hasChanged);
 
         state.dropRotationIndex++;
         if (state.dropRotationIndex >= activeDrops.length) {
@@ -1617,6 +1540,7 @@ function executeRotationStep() {
             state.campaignRotationIndex++;
         }
     } else {
+        switchCampaignDisplay(currentCampaign, false, true);
         state.campaignRotationIndex++;
     }
 

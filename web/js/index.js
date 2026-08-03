@@ -76,7 +76,7 @@ async function fetchAndDisplayVersion() {
                 }
             }
         }
-        console.debug('[Version] Fetched and updated app version:', data.current_version);
+        console.log('[Version] Fetched and updated app version:', data.current_version);
     } catch (error) {
         console.warn('Could not fetch version information:', error);
         // Set placeholder text if fetch fails
@@ -134,7 +134,7 @@ function updateLoginStatus(data) {
             showOAuthCode(data.oauth_pending.url, data.oauth_pending.code);
         }
     }
-    console.debug('[Auth] Login status updated:', data.user_id ? `Authenticated (ID: ${data.user_id})` : 'Logged out / Pending');
+    console.log('[Auth] Login status updated:', data.user_id ? `Authenticated (ID: ${data.user_id})` : 'Logged out / Pending');
 }
 
 async function submitLogin() {
@@ -143,7 +143,7 @@ async function submitLogin() {
     const token = document.getElementById('2fa-token')?.value || '';
 
     try {
-        console.debug('[Auth] Submitting credentials for user:', username);
+        console.log('[Auth] Submitting credentials for user:', username);
         await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -156,7 +156,7 @@ async function submitLogin() {
 
 async function confirmOAuth() {
     try {
-        console.debug('[Auth] Confirming OAuth status...');
+        console.log('[Auth] Confirming OAuth status...');
         await fetch('/api/oauth/confirm', {
             method: 'POST'
         });
@@ -185,7 +185,7 @@ function sortGamesByEnding() {
     const newOrder = JSON.stringify(state.settings.games_to_watch);
 
     if (originalOrder !== newOrder) {
-        console.debug('[Game List] Sorted watched games by ending campaign dates.');
+        console.log('[Game List] Sorted watched games by ending campaign dates.');
         renderGamesToWatch();
         if (typeof renderChannels === 'function') renderChannels();
         saveSettings();
@@ -254,7 +254,7 @@ function applyAutoAddIfNeeded() {
                 renderAvailableGames(Array.from(availableGames), filterInput ? filterInput.value.toLowerCase() : '');
             }
             saveSettings();
-            console.debug('[Game List] Auto-added new games to watch list:', state.settings.games_to_watch);
+            console.log('[Game List] Auto-added new games to watch list:', state.settings.games_to_watch);
             updateUIState();
         }
     }
@@ -264,14 +264,14 @@ function applyAutoAddIfNeeded() {
 
 async function exitManualMode() {
     try {
-        console.debug('[Manual Mode] Exiting manual mode...');
+        console.log('[Manual Mode] Exiting manual mode...');
         const response = await fetch('/api/mode/exit-manual', {
             method: 'POST'
         });
 
         const result = await response.json();
         if (!result.success) {
-            console.debug('[Manual Mode] Exit notice:', result.message || 'Already in automatic mode');
+            console.log('[Manual Mode] Exit notice:', result.message || 'Already in automatic mode');
         }
     } catch (error) {
         console.error('Failed to exit manual mode:', error);
@@ -297,7 +297,7 @@ async function verifyProxy() {
     }
 
     try {
-        console.debug('[Settings] Verifying proxy connection:', proxyUrl);
+        console.log('[Settings] Verifying proxy connection:', proxyUrl);
         const response = await fetch('/api/settings/verify-proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -353,7 +353,7 @@ async function saveSettings() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings)
         });
-        console.debug('[Settings] Settings saved successfully.');
+        console.log('[Settings] Settings saved successfully.');
     } catch (error) {
         console.error('Failed to save settings:', error);
     }
@@ -401,7 +401,7 @@ async function fetchAndApplyTranslations() {
 
         state.translations = data;
         applyTranslations(data);
-        console.debug('[Translation] Loaded and applied interface translations.');
+        console.log('[Translation] Loaded and applied interface translations.');
     } catch (error) {
         console.error('Failed to fetch translations:', error);
     }
@@ -409,7 +409,7 @@ async function fetchAndApplyTranslations() {
 
 async function reloadCampaigns() {
     try {
-        console.debug('[Campaigns] Requesting campaign data reload...');
+        console.log('[Campaigns] Requesting campaign data reload...');
         await fetch('/api/reload', { method: 'POST' });
     } catch (error) {
         console.error('Failed to reload:', error);
@@ -714,7 +714,7 @@ function switchTab(tabName) {
     if (targetTab) targetTab.classList.add('active');
     if (targetBtn) targetBtn.classList.add('active');
 
-    console.debug('[App] Switched tab to:', tabName);
+    console.log('[App] Switched tab to:', tabName);
 }
 
 function updateUIState() {

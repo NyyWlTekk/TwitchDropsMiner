@@ -324,7 +324,7 @@ function benchmark(name, fn) {
         
         // Vypíše do konzole jen to, co trvá déle než 10 ms, ať zbytečně nefiltroješ balast
         if (end - start > 10) {
-            console.debug(`[Perf Warning] ${name} trvalo: ${(end - start).toFixed(2)} ms`);
+            console.log(`[Perf Warning] ${name} trvalo: ${(end - start).toFixed(2)} ms`);
         }
         return result;
     };

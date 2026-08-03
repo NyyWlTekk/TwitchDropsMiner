@@ -346,7 +346,7 @@ function renderChannels() {
 
 async function selectChannel(channelId) {
     try {
-        console.debug('[Channel] Selecting channel:', channelId);
+        console.log('[Channel] Selecting channel:', channelId);
         const response = await fetch('/api/channels/select', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

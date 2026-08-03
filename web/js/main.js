@@ -131,3 +131,15 @@ if (typeof socket !== 'undefined') {
         });
     });
 }
+
+// --- Helper Debug Logger ---
+function debugTime(stage, data) {
+    console.log(`[TIME_DEBUG] [${stage}]`, {
+        time: new Date().toLocaleTimeString(),
+        drop_id: data?.drop_id || data?.id || 'N/A',
+        current_minutes: data?.current_minutes ?? data?.currentMinutes,
+        required_minutes: data?.required_minutes ?? data?.requiredMinutes,
+        remaining_seconds: data?.remaining_seconds ?? data?.remainingSeconds,
+        raw_object: data
+    });
+}

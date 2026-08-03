@@ -71,7 +71,7 @@ function updateSettingsUI(settings) {
     if (typeof renderInventory === 'function') renderInventory();
     
     applyAutoAddIfNeeded();
-    console.debug('[Settings] UI elements updated from settings state.');
+    console.log('[Settings] UI elements updated from settings state.');
 }
 
 function updateManualModeUI(manualModeInfo) {

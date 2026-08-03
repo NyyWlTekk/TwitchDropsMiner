@@ -176,7 +176,7 @@ function toggleGameSelection(gameName) {
         selectedInventoryGames.push(gameName);
     }
 
-    console.debug('[Game Filter] Toggled inventory game selection:', gameName, 'Active selection:', selectedInventoryGames);
+    console.log('[Game Filter] Toggled inventory game selection:', gameName, 'Active selection:', selectedInventoryGames);
 
     // 1. Immediate local UI update (Optimistic UI)
     updateGameTagsDisplay();
@@ -190,7 +190,7 @@ function toggleGameSelection(gameName) {
     }
 
     inventorySaveTimeout = setTimeout(() => {
-        console.debug('[Game Filter] Flushing inventory selection to server...');
+        console.log('[Game Filter] Flushing inventory selection to server...');
         saveSettings();
     }, 1000); // Wait 1 second before saving
 }
@@ -199,7 +199,7 @@ function removeGameTag(gameName) {
     const index = selectedInventoryGames.indexOf(gameName);
     if (index >= 0) {
         selectedInventoryGames.splice(index, 1);
-        console.debug('[Game Filter] Removed game tag:', gameName);
+        console.log('[Game Filter] Removed game tag:', gameName);
         updateGameTagsDisplay();
         const searchInput = document.getElementById('inventory-game-search');
         renderGameDropdown(searchInput ? searchInput.value : '');
@@ -238,7 +238,7 @@ function updateGameTagsDisplay() {
 
 function sortCampaigns(campaigns) {
     const now = Date.now();
-    console.debug('[Inventory Sort] Sorting campaigns array of count:', campaigns.length);
+    console.log('[Inventory Sort] Sorting campaigns array of count:', campaigns.length);
     return [...campaigns].sort((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1;
         
@@ -444,7 +444,7 @@ function campaignMatchesFilters(campaign, filters) {
 }
 
 function onInventoryFilterChange() {
-    console.debug('[Inventory Filter] Filter state changed by user interaction.');
+    console.log('[Inventory Filter] Filter state changed by user interaction.');
     saveSettings();
     renderInventory();
 }

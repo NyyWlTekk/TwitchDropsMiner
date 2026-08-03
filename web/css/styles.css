@@ -1293,11 +1293,12 @@ header h1 {
     margin-bottom: 0; 
     padding: 8px 10px; 
     background: transparent; 
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    /* Dělicí linka ve fialové akcentní barvě (s jemnou průhledností, aby neřvala) */
+    border-bottom: 1px solid rgba(145, 70, 255, 0.3);
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap; /* Změněno z nowrap na wrap pro správný přechod progress baru */
     align-items: center;
-    gap: 12px;
+    gap: 8px 12px;
     justify-content: space-between;
 }
 
@@ -1410,6 +1411,22 @@ header h1 {
 .wanted-card.expired {
     border-color: rgba(255, 255, 255, 0.05);
     opacity: 0.5;
+}
+
+/* Tenký progress bar pro Wanted Drop */
+.wanted-drop-progress {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 4px;
+    width: 100%;
+}
+
+.wanted-drop-progress-bar {
+    height: 100%;
+    background: var(--accent-color);
+    transition: width 0.3s ease;
 }
 
 /* ===================================================================
@@ -2029,6 +2046,14 @@ header h1 {
     border-radius: 4px;
     font-size: 12px;
     font-weight: 600;
+}
+
+/* 6. Warning / Account Unlinked (Red/Orange Accent) */
+.status-tag.tag-warning,
+.status-tag.tag-unlinked {
+    background-color: rgba(255, 77, 77, 0.15);
+    color: #ff4d4d;
+    border: 1px solid rgba(255, 77, 77, 0.3);
 }
 
 /* 1. Mining / Active Mining State (Green/Cyan) */

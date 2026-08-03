@@ -301,11 +301,11 @@ function renderDropItemElement(drop, index = 1, campaignState = null) {
     const isClaimed = Boolean(drop.is_claimed ?? drop.isClaimed ?? drop.claimed ?? false);
     const canClaim = Boolean(drop.can_claim ?? drop.canClaim ?? false);
     
-    // 1. Základní vytažení minut z objektu dropu
+    // 1. Basic minutes extraction from drop object
     let current = Math.round(Number(drop.current_minutes ?? drop.currentMinutes ?? drop.current_time ?? drop.progress ?? 0));
     const required = Number(drop.required_minutes ?? drop.requiredMinutes ?? drop.required_time ?? drop.needed_minutes ?? drop.duration ?? drop.total_minutes ?? 0);
 
-    // 2. Synchronizace živého času z aktivního stavu těžení (state.currentDrop)
+    // 2. Sync live time from active mining state (state.currentDrop)
     const activeDrop = state?.currentDrop || state?.current_drop;
     if (activeDrop && !isClaimed) {
         const activeDropId = activeDrop.drop_id || activeDrop.id;
@@ -317,7 +317,7 @@ function renderDropItemElement(drop, index = 1, campaignState = null) {
         const isDirectActiveDrop = dropId && activeDropId && String(dropId).trim() === String(activeDropId).trim();
         const isSameCampaign = (campaignState?.isActivelyMining) || (dropCampaignId && activeCampaignId && String(dropCampaignId).trim() === String(activeCampaignId).trim());
 
-        // Pokud jde o aktivně těžený drop nebo kampaň právě těží, přebíráme nejvyšší živý čas ze stavu
+        // If active drop or campaign is currently mining, take higher live minutes from state
         if (isDirectActiveDrop || isSameCampaign) {
             const liveMinutes = Math.round(Number(activeDrop.current_minutes ?? activeDrop.currentMinutes ?? activeDrop.current_time ?? activeDrop.progress ?? 0));
             if (liveMinutes > current) {
@@ -361,7 +361,13 @@ function renderDropItemElement(drop, index = 1, campaignState = null) {
             const label = state?.translations?.gui?.wanted?.ready || 'Ready to claim!';
             statusEl.innerHTML = `<span class="status-tag tag-ready">${getStatusIconSVG('drop-ready')} ${label}</span>`;
         } else if (required > 0) {
-            statusEl.innerHTML = `<span class="status-tag tag-progress">${getStatusIconSVG('drop-active')} ${current} / ${required} min</span>`;
+            const progressPercent = Math.min(100, Math.max(0, Math.round((current / required) * 100)));
+            statusEl.innerHTML = `
+                <span class="status-tag tag-progress">${getStatusIconSVG('drop-active')} ${current} / ${required} min</span>
+                <div class="wanted-drop-progress">
+                    <div class="wanted-drop-progress-bar" style="width: ${progressPercent}%;"></div>
+                </div>
+            `;
         }
         el.appendChild(statusEl);
     });

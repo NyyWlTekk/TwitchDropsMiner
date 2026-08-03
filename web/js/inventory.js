@@ -12,15 +12,18 @@ let gameDropdownVisible = false;
 // ==================== Game Dropdown & Tags ====================
 
 function getAvailableGamesForDropdown() {
-    // Combine games from campaigns and availableGames Set
-    const gamesFromCampaigns = Object.values(state.campaigns || {}).map(c => c.game_name);
-    const gamesFromSettings = Array.from(availableGames || []);
+    // Extract game names from campaigns safely and remove empty/falsy values
+    const gamesFromCampaigns = Object.values(state?.campaigns || {})
+        .map(campaign => campaign?.game_name)
+        .filter(Boolean);
 
-    // Merge and deduplicate
-    const allGames = [...new Set([...gamesFromCampaigns, ...gamesFromSettings])];
+    // Convert settings to array and filter falsy values
+    const gamesFromSettings = Array.from(availableGames || []).filter(Boolean);
 
-    // Sort alphabetically
-    return allGames.sort((a, b) => a.localeCompare(b));
+    // Merge, deduplicate, and sort alphabetically
+    const uniqueGames = Array.from(new Set([...gamesFromCampaigns, ...gamesFromSettings]));
+
+    return uniqueGames.sort((a, b) => a.localeCompare(b));
 }
 
 let lastGameDropdownHash = null;
@@ -40,8 +43,10 @@ function renderGameDropdown(searchTerm = '', force = false) {
     const selectedGames = Array.isArray(selectedInventoryGames) ? selectedInventoryGames : [];
     const focusedIdx = typeof gameDropdownFocusedIndex !== 'undefined' ? gameDropdownFocusedIndex : -1;
 
-    // Structural Fingerprint Check: Zabrání zbytečnému re-renderu při identickém vstupu
-    const currentHash = `${searchLower}_${filteredGames.length}_${focusedIdx}_${selectedGames.length}`;
+    // Structural Fingerprint Check: Serialize selected games to capture actual state changes
+    const selectedHash = selectedGames.join('|');
+    const currentHash = `${searchLower}_${filteredGames.length}_${focusedIdx}_${selectedHash}`;
+
     if (!force && lastGameDropdownHash === currentHash) {
         return;
     }
@@ -56,7 +61,7 @@ function renderGameDropdown(searchTerm = '', force = false) {
         return;
     }
 
-    // Batch DOM Injection přes DocumentFragment
+    // Batch DOM Injection via DocumentFragment
     const fragment = document.createDocumentFragment();
 
     filteredGames.forEach((gameName, index) => {
@@ -83,6 +88,12 @@ function renderGameDropdown(searchTerm = '', force = false) {
         // Click handler for the entire item
         item.addEventListener('click', (e) => {
             e.stopPropagation();
+
+            // Prevent double triggers from native label/checkbox clicks
+            if (e.target === checkbox || e.target === label) {
+                e.preventDefault();
+            }
+
             if (typeof toggleGameSelection === 'function') {
                 toggleGameSelection(gameName);
             }
@@ -91,7 +102,7 @@ function renderGameDropdown(searchTerm = '', force = false) {
         fragment.appendChild(item);
     });
 
-    // Atomické vložení celého stromu do DOMu najednou
+    // Atomic insertion of the entire tree into the DOM at once
     dropdown.replaceChildren(fragment);
 }
 
@@ -275,22 +286,39 @@ function getInventoryFilters() {
 
 // Determines the precise lifecycle state of a campaign
 function getCampaignStatus(campaign, now = Date.now()) {
-    const startsAt = campaign.starts_at ? new Date(campaign.starts_at).getTime() : 0;
-    const endsAt = campaign.ends_at ? new Date(campaign.ends_at).getTime() : 0;
+    if (!campaign) {
+        return { isActive: false, isUpcoming: false, isExpired: false, isFinished: false };
+    }
 
-    // Check upcoming by local time OR by Twitch API flags
+    // Bezpečný převod data na timestamp s ochranou proti NaN
+    const parseTimestamp = (dateVal) => {
+        if (!dateVal) return 0;
+        const time = new Date(dateVal).getTime();
+        return Number.isNaN(time) ? 0 : time;
+    };
+
+    const startsAt = parseTimestamp(campaign.starts_at);
+    const endsAt = parseTimestamp(campaign.ends_at);
+
+    // 1. Check Upcoming (Plánovaná / Nadcházející)
     const isUpcoming = (startsAt > now) || 
                        (campaign.status === 'UPCOMING') || 
                        (campaign.upcoming === true);
 
-    // Check active by local time OR by Twitch API flags (must not be upcoming)
-    const isActive = (((startsAt <= now && endsAt > now) || 
-                      (campaign.status === 'ACTIVE') || 
-                      (campaign.active === true)) && !isUpcoming);
+    // 2. Check Expired (Vypršená - nesmí být Upcoming)
+    const isExpired = !isUpcoming && (
+        (endsAt > 0 && endsAt <= now) || 
+        (campaign.status === 'EXPIRED')
+    );
 
-    const isExpired = (endsAt > 0 && endsAt <= now) || (campaign.status === 'EXPIRED');
-    
-    // Calculate claim status across time-based drops or summary flags
+    // 3. Check Active (Aktivní - nesmí být Upcoming ani Expired)
+    const isActive = !isUpcoming && !isExpired && (
+        (startsAt > 0 && startsAt <= now && (endsAt === 0 || endsAt > now)) || 
+        (campaign.status === 'ACTIVE') || 
+        (campaign.active === true)
+    );
+
+    // 4. Calculate Drops / Progress
     const dropsList = campaign.drops || campaign.time_based_drops || [];
     const realClaimed = dropsList.length > 0 
         ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
@@ -299,15 +327,12 @@ function getCampaignStatus(campaign, now = Date.now()) {
 
     const isFinished = realTotal > 0 && realClaimed >= realTotal;
 
-    const statusResult = {
+    return {
         isActive,
         isUpcoming,
         isExpired,
         isFinished
     };
-
-    console.debug(`[Inventory Status] "${campaign.name || campaign.game_name}":`, statusResult);
-    return statusResult;
 }
 
 // Checks if a campaign matches status checkboxes
@@ -375,11 +400,22 @@ function matchesBenefitFilter(campaign, filters) {
 function campaignMatchesFilters(campaign, filters) {
     const status = getCampaignStatus(campaign);
 
-    if (!matchesStatusFilters(campaign, filters, status)) return false;
-    if (!matchesGameFilter(campaign, filters)) return false;
-    if (!matchesBenefitFilter(campaign, filters)) return false;
+    const matchStatus = matchesStatusFilters(campaign, filters, status);
+    const matchGame = matchesGameFilter(campaign, filters);
+    const matchBenefit = matchesBenefitFilter(campaign, filters);
 
-    return true;
+    const result = matchStatus && matchGame && matchBenefit;
+
+    if (!result) {
+        console.log(`[Filter Debug] Rejected campaign '${campaign.game_name || campaign.name}':`, {
+            status,
+            matchStatus,
+            matchGame,
+            matchBenefit
+        });
+    }
+
+    return result;
 }
 
 function onInventoryFilterChange() {
@@ -388,25 +424,70 @@ function onInventoryFilterChange() {
     renderInventory();
 }
 
+/**
+ * Safely sets the checked state of a checkbox if it exists in the DOM.
+ */
+function setCheckboxChecked(elementId, state) {
+    const el = document.getElementById(elementId);
+    if (el) {
+        el.checked = state;
+    }
+}
+
+/**
+ * Clears all inventory filters to default state safely.
+ */
 function clearInventoryFilters() {
-    document.getElementById('filter-active').checked = false;
-    document.getElementById('filter-not-linked').checked = false;
-    document.getElementById('filter-upcoming').checked = false;
-    document.getElementById('filter-expired').checked = false;
-    document.getElementById('filter-finished').checked = false;
-    document.getElementById('inventory-game-search').value = '';
+    const idsToUncheck = [
+        'filter-active',
+        'filter-not-linked',
+        'filter-upcoming',
+        'filter-expired',
+        'filter-finished'
+    ];
 
-    if (document.getElementById('filter-benefit-item')) document.getElementById('filter-benefit-item').checked = true;
-    if (document.getElementById('filter-benefit-badge')) document.getElementById('filter-benefit-badge').checked = true;
-    if (document.getElementById('filter-benefit-emote')) document.getElementById('filter-benefit-emote').checked = true;
-    if (document.getElementById('filter-benefit-other')) document.getElementById('filter-benefit-other').checked = true;
+    const idsToCheck = [
+        'filter-benefit-item',
+        'filter-benefit-badge',
+        'filter-benefit-emote',
+        'filter-benefit-other'
+    ];
 
-    selectedInventoryGames = [];
-    updateGameTagsDisplay();
+    // 1. Safely uncheck state filters
+    idsToUncheck.forEach(id => setCheckboxChecked(id, false));
 
-    console.debug('[Inventory Filter] Cleared all inventory filters to default state.');
-    saveSettings();
-    renderInventory();
+    // 2. Safely check benefit filters
+    idsToCheck.forEach(id => setCheckboxChecked(id, true));
+
+    // 3. Safely clear search input
+    const searchInput = document.getElementById('inventory-game-search');
+    if (searchInput) {
+        searchInput.value = '';
+    }
+
+    // 4. Safely clear array without breaking reference
+    if (typeof selectedInventoryGames !== 'undefined' && Array.isArray(selectedInventoryGames)) {
+        selectedInventoryGames.length = 0;
+    }
+
+    // 5. Update UI tags display & dropdown checkboxes
+    if (typeof updateGameTagsDisplay === 'function') {
+        updateGameTagsDisplay();
+    }
+    if (typeof renderGameDropdown === 'function') {
+        renderGameDropdown('', true); // Force re-render dropdownu bez vybraných her
+    }
+
+    console.log('[Inventory Filter] Cleared all inventory filters to default state.');
+
+    // 6. Save settings and re-render grid
+    if (typeof saveSettings === 'function') {
+        saveSettings();
+    }
+
+    if (typeof renderInventory === 'function') {
+        renderInventory(true); // Force re-render inventory mřížky
+    }
 }
 
 // Renders a single benefit item
@@ -675,61 +756,70 @@ function createCampaignCard(campaign, t) {
 
 let lastInventoryRenderHash = null;
 
-// Main grid rendering procedure (OPTIMIZED)
+// Main grid rendering procedure
 function renderInventory(force = false) {
-    const container = document.getElementById('inventory-grid');
-    if (!container) return;
+    console.log('[Inventory Debug] === Executing renderInventory ===');
+    try {
+        const container = document.getElementById('inventory-grid');
+        if (!container) {
+            console.error('[Inventory Debug] ERROR: Element #inventory-grid NOT FOUND in DOM!');
+            return;
+        }
 
-    updateOverallProgress();
+        if (typeof updateOverallProgress === 'function') {
+            updateOverallProgress();
+        } else {
+            console.log('[Inventory Debug] WARNING: Function updateOverallProgress does not exist.');
+        }
 
-    const t = state.translations || {};
-    const allCampaigns = state.campaigns ? Object.values(state.campaigns) : [];
-    const filters = getInventoryFilters();
+        const t = state?.translations || {};
+        const allCampaigns = state?.campaigns ? Object.values(state.campaigns) : [];
 
-    const hasStatusFilter = filters.show_active || filters.show_not_linked ||
-                            filters.show_upcoming || filters.show_expired || 
-                            filters.show_finished;
+        console.log(`[Inventory Debug] Total campaigns in state object: ${allCampaigns.length}`, state?.campaigns);
 
-    if (!hasStatusFilter) {
-        console.debug('[Inventory Render] Skipping render: No status filters active.');
-        return;
+        const filters = getInventoryFilters();
+        console.log('[Inventory Debug] Loaded filters from UI:', filters);
+
+        // Filter & Sort
+        const filteredCampaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
+        console.log(`[Inventory Debug] Campaigns passing filter: ${filteredCampaigns.length} of ${allCampaigns.length}`);
+
+        const sortedCampaigns = sortCampaigns(filteredCampaigns);
+
+        // Fingerprint guard
+        const currentHash = `${sortedCampaigns.length}_${sortedCampaigns.map(c => c.id || c.game_name).join(',')}_${JSON.stringify(filters)}`;
+        if (!force && lastInventoryRenderHash === currentHash) {
+            console.log('[Inventory Debug] Render skipped (identical data and filters - fingerprint match).');
+            return;
+        }
+        lastInventoryRenderHash = currentHash;
+
+        if (allCampaigns.length === 0) {
+            console.log('[Inventory Debug] WARNING: No data in state.campaigns!');
+            const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
+            container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
+            return;
+        }
+
+        if (sortedCampaigns.length === 0) {
+            console.log('[Inventory Debug] WARNING: Filters rejected ALL campaigns!');
+            container.replaceChildren(makeElement('p', { class: 'empty-message' }, 'No campaigns match the current filters.'));
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        sortedCampaigns.forEach((campaign, idx) => {
+            try {
+                fragment.appendChild(createCampaignCard(campaign, t));
+            } catch (err) {
+                console.error(`[Inventory Debug] ERROR creating card for campaign #${idx} (${campaign.game_name}):`, err);
+            }
+        });
+
+        container.replaceChildren(fragment);
+        console.log('[Inventory Debug] SUCCESS: Grid successfully rendered into DOM!');
+
+    } catch (globalErr) {
+        console.error('[Inventory Debug] CRITICAL ERROR inside renderInventory:', globalErr);
     }
-
-    // Filter & Sort
-    const filteredCampaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
-    const sortedCampaigns = sortCampaigns(filteredCampaigns);
-
-    // Fingerprint guard: Přeskočíme zbytečný re-render, pokud jsou data i filtry identické
-    const currentHash = `${sortedCampaigns.length}_${sortedCampaigns.map(c => c.id || c.game_name).join(',')}_${JSON.stringify(filters)}`;
-    if (!force && lastInventoryRenderHash === currentHash) {
-        return;
-    }
-    lastInventoryRenderHash = currentHash;
-
-    console.debug('[Inventory Render] Filter results:', { 
-        total: allCampaigns.length, 
-        filteredCount: sortedCampaigns.length,
-        filters 
-    });
-
-    // Handle Empty States (rychlý dom swap)
-    if (allCampaigns.length === 0) {
-        const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
-        container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
-        return;
-    }
-
-    if (sortedCampaigns.length === 0) {
-        container.replaceChildren(makeElement('p', { class: 'empty-message' }, 'No campaigns match the current filters.'));
-        return;
-    }
-
-    // Batch DOM Injection přes DocumentFragment (1 jediný zápis do DOMu)
-    const fragment = document.createDocumentFragment();
-    sortedCampaigns.forEach(campaign => {
-        fragment.appendChild(createCampaignCard(campaign, t));
-    });
-
-    // Provedeme nahrazení obsahu jedním krokem
-    container.replaceChildren(fragment);
 }

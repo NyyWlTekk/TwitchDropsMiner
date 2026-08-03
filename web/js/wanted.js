@@ -201,24 +201,41 @@ function renderCampaignCardElement(campaign, gameName) {
 }
 
 /**
- * Creates the campaign card header element including titles, badges, and dates.
+ * Updates or creates the campaign card header element including titles, badges, and dates.
  */
-function renderCampaignHeaderElement(campaign, drops, campaignState = null) {
-    return makeElement('div', { class: 'wanted-card-header' }, '', h => {
+function renderCampaignHeaderElement(campaign, drops, campaignState = null, existingHeader = null) {
+    if (!campaign || typeof campaign !== 'object') return null;
+
+    const claimedCount = typeof calculateClaimedDropsCount === 'function' 
+        ? calculateClaimedDropsCount(campaign, drops)
+        : (drops || []).filter(d => Boolean(d.is_claimed ?? d.isClaimed ?? d.claimed)).length;
+    
+    const totalCount = campaign.total_drops_count || campaign.totalDropsCount || (drops ? drops.length : 0);
+    const campaignName = campaign.name || campaign.campaign_name || 'Campaign';
+    const campaignUrl = campaign.url || '#';
+    const startsAt = campaign.starts_at || campaign.startsAt || '';
+    const endsAt = campaign.ends_at || campaign.endsAt || '';
+
+    // Complete Hash: Zahrnuje kompletně všechny proměnné, které ovlivňují HTML výstup
+    const currentHash = `${campaign.id || campaignName}_${campaignUrl}_${claimedCount}_${totalCount}_${campaignState?.isActivelyMining}_${campaignState?.hasProgress}_${startsAt}_${endsAt}`;
+
+    // Pokud existující hlavička má stejný hash, vracíme ji a ukončujeme re-render
+    if (existingHeader && existingHeader.dataset.hash === currentHash) {
+        return existingHeader;
+    }
+
+    console.log(`[CampaignHeader Debug] Executing FULL UPDATE for header: ${campaignName}`);
+
+    const newHeader = makeElement('div', { class: 'wanted-card-header' }, '', h => {
         const titleRow = makeElement('div', { class: 'wanted-card-header-main' }, '', row => {
             row.appendChild(makeElement('a', {
-                href: campaign.url || '#',
+                href: campaignUrl,
                 target: '_blank',
                 rel: 'noopener noreferrer',
                 class: 'wanted-card-campaign-link',
-                title: campaign.name || campaign.campaign_name || 'Campaign'
-            }, campaign.name || campaign.campaign_name || 'Campaign'));
+                title: campaignName
+            }, campaignName));
 
-            const claimedCount = typeof calculateClaimedDropsCount === 'function' 
-                ? calculateClaimedDropsCount(campaign, drops)
-                : (drops || []).filter(d => Boolean(d.is_claimed ?? d.isClaimed ?? d.claimed)).length;
-            
-            const totalCount = campaign.total_drops_count || campaign.totalDropsCount || (drops ? drops.length : 0);
             row.appendChild(makeElement('span', { class: 'wanted-campaign-badge' }, `(${claimedCount}/${totalCount})`));
 
             if (campaignState) {
@@ -231,7 +248,7 @@ function renderCampaignHeaderElement(campaign, drops, campaignState = null) {
         h.appendChild(titleRow);
 
         if (typeof formatCampaignDates === 'function') {
-            const dateText = formatCampaignDates(campaign.starts_at || campaign.startsAt, campaign.ends_at || campaign.endsAt);
+            const dateText = formatCampaignDates(startsAt, endsAt);
             if (dateText) {
                 const datesEl = makeElement('div', { class: 'wanted-campaign-dates' });
                 datesEl.innerHTML = `${getStatusIconSVG('upcoming')} ${dateText}`;
@@ -239,6 +256,16 @@ function renderCampaignHeaderElement(campaign, drops, campaignState = null) {
             }
         }
     });
+
+    // Uložení nového hashu do elementu
+    newHeader.dataset.hash = currentHash;
+
+    // Pokud byl předán starý element spojený s DOMem, nahradíme ho
+    if (existingHeader && existingHeader.parentNode) {
+        existingHeader.replaceWith(newHeader);
+    }
+
+    return newHeader;
 }
 
 /**

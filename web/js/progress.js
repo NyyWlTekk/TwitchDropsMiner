@@ -53,30 +53,41 @@ function isClaimed(item) {
 function getCampaignAndDrops(queueItem) {
     if (!queueItem) return { campaign: null, drops: [] };
 
-    // Helper for fast normalization of drops structure
-    const normalizeDrops = (dropsData) => {
+    // Helper to normalize drops structure and inject parent campaign ID into children
+    const normalizeDrops = (dropsData, parentCampId) => {
         if (!dropsData) return [];
-        return Array.isArray(dropsData) ? dropsData : Object.values(dropsData);
+        const dropsArr = Array.isArray(dropsData) ? dropsData : Object.values(dropsData);
+        
+        return dropsArr.map(drop => {
+            if (!drop || typeof drop !== 'object') return drop;
+            const effectiveCampId = drop.campaign_id || drop.campaignId || parentCampId || '';
+            return effectiveCampId ? { ...drop, campaign_id: effectiveCampId, campaignId: effectiveCampId } : drop;
+        });
     };
 
+    // Extract campaign ID with fallback for both camelCase and snake_case
+    const itemCampId = queueItem.campaign_id || queueItem.campaignId || queueItem.id || '';
+
     if (queueItem.drops) {
-        return { campaign: queueItem, drops: normalizeDrops(queueItem.drops) };
+        return { 
+            campaign: queueItem, 
+            drops: normalizeDrops(queueItem.drops, itemCampId) 
+        };
     }
 
-    const campId = queueItem.campaign_id;
-    if (state && state.campaigns && campId) {
+    if (state && state.campaigns && itemCampId) {
         let found = null;
         const campaigns = state.campaigns;
 
         // 1. Direct O(1) lookup attempt if campaigns is an object keyed by ID
-        if (!Array.isArray(campaigns) && campaigns[campId]) {
-            found = campaigns[campId];
+        if (!Array.isArray(campaigns) && campaigns[itemCampId]) {
+            found = campaigns[itemCampId];
         } else {
             // 2. Fast iteration without allocating Object.values() array
             if (Array.isArray(campaigns)) {
                 for (let i = 0; i < campaigns.length; i++) {
                     const c = campaigns[i];
-                    if (c && (c.id === campId || c.campaign_id === campId)) {
+                    if (c && (c.id === itemCampId || c.campaign_id === itemCampId || c.campaignId === itemCampId)) {
                         found = c;
                         break;
                     }
@@ -85,7 +96,7 @@ function getCampaignAndDrops(queueItem) {
                 for (const key in campaigns) {
                     if (Object.prototype.hasOwnProperty.call(campaigns, key)) {
                         const c = campaigns[key];
-                        if (c && (c.id === campId || c.campaign_id === campId)) {
+                        if (c && (c.id === itemCampId || c.campaign_id === itemCampId || c.campaignId === itemCampId)) {
                             found = c;
                             break;
                         }
@@ -95,11 +106,17 @@ function getCampaignAndDrops(queueItem) {
         }
 
         if (found && found.drops) {
-            return { campaign: found, drops: normalizeDrops(found.drops) };
+            const resolvedCampId = found.id || found.campaign_id || found.campaignId || itemCampId;
+            return { 
+                campaign: found, 
+                drops: normalizeDrops(found.drops, resolvedCampId) 
+            };
         }
     }
 
-    return { campaign: queueItem, drops: [queueItem] };
+    // Fallback: single drop item (ensure campaign ID is preserved)
+    const normalizedFallback = itemCampId ? { ...queueItem, campaign_id: itemCampId, campaignId: itemCampId } : queueItem;
+    return { campaign: queueItem, drops: [normalizedFallback] };
 }
 
 /**
@@ -645,44 +662,75 @@ function getCachedImage(url, alt, className, styles = {}) {
     return imgEl;
 }
 
-let lastDropHeaderHash = null;
-let cachedIconContainer = null;
-let cachedInfoTextDiv = null;
+/**
+ * Resets and hides the header container when invalid or empty data is provided.
+ */
+function resetDropHeader(dropGameEl, reason = 'invalid or missing data') {
+    if (lastDropHeaderHash !== 'empty') {
+        console.log(`[DropHeader Debug] Resetting header due to: ${reason}`);
+        dropGameEl.innerHTML = '';
+        dropGameEl.style.display = 'none';
+        lastDropHeaderHash = 'empty';
+    }
+}
 
-function renderDropGameHeader(data, force = false) {
-    const dropGameEl = document.getElementById('drop-game');
-    if (!dropGameEl) return;
+/**
+ * Extracts campaign information, title text, subtitle, and effective campaign ID.
+ */
+function resolveCampaignData(data) {
+    const rawCampaignId = data.campaign_id || data.campaignId || '';
+    let foundCampaign = (state?.campaigns && rawCampaignId) ? state.campaigns[rawCampaignId] : null;
 
-    const campaignId = data?.campaign_id || '';
-    let foundCampaign = (state?.campaigns && campaignId) ? state.campaigns[campaignId] : null;
-
-    const titleText = data?.campaign_name || data?.game_name || foundCampaign?.campaign_name || foundCampaign?.game_name || '';
-    const subTextContent = data?.drop_name || '';
-    const rawBoxArt = data?.game_box_art_url || foundCampaign?.game_box_art_url || foundCampaign?.box_art_url || foundCampaign?.art_url || '';
-
-    // Reset při reálně neplatných datech
-    if (!data || typeof data !== 'object' || (!titleText && !campaignId)) {
-        if (lastDropHeaderHash !== 'empty') {
-            dropGameEl.innerHTML = '';
-            dropGameEl.style.display = 'none';
-            lastDropHeaderHash = 'empty';
-        }
-        return;
+    if (!foundCampaign && state?.campaigns) {
+        const gId = (data.game_id || data.gameId) ? String(data.game_id || data.gameId) : null;
+        const gName = (data.game_name || data.gameName || data.game || '').trim().toLowerCase();
+        
+        const campList = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
+        foundCampaign = campList.find(c => {
+            if (!c) return false;
+            const cGameId = c.game_id || c.gameId || c.game?.id;
+            const cGameName = c.game_name || c.gameName || (typeof c.game === 'string' ? c.game : c.game?.name);
+            return (gId && cGameId && String(cGameId) === gId) ||
+                   (gName && cGameName && String(cGameName).trim().toLowerCase() === gName);
+        });
     }
 
-    let boxArtUrl = rawBoxArt;
-    const iconUrl = boxArtUrl ? boxArtUrl.replace('{width}', '52').replace('{height}', '70') : null;
+    const effectiveCampaignId = rawCampaignId || foundCampaign?.id || foundCampaign?.campaign_id || '';
+    const titleText = data.campaign_name || data.campaignName || data.game_name || data.gameName || data.game || 
+                      foundCampaign?.campaign_name || foundCampaign?.campaignName || foundCampaign?.game_name || foundCampaign?.gameName || '';
+    const subTextContent = data.drop_name || data.dropName || '';
 
-    // ==========================================
-    // 1. DOM INTEGRITY CHECK (VŽDY na začátku)
-    // Zajišťuje, že prvky v DOMu fyzicky jsou, i když se data nezměnila
-    // ==========================================
+    return { foundCampaign, effectiveCampaignId, titleText, subTextContent };
+}
+
+/**
+ * Extracts and builds the box art icon URL from data or fallback campaign.
+ */
+function extractIconUrl(data, foundCampaign) {
+    const extractBoxArt = (obj) => {
+        if (!obj) return null;
+        const g = (typeof obj.game === 'object' && obj.game !== null) ? obj.game : {};
+        return obj.game_box_art_url || obj.gameBoxArtURL || obj.gameBoxArtUrl ||
+               obj.game_icon || obj.gameIcon || obj.box_art_url || obj.boxArtURL || obj.boxArtUrl ||
+               obj.icon_url || obj.iconURL || obj.iconUrl || obj.image_url || obj.imageUrl ||
+               g.box_art_url || g.boxArtURL || g.boxArtUrl || g.icon_url || g.iconURL || g.image_url;
+    };
+
+    const rawBoxArt = extractBoxArt(data) || extractBoxArt(foundCampaign) || '';
+    return rawBoxArt ? rawBoxArt.replace('{width}', '52').replace('{height}', '70') : null;
+}
+
+/**
+ * Ensures cached DOM containers exist and are properly attached to the parent.
+ */
+function ensureHeaderContainers(dropGameEl) {
     dropGameEl.style.display = 'flex';
     dropGameEl.style.alignItems = 'center';
     dropGameEl.style.gap = '12px';
     dropGameEl.style.margin = '8px 0';
 
     if (!cachedIconContainer) {
+        console.log('[DropHeader Debug] Creating cachedIconContainer for the first time.');
         cachedIconContainer = document.createElement('div');
         cachedIconContainer.className = 'game-icon-container';
         cachedIconContainer.style.width = '42px';
@@ -697,6 +745,7 @@ function renderDropGameHeader(data, force = false) {
     }
 
     if (!cachedInfoTextDiv) {
+        console.log('[DropHeader Debug] Creating cachedInfoTextDiv for the first time.');
         cachedInfoTextDiv = document.createElement('div');
         cachedInfoTextDiv.className = 'drop-game-text-info';
         cachedInfoTextDiv.style.display = 'flex';
@@ -705,22 +754,22 @@ function renderDropGameHeader(data, force = false) {
     }
 
     if (!dropGameEl.contains(cachedIconContainer) || !dropGameEl.contains(cachedInfoTextDiv)) {
+        console.log('[DropHeader Debug] DOM element missing container! Invoking replaceChildren (DOM reset/rebuild).', {
+            hasIconContainer: dropGameEl.contains(cachedIconContainer),
+            hasInfoTextDiv: dropGameEl.contains(cachedInfoTextDiv)
+        });
         dropGameEl.replaceChildren(cachedIconContainer, cachedInfoTextDiv);
     }
+}
 
-    // ==========================================
-    // 2. HASH GUARD (pokud se data nezměnila, končíme až teď, kdy už máme DOM jistý)
-    // ==========================================
-    const currentHash = `${campaignId}_${titleText}_${subTextContent}_${iconUrl}`;
-    if (!force && lastDropHeaderHash === currentHash) {
-        return;
-    }
-    lastDropHeaderHash = currentHash;
-
-    // 3. Aktualizace obrázku
+/**
+ * Updates the game icon image element inside cachedIconContainer.
+ */
+function updateHeaderIcon(iconUrl) {
     let imgEl = cachedIconContainer.querySelector('img');
     if (iconUrl) {
         if (!imgEl) {
+            console.log('[DropHeader Debug] <img> element missing inside cachedIconContainer. Creating new <img> tag.');
             imgEl = document.createElement('img');
             imgEl.className = 'game-icon';
             imgEl.style.width = '100%';
@@ -730,39 +779,54 @@ function renderDropGameHeader(data, force = false) {
             cachedIconContainer.appendChild(imgEl);
         }
         if (imgEl.src !== iconUrl) {
+            console.log(`[DropHeader Debug] Image src updated from "${imgEl.src}" to "${iconUrl}"`);
             imgEl.src = iconUrl;
         }
     } else if (imgEl) {
+        console.log('[DropHeader Debug] Removing <img> element because iconUrl is null.');
         imgEl.remove();
     }
+}
 
-    // 4. Aktualizace titulku / odkazu
-    let titleNode = cachedInfoTextDiv.querySelector('.drop-campaign-link, .drop-campaign-title');
-    const isLink = Boolean(campaignId);
-    const targetTag = isLink ? 'A' : 'SPAN';
-
-    if (!titleNode || titleNode.tagName !== targetTag) {
-        if (titleNode) titleNode.remove();
-        titleNode = document.createElement(isLink ? 'a' : 'span');
-        titleNode.className = isLink ? 'drop-campaign-link' : 'drop-campaign-title';
-        if (isLink) {
-            titleNode.target = '_blank';
-            titleNode.rel = 'noopener noreferrer';
-        }
+/**
+ * Updates the main title and link anchor node inside cachedInfoTextDiv.
+ */
+function updateHeaderTitle(effectiveCampaignId, titleText) {
+    let titleNode = cachedInfoTextDiv.querySelector('.drop-campaign-title');
+    
+    if (!titleNode) {
+        titleNode = document.createElement('a');
+        titleNode.className = 'drop-campaign-title drop-campaign-link';
+        titleNode.target = '_blank';
+        titleNode.rel = 'noopener noreferrer';
         cachedInfoTextDiv.prepend(titleNode);
     }
 
-    if (isLink) {
-        const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${campaignId}`;
-        if (titleNode.href !== campaignUrl) titleNode.href = campaignUrl;
+    if (effectiveCampaignId) {
+        const targetUrl = `https://www.twitch.tv/drops/campaigns?dropID=${effectiveCampaignId}`;
+        if (titleNode.href !== targetUrl) {
+            titleNode.href = targetUrl;
+        }
+        titleNode.style.pointerEvents = 'auto';
+        titleNode.style.textDecoration = 'underline';
+    } else {
+        titleNode.removeAttribute('href');
+        titleNode.style.pointerEvents = 'none';
+        titleNode.style.textDecoration = 'none';
     }
+
     if (titleNode.textContent !== titleText) {
         titleNode.textContent = titleText;
     }
+}
 
-    // 5. Aktualizace podtitulku
+/**
+ * Updates subtitle node inside cachedInfoTextDiv.
+ */
+function updateHeaderSubtitle(subTextContent) {
     let subText = cachedInfoTextDiv.querySelector('.drop-sub-name');
     if (!subText) {
+        console.log('[DropHeader Debug] Subtitle node missing. Creating span.drop-sub-name.');
         subText = document.createElement('span');
         subText.className = 'drop-sub-name';
         subText.style.fontSize = '0.9em';
@@ -774,32 +838,71 @@ function renderDropGameHeader(data, force = false) {
     }
 }
 
-let lastDropCardLayoutHash = null;
+let lastDropHeaderHash = null;
+let cachedIconContainer = null;
+let cachedInfoTextDiv = null;
 
-function renderDropCardLayout(data, rewardImgUrl, force = false) {
-    const currentDropLabel = document.getElementById('current-drop-label');
-    if (!currentDropLabel) return;
+/**
+ * Main render function for the drop game header.
+ */
+function renderDropGameHeader(data, force = false) {
+    const dropGameEl = document.getElementById('drop-game');
+    if (!dropGameEl) return;
 
-    // Reset při neplatných datech
+    // 1. Data sanity check
     if (!data || typeof data !== 'object') {
-        if (lastDropCardLayoutHash !== 'empty') {
-            currentDropLabel.textContent = '';
-            lastDropCardLayoutHash = 'empty';
-        }
+        resetDropHeader(dropGameEl, 'invalid data object');
         return;
     }
 
-    const currentId = data.drop_id || data.id || '';
-    const dropName = data.drop_name || '';
-    const rawImgUrl = rewardImgUrl || '';
+    // 2. Resolve campaign details & titles
+    const { foundCampaign, effectiveCampaignId, titleText, subTextContent } = resolveCampaignData(data);
 
-    // Hash Guard: Pokud je stejný drop, název i obrázek, ukončíme funkci okamžitě
-    const currentHash = `${currentId}_${dropName}_${rawImgUrl}`;
-    if (!force && lastDropCardLayoutHash === currentHash) {
+    if (!titleText && !effectiveCampaignId) {
+        resetDropHeader(dropGameEl, 'missing both titleText and effectiveCampaignId');
         return;
     }
 
-    // 1. Spočítáme index a velikost fronty aktivních dropů
+    // 3. Extract icon image URL
+    const iconUrl = extractIconUrl(data, foundCampaign);
+
+    // 4. Ensure container structure is ready in DOM
+    ensureHeaderContainers(dropGameEl);
+
+    // 5. Hash Guard to prevent redundant updates
+    const currentHash = `${effectiveCampaignId}_${titleText}_${subTextContent}_${iconUrl}`;
+    if (!force && lastDropHeaderHash === currentHash) {
+        return;
+    }
+
+    console.log(`[DropHeader Debug] Executing FULL UPDATE. force=${force}`, {
+        oldHash: lastDropHeaderHash,
+        newHash: currentHash
+    });
+
+    lastDropHeaderHash = currentHash;
+
+    // 6. Update individual DOM components
+    updateHeaderIcon(iconUrl);
+    updateHeaderTitle(effectiveCampaignId, titleText);
+    updateHeaderSubtitle(subTextContent);
+}
+
+/**
+ * Resets the drop label text when invalid data is provided.
+ */
+function resetDropCardLayout(currentDropLabel, reason = 'invalid data') {
+    if (lastDropCardLayoutHash !== 'empty') {
+        console.log(`[DropCardLayout Debug] Resetting drop card layout due to: ${reason}`);
+        currentDropLabel.textContent = '';
+        lastDropCardLayoutHash = 'empty';
+    }
+}
+
+/**
+ * Computes active drop queue, sorts by required minutes, and calculates current index and queue length.
+ */
+function calculateDropQueueInfo(data, currentId) {
     let activeDrops = [];
     const { drops } = typeof getCampaignAndDrops === 'function' 
         ? getCampaignAndDrops(data) 
@@ -809,8 +912,12 @@ function renderDropCardLayout(data, rewardImgUrl, force = false) {
         activeDrops = drops.filter(d => typeof isClaimed === 'function' ? !isClaimed(d) : true);
     }
     if (activeDrops.length === 0 && Array.isArray(state?.activeDropsQueue) && state.activeDropsQueue.length > 0) {
-        activeDrops = state.activeDropsQueue;
+        activeDrops = [...state.activeDropsQueue];
     }
+
+    // Seřazení od nejmenšího času po největší
+    const getDropMinutes = (d) => Number(d.required_minutes || d.total_minutes || d.requiredMinutes || 0);
+    activeDrops.sort((a, b) => getDropMinutes(a) - getDropMinutes(b));
 
     const dropQueueLen = activeDrops.length > 0 ? activeDrops.length : 1;
     let dropIdx = 1;
@@ -820,40 +927,43 @@ function renderDropCardLayout(data, rewardImgUrl, force = false) {
         if (foundIdx !== -1) dropIdx = foundIdx + 1;
     }
 
-    // Aktualizace textu štítku
-    const newLabelText = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${dropName}`;
-    if (currentDropLabel.textContent !== newLabelText) {
-        currentDropLabel.textContent = newLabelText;
-    }
+    return { dropIdx, dropQueueLen };
+}
 
-    // 2. Rychlé vyhledání nebo vytvoření obalového kontejneru
+/**
+ * Finds or establishes the outer .drop-card-container element.
+ */
+function ensureDropCardOuterContainer(currentDropLabel) {
     let cardOuter = currentDropLabel.closest('.drop-card-container');
 
     if (!cardOuter) {
-        // Optimalizované vyhledání bez pomalého while cyklu přes contains()
         const progressTime = document.getElementById('progress-time');
         const progressFill = document.getElementById('progress-fill');
         const targetElement = progressTime || progressFill;
 
         if (targetElement) {
-            // Najdeme nejbližšího společného předka
             let parent = currentDropLabel.parentElement;
             while (parent && parent !== document.body) {
                 if (parent.contains(targetElement)) {
                     cardOuter = parent;
                     cardOuter.classList.add('drop-card-container');
+                    console.log('[DropCardLayout Debug] Established new .drop-card-container parent.');
                     break;
                 }
                 parent = parent.parentElement;
             }
         }
     }
+    return cardOuter;
+}
 
-    if (!cardOuter) return;
-
-    // 3. Přestavba struktury (dvou sloupcový layout), pokud ještě neexistuje
+/**
+ * Builds and attaches the right column structure inside cardOuter if missing.
+ */
+function ensureDropCardRightCol(cardOuter) {
     let rightCol = cardOuter.querySelector('#drop-card-right-col');
     if (!rightCol) {
+        console.log('[DropCardLayout Debug] Creating #drop-card-right-col and restructuring layout to 2 columns.');
         rightCol = document.createElement('div');
         rightCol.id = 'drop-card-right-col';
         rightCol.style.flex = '1';
@@ -863,7 +973,6 @@ function renderDropCardLayout(data, rewardImgUrl, force = false) {
         rightCol.style.gap = '6px';
         rightCol.style.minWidth = '0';
 
-        // Hromadný přesun dětských prvků bez cyklení po jednom
         rightCol.append(...cardOuter.childNodes);
 
         cardOuter.style.display = 'flex';
@@ -872,8 +981,13 @@ function renderDropCardLayout(data, rewardImgUrl, force = false) {
         cardOuter.style.gap = '12px';
         cardOuter.appendChild(rightCol);
     }
+    return rightCol;
+}
 
-    // 4. Načtení/Vytvoření levého obrázku nebo náhradního čtverečku
+/**
+ * Resolves the left image element or placeholder element for the drop card.
+ */
+function resolveDropCardLeftImage(rawImgUrl, dropName) {
     let targetLeftEl = null;
 
     if (rawImgUrl && typeof getCachedImage === 'function') {
@@ -890,23 +1004,82 @@ function renderDropCardLayout(data, rewardImgUrl, force = false) {
     }
 
     if (!targetLeftEl) {
+        console.log('[DropCardLayout Debug] Image URL missing or getCachedImage unavailable. Creating placeholder.');
         targetLeftEl = document.createElement('div');
         targetLeftEl.className = 'image-placeholder';
     }
 
     targetLeftEl.id = 'drop-card-left-img';
+    return targetLeftEl;
+}
 
-    // Atomické nahrazení levého obrázku v DOMu
+/**
+ * Atomically swaps or appends the left image element in the DOM.
+ */
+function updateDropCardLeftImage(cardOuter, targetLeftEl, rightCol) {
     const existingLeftImg = cardOuter.querySelector('#drop-card-left-img');
     if (existingLeftImg !== targetLeftEl) {
+        console.log('[DropCardLayout Debug] Swapping left image element in DOM.');
         if (existingLeftImg) {
             existingLeftImg.replaceWith(targetLeftEl);
         } else {
             cardOuter.insertBefore(targetLeftEl, rightCol);
         }
     }
+}
 
-    // Až na samém konci uložíme úspěšný hash renderu
+let lastDropCardLayoutHash = null;
+
+/**
+ * Main render function for the drop card layout.
+ */
+function renderDropCardLayout(data, rewardImgUrl, force = false) {
+    const currentDropLabel = document.getElementById('current-drop-label');
+    if (!currentDropLabel) return;
+
+    // 1. Data sanity check
+    if (!data || typeof data !== 'object') {
+        resetDropCardLayout(currentDropLabel, 'invalid data object');
+        return;
+    }
+
+    const currentId = data.drop_id || data.id || '';
+    const dropName = data.drop_name || '';
+    const rawImgUrl = rewardImgUrl || '';
+
+    // 2. Hash Guard
+    const currentHash = `${currentId}_${dropName}_${rawImgUrl}`;
+    if (!force && lastDropCardLayoutHash === currentHash) {
+        return;
+    }
+
+    console.log(`[DropCardLayout Debug] Executing FULL UPDATE. force=${force}`, {
+        oldHash: lastDropCardLayoutHash,
+        newHash: currentHash
+    });
+
+    // 3. Compute queue position & update label
+    const { dropIdx, dropQueueLen } = calculateDropQueueInfo(data, currentId);
+    const newLabelText = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${dropName}`;
+    if (currentDropLabel.textContent !== newLabelText) {
+        currentDropLabel.textContent = newLabelText;
+    }
+
+    // 4. Locate outer container
+    const cardOuter = ensureDropCardOuterContainer(currentDropLabel);
+    if (!cardOuter) {
+        console.log('[DropCardLayout Debug] Could not locate or create card outer container.');
+        return;
+    }
+
+    // 5. Build/Ensure right column layout
+    const rightCol = ensureDropCardRightCol(cardOuter);
+
+    // 6. Resolve and update left image element
+    const targetLeftEl = resolveDropCardLeftImage(rawImgUrl, dropName);
+    updateDropCardLeftImage(cardOuter, targetLeftEl, rightCol);
+
+    // 7. Save successful render hash
     lastDropCardLayoutHash = currentHash;
 }
 

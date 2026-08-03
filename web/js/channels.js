@@ -153,6 +153,60 @@ function clearWatchingChannel() {
     });
 }
 
+/**
+ * Resolves game boxart icon URL accurately from channel object or state.campaigns fallback
+ */
+function resolveGameIconUrl(channel) {
+    if (!channel) return null;
+
+    // Helper to extract image URL from any known structure
+    const extractBoxArt = (obj) => {
+        if (!obj) return null;
+        const g = (typeof obj.game === 'object' && obj.game !== null) ? obj.game : {};
+        return obj.game_box_art_url || obj.gameBoxArtURL || obj.gameBoxArtUrl ||
+               obj.game_icon || obj.gameIcon || obj.box_art_url || obj.boxArtURL || obj.boxArtUrl ||
+               obj.icon_url || obj.iconURL || obj.iconUrl || obj.image_url || obj.imageUrl ||
+               g.box_art_url || g.boxArtURL || g.boxArtUrl || g.icon_url || g.iconURL || g.image_url;
+    };
+
+    // 1. Try resolving directly from channel object
+    let iconUrl = extractBoxArt(channel);
+
+    // 2. Fallback lookup in state.campaigns if icon is missing on channel
+    if (!iconUrl && typeof state !== 'undefined' && state.campaigns) {
+        const gameId = channel.game_id ? String(channel.game_id) : null;
+        const gameName = channel.game ? String(channel.game).trim().toLowerCase() : null;
+
+        const campaigns = state.campaigns;
+        const campaignList = Array.isArray(campaigns) ? campaigns : Object.values(campaigns);
+
+        for (let i = 0; i < campaignList.length; i++) {
+            const camp = campaignList[i];
+            if (!camp) continue;
+
+            const campGameId = camp.game_id || (typeof camp.game === 'object' ? camp.game?.id : null);
+            const campGameName = camp.game_name || (typeof camp.game === 'string' ? camp.game : camp.game?.name);
+
+            const matchesId = gameId && campGameId && String(campGameId) === gameId;
+            const matchesName = gameName && campGameName && String(campGameName).trim().toLowerCase() === gameName;
+
+            if (matchesId || matchesName) {
+                iconUrl = extractBoxArt(camp);
+                if (iconUrl) break;
+            }
+        }
+    }
+
+    if (!iconUrl) return null;
+
+    // 3. Format template placeholders if present
+    if (typeof iconUrl === 'string' && (iconUrl.includes('{width}') || iconUrl.includes('{height}'))) {
+        return iconUrl.replace('{width}', '40').replace('{height}', '53');
+    }
+
+    return iconUrl;
+}
+
 function renderChannels() {
     const container = document.getElementById('channels-list');
     if (!container) {
@@ -192,7 +246,9 @@ function renderChannels() {
     filteredChannels.forEach(channel => {
         const gameName = channel.game || 'No Game';
         const gameId = channel.game_id || 'no-game';
-        const gameIcon = channel.game_icon;
+        
+        // Dynamic icon resolution via channel data or campaign fallback
+        const gameIcon = resolveGameIconUrl(channel);
 
         if (!gameGroups[gameId]) {
             gameGroups[gameId] = {
@@ -200,10 +256,14 @@ function renderChannels() {
                 icon: gameIcon,
                 channels: []
             };
+        } else if (!gameGroups[gameId].icon && gameIcon) {
+            // Update group icon if previously missing channel had no icon, but current channel has one
+            gameGroups[gameId].icon = gameIcon;
         }
+
         gameGroups[gameId].channels.push(channel);
     });
-
+    
     const sortedGames = Object.entries(gameGroups).sort(([idA, groupA], [idB, groupB]) => {
         const hasWatchingA = groupA.channels.some(ch => ch.watching);
         const hasWatchingB = groupB.channels.some(ch => ch.watching);
@@ -232,7 +292,12 @@ function renderChannels() {
         const viewersText = t.gui?.channels?.viewers || 'viewers';
 
         if (group.icon) {
-            gameHeader.appendChild(makeImageElement(group.icon.replace('{width}', '40').replace('{height}', '53'), group.name, 'game-icon'));
+            // Retrieve image from global cache if available, fallback to basic image element builder
+            const imgEl = (typeof getCachedImage === 'function')
+                ? getCachedImage(group.icon, group.name, 'game-icon')
+                : makeImageElement(group.icon, group.name, 'game-icon');
+
+            gameHeader.appendChild(imgEl);
         }
         gameHeader.appendChild(makeElement('div', { class: 'game-group-info' }, null, el => {
             el.appendChild(makeElement('div', { class: 'game-group-name' }, group.name));

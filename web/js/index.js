@@ -577,6 +577,7 @@ function applyTranslations(t) {
         const notesHeader = document.getElementById('help-notes-header');
         if (notesHeader) notesHeader.textContent = t.gui.help.important_notes || 'Important Notes';
 
+		// HELP----------------------------------------------------
         const helpContent = helpTab.querySelector('.help-content');
         if (helpContent) {
             const howToItems = t.gui.help.how_to_use_items || [
@@ -612,6 +613,7 @@ function applyTranslations(t) {
                     el.appendChild(makeElement('a', { href: 'https://github.com/rangermix/TwitchDropsMiner', target: '_blank', rel: 'noopener noreferrer' }, t.gui.help.github_repo || 'GitHub Repository'))
                 ),
             );
+            // ! HELP----------------------------------------------------
         }
     }
 

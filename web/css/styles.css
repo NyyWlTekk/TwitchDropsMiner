@@ -1,20 +1,6 @@
-/* =================================================================
-   Main Layout & Global Styles
+/* ===================================================================
+   01. GLOBAL, BASE STYLES & VARIABLES
    =================================================================== */
-
-/* Base Layout Settings */
-.main-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 500px), 1fr));
-    gap: 20px;
-    align-items: stretch;
-}
-
-@media (min-width: 1200px) {
-    .main-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
 
 * {
     margin: 0;
@@ -65,7 +51,24 @@ body {
     padding: 1.25rem;
 }
 
-/* Header Styles */
+.main-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 500px), 1fr));
+    gap: 20px;
+    align-items: stretch;
+}
+
+@media (min-width: 1200px) {
+    .main-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+
+/* ===================================================================
+   02. HEADER, STATUS BAR & MODES
+   =================================================================== */
+
 header {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
@@ -158,61 +161,47 @@ header h1 {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
-.full-width {
-    width: 100%;
+/* Mode Badges */
+.mode-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.6875rem;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    margin-left: 10px;
+    transition: all 0.3s ease;
 }
 
-.help-text-inline {
-    display: block;
-    margin-top: 4px;
-    color: var(--text-secondary);
-    font-size: 0.75rem;
+#auto-mode-badge {
+    background: rgba(145, 70, 255, 0.15);
+    color: var(--accent-color);
+    border: 1px solid var(--accent-color);
 }
 
-.input-with-button {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    width: 100%;
+#manual-mode-badge {
+    background: rgba(255, 167, 38, 0.15);
+    color: var(--warning-color);
+    border: 1px solid var(--warning-color);
+    animation: pulse 2s ease-in-out infinite;
 }
 
-.input-with-button input {
-    flex: 1;
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.05);
+        opacity: 0.9;
+    }
 }
 
-.secondary-btn {
-    padding: 8px 12px;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: background-color 0.2s;
-}
 
-.secondary-btn:hover {
-    background-color: var(--border-color);
-}
+/* ===================================================================
+   03. TABS & NAVIGATION
+   =================================================================== */
 
-.verify-result {
-    margin-top: 4px;
-    font-size: 0.8125rem;
-    font-weight: 500;
-}
-
-.verify-result.success {
-    color: var(--success-color);
-}
-
-.verify-result.error {
-    color: var(--error-color);
-}
-
-.verify-result.loading {
-    color: var(--text-secondary);
-}
-
-/* Tabs */
 .tabs {
     display: flex;
     flex-wrap: wrap;
@@ -252,7 +241,26 @@ header h1 {
     display: block;
 }
 
-/* Panels & Layouts */
+.mobile-menu-toggle {
+    display: none;
+    width: 100%;
+    padding: 12px;
+    background: var(--accent-color);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+
+/* ===================================================================
+   04. PANELS & COMMON LAYOUTS
+   =================================================================== */
+
 .panel {
     background: var(--bg-panel);
     border: none;
@@ -297,7 +305,11 @@ header h1 {
     box-sizing: border-box;
 }
 
-/* Login Form */
+
+/* ===================================================================
+   05. LOGIN & AUTH
+   =================================================================== */
+
 #login-form input {
     display: block;
     width: 100%;
@@ -338,79 +350,11 @@ header h1 {
     letter-spacing: 4px;
 }
 
-/* Drop Progress */
-.drop-name {
-    font-weight: bold;
-    font-size: 1rem;
-    margin-bottom: 5px;
-}
 
-.drop-game {
-    color: var(--text-secondary);
-    margin-bottom: 15px;
-}
+/* ===================================================================
+   06. CHANNELS & STREAMERS
+   =================================================================== */
 
-.drop-campaign-link {
-    color: #0066cc;
-    text-decoration: none;
-    transition: all 0.2s;
-    cursor: pointer;
-}
-
-.drop-campaign-link:hover {
-    color: #0052a3;
-    text-decoration: underline;
-}
-
-.progress-bar {
-    width: 100%;
-    height: 30px;
-    background: var(--progress-bg);
-    border-radius: 15px;
-    overflow: hidden;
-    margin-bottom: 10px;
-}
-
-.progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent-color), var(--success-color));
-    transition: width 0.3s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-weight: bold;
-}
-
-.progress-text {
-    text-align: center;
-    font-size: 0.875rem;
-}
-
-.progress-time {
-    text-align: center;
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-}
-
-/* Console Output */
-.console-output {
-    height: clamp(250px, 40vh, 500px);
-    overflow-y: auto;
-    width: 100%;
-    font-family: 'Courier New', monospace;
-    font-size: 0.75rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 10px;
-}
-
-.console-output div {
-    margin-bottom: 2px;
-}
-
-/* Game Group & Channels */
 .game-group-header {
     display: flex;
     align-items: center;
@@ -471,9 +415,21 @@ header h1 {
     border-color: var(--accent-color);
 }
 
+@keyframes blink-active-item {
+    0%, 100% {
+        border-color: var(--success-color);
+        background: rgba(145, 70, 255, 0.1);
+        box-shadow: 0 0 0 0 rgba(var(--success-rgb), 0.3);
+    }
+    50% {
+        border-color: var(--accent-color);
+        background: rgba(var(--success-rgb), 0.2);
+        box-shadow: 0 0 10px 2px rgba(var(--success-rgb), 0.6);
+    }
+}
+
 .channel-item.watching {
-    border-color: var(--success-color);
-    background: rgba(145, 70, 255, 0.1);
+    animation: blink-active-item 2s ease-in-out infinite;
 }
 
 .channel-item.online {
@@ -513,7 +469,11 @@ header h1 {
     color: white;
 }
 
-/* Inventory Filters */
+
+/* ===================================================================
+   07. INVENTORY FILTERS & DROPDOWNS
+   =================================================================== */
+
 .inventory-filters {
     margin-bottom: 1.25rem;
     padding: 1rem;
@@ -690,7 +650,11 @@ header h1 {
     background: none;
 }
 
-/* Inventory Grid & Campaign Cards */
+
+/* ===================================================================
+   08. INVENTORY GRID & CAMPAIGN CARDS
+   =================================================================== */
+
 .inventory-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr));
@@ -851,24 +815,6 @@ header h1 {
     box-shadow: 0 1px 2px rgba(145, 71, 255, 0.3);
 }
 
-.campaign-header-icon svg, 
-.drop-item-header svg, 
-.benefit-status-icon svg,
-.external-link-icon svg {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
-    display: block;
-    fill: none;
-    stroke: currentColor;
-}
-
-.status-icon {
-    width: 16px;
-    height: 16px;
-    vertical-align: middle;
-}
-
 .campaign-status-indicators {
     flex-shrink: 0;
     display: flex;
@@ -923,6 +869,15 @@ header h1 {
     border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
 
+.campaign-drop-title {
+    color: #a970ff;
+    font-weight: bold;
+    font-size: 0.875rem;
+    margin: 10px 0 5px 0;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #333;
+}
+
 .empty-message-small {
     color: var(--text-secondary);
     font-style: italic;
@@ -931,124 +886,65 @@ header h1 {
     grid-column: 1 / -1;
 }
 
-/* Wanted Items Tree / Groups */
-#wanted-items-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 20px;
-    justify-content: flex-start;
+
+/* ===================================================================
+   09. DROP PROGRESS & BENEFIT ITEMS
+   =================================================================== */
+
+.drop-name {
+    font-weight: bold;
+    font-size: 1rem;
+    margin-bottom: 5px;
 }
 
-.wanted-game-group {
-    flex: unset;
-    width: 100%;
-    max-width: none;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    margin-bottom: 0;
-    break-inside: avoid;
-    overflow: hidden;
-    position: relative;
+.drop-game {
+    color: var(--text-secondary);
+    margin-bottom: 15px;
 }
 
-.wanted-game-header {
-    padding: 10px 15px;
-    background: var(--bg-panel);
-    border-bottom: 1px solid var(--border-color);
-    font-weight: 700;
-    font-size: 0.9375rem;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.wanted-game-index {
-    background: var(--accent-color);
-    color: white;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    padding: 2px 6px;
-    border-radius: 4px;
-    min-width: 20px;
-    text-align: center;
-}
-
-.wanted-game-icon {
-    width: 30px;
-    height: 40px;
-    object-fit: cover;
-    border-radius: 3px;
-    background: #000;
-}
-
-.wanted-campaign-list {
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.wanted-card {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    overflow: hidden;
-    position: relative;
-}
-
-.wanted-card-header {
-    padding: 8px 12px;
-    background: var(--bg-tertiary, #262626);
-    border-bottom: 1px solid var(--border-color);
-}
-
-.wanted-card-campaign-link {
-    font-size: 0.75rem;
-    color: var(--accent-color);
+.drop-campaign-link {
+    color: #0066cc;
     text-decoration: none;
-    display: block;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    transition: all 0.2s;
+    cursor: pointer;
 }
 
-.wanted-card-campaign-link:hover {
+.drop-campaign-link:hover {
+    color: #0052a3;
     text-decoration: underline;
 }
 
-.wanted-card-body {
-    padding: 10px;
+.progress-bar {
+    width: 100%;
+    height: 30px;
+    background: var(--progress-bg);
+    border-radius: 15px;
+    overflow: hidden;
+    margin-bottom: 10px;
 }
 
-.wanted-drop-item {
-    font-size: 0.6875rem;
-    margin-bottom: 0; 
-    padding: 8px 12px; 
-    background: transparent; 
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-color), var(--success-color));
+    transition: width 0.3s ease;
     display: flex;
-    flex-wrap: nowrap;
     align-items: center;
-    gap: 12px;
-    justify-content: flex-start;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
 }
 
-.wanted-drop-name {
-    font-weight: 600;
+.progress-text {
+    text-align: center;
+    font-size: 0.875rem;
+}
+
+.progress-time {
+    text-align: center;
     color: var(--text-secondary);
+    font-size: 0.75rem;
 }
 
-.wanted-benefit-pill {
-    background: rgba(145, 70, 255, 0.15);
-    color: var(--accent-color);
-    padding: 1px 5px;
-    border-radius: 8px;
-    font-size: 0.625rem;
-    font-weight: 500;
-}
-
-/* Base Drop Styles */
 .drop-item {
     padding: 10px;
     margin-bottom: 8px;
@@ -1162,7 +1058,192 @@ header h1 {
 .benefit-status-icon.claimed { color: var(--success-color); }
 .benefit-status-icon.active { color: var(--active-color); }
 
-/* Settings */
+.drop-block {
+    width: calc(100% + 15px); 
+    box-sizing: border-box;
+    margin-right: -15px;
+    margin-bottom: -8px !important; 
+    margin-top: 0 !important;
+    position: relative;
+    z-index: 1;
+}
+
+.drop-block.active-mining { border-color: #2ecc71; }
+.drop-block.in-progress { border-color: #f1c40f; }
+
+.drop-content-box.drop-active .benefit-item { border-left-color: var(--active-color); background-color: rgba(241, 196, 15, 0.05); }
+.drop-content-box.drop-ready .benefit-item { border-left-color: var(--warning-color); background-color: rgba(230, 126, 34, 0.05); }
+.drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
+.drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }
+
+
+/* ===================================================================
+   10. WANTED ITEMS & MINING STATES
+   =================================================================== */
+
+#wanted-items-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+    justify-content: flex-start;
+}
+
+.wanted-game-group {
+    flex: unset;
+    width: 100%;
+    max-width: none;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 0;
+    break-inside: avoid;
+    overflow: hidden;
+    position: relative;
+}
+
+.wanted-game-header {
+    padding: 10px 15px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 700;
+    font-size: 0.9375rem;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.wanted-game-index {
+    background: var(--accent-color);
+    color: white;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    min-width: 20px;
+    text-align: center;
+}
+
+.wanted-game-icon {
+    width: 30px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 3px;
+    background: var(--bg-tertiary, #2a2a3c); 
+    position: relative;
+}
+
+.wanted-game-icon:not([src]), .wanted-game-icon[src=""] {
+    animation: pulse-placeholder 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-placeholder {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+.wanted-campaign-list {
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.wanted-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+.wanted-card-header {
+    padding: 8px 12px;
+    background: var(--bg-tertiary, #262626);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.wanted-card-campaign-link {
+    font-size: 0.75rem;
+    color: var(--accent-color);
+    text-decoration: none;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.wanted-card-campaign-link:hover {
+    text-decoration: underline;
+}
+
+.wanted-card-body {
+    padding: 10px;
+}
+
+.wanted-drop-item {
+    font-size: 0.6875rem;
+    margin-bottom: 0; 
+    padding: 8px 12px; 
+    background: transparent; 
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-start;
+}
+
+.wanted-drop-name {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.wanted-benefit-pill {
+    background: rgba(145, 70, 255, 0.15);
+    color: var(--accent-color);
+    padding: 1px 5px;
+    border-radius: 8px;
+    font-size: 0.625rem;
+    font-weight: 500;
+}
+
+@keyframes slowPulseGreen {
+    0% {
+        border-color: rgba(46, 204, 113, 0.4);
+        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
+    }
+    50% {
+        border-color: rgba(46, 204, 113, 1);
+        box-shadow: 0 0 18px rgba(46, 204, 113, 0.6);
+    }
+    100% {
+        border-color: rgba(46, 204, 113, 0.4);
+        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
+    }
+}
+
+.wanted-card.active-mining {
+    animation: slowPulseGreen 3s infinite ease-in-out;
+}
+
+.wanted-card.active-mining .wanted-card-header {
+    background-color: rgba(46, 204, 113, 0.08);
+}
+
+.wanted-card.in-progress {
+    border-color: #f1c40f; 
+    box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
+}
+
+.wanted-card.in-progress .wanted-card-header {
+    background-color: rgba(241, 196, 15, 0.08);
+}
+
+
+/* ===================================================================
+   11. SETTINGS & MANUAL MODE CONTROLS
+   =================================================================== */
+
 .settings-container {
     width: 100%;
 }
@@ -1271,60 +1352,54 @@ header h1 {
     border-color: var(--accent-color);
 }
 
-/* Help */
-.help-content {
-    width: 100%;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
+.manual-mode-controls {
+    background: rgba(255, 167, 38, 0.1);
+    border: 2px solid var(--warning-color);
     border-radius: 8px;
-    padding: 1.875rem;
-}
-
-.help-content h2 {
-    color: var(--accent-color);
+    padding: 12px;
     margin-bottom: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    flex-wrap: wrap;
 }
 
-.help-content h3 {
-    margin-top: 20px;
-    margin-bottom: 10px;
+.manual-mode-info {
+    color: var(--text-primary);
+    font-size: 0.875rem;
 }
 
-.help-content ul,
-.help-content ol {
-    margin-left: 20px;
-    margin-bottom: 15px;
+.manual-mode-info strong {
+    color: var(--warning-color);
 }
 
-.help-content li {
-    margin-bottom: 8px;
+.exit-manual-btn {
+    padding: 8px 16px;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    transition: all 0.2s;
+    white-space: nowrap;
 }
 
-.help-content a {
-    color: var(--accent-color);
-    text-decoration: none;
-}
-
-.help-content a:hover {
-    text-decoration: underline;
-}
-
-.help-links {
-    margin-top: 30px;
-    padding-top: 20px;
-    border-top: 1px solid var(--border-color);
-}
-
-.help-links a {
-    display: inline-block;
-    padding: 10px 20px;
+.exit-manual-btn:hover {
     background: var(--accent-color);
     color: white;
-    border-radius: 4px;
-    margin-right: 10px;
+    border-color: var(--accent-color);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(145, 70, 255, 0.3);
 }
 
-/* Games to Watch Styles */
+
+/* ===================================================================
+   12. GAMES TO WATCH & PRIORITY LIST
+   =================================================================== */
+
 .help-text {
     color: var(--text-secondary);
     font-size: 0.875rem;
@@ -1499,7 +1574,93 @@ header h1 {
     user-select: none;
 }
 
-/* Loading Overlay */
+.game-checkbox input[type="checkbox"]:disabled + span {
+    color: var(--text-secondary);
+}
+
+
+/* ===================================================================
+   13. HELP & INFORMATION
+   =================================================================== */
+
+.help-content {
+    width: 100%;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.875rem;
+}
+
+.help-content h2 {
+    color: var(--accent-color);
+    margin-bottom: 15px;
+}
+
+.help-content h3 {
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+.help-content ul,
+.help-content ol {
+    margin-left: 20px;
+    margin-bottom: 15px;
+}
+
+.help-content li {
+    margin-bottom: 8px;
+}
+
+.help-content a {
+    color: var(--accent-color);
+    text-decoration: none;
+}
+
+.help-content a:hover {
+    text-decoration: underline;
+}
+
+.help-links {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-color);
+}
+
+.help-links a {
+    display: inline-block;
+    padding: 10px 20px;
+    background: var(--accent-color);
+    color: white;
+    border-radius: 4px;
+    margin-right: 10px;
+}
+
+
+/* ===================================================================
+   14. CONSOLE OUTPUT
+   =================================================================== */
+
+.console-output {
+    height: clamp(250px, 40vh, 500px);
+    overflow-y: auto;
+    width: 100%;
+    font-family: 'Courier New', monospace;
+    font-size: 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 10px;
+}
+
+.console-output div {
+    margin-bottom: 2px;
+}
+
+
+/* ===================================================================
+   15. OVERLAYS & LOADING MODALS
+   =================================================================== */
+
 .loading-overlay {
     position: fixed;
     top: 0;
@@ -1543,113 +1704,11 @@ header h1 {
     margin-top: 10px;
 }
 
-/* Manual Mode Styles */
-.mode-badge {
-    display: inline-block;
-    padding: 4px 12px;
-    border-radius: 12px;
-    font-size: 0.6875rem;
-    font-weight: bold;
-    letter-spacing: 0.5px;
-    margin-left: 10px;
-    transition: all 0.3s ease;
-}
 
-#auto-mode-badge {
-    background: rgba(145, 70, 255, 0.15);
-    color: var(--accent-color);
-    border: 1px solid var(--accent-color);
-}
+/* ===================================================================
+   16. FOOTER, UTILITIES & PLACEHOLDERS
+   =================================================================== */
 
-#manual-mode-badge {
-    background: rgba(255, 167, 38, 0.15);
-    color: var(--warning-color);
-    border: 1px solid var(--warning-color);
-    animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-    0%, 100% {
-        transform: scale(1);
-        opacity: 1;
-    }
-    50% {
-        transform: scale(1.05);
-        opacity: 0.9;
-    }
-}
-
-.manual-mode-controls {
-    background: rgba(255, 167, 38, 0.1);
-    border: 2px solid var(--warning-color);
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 15px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 15px;
-    flex-wrap: wrap;
-}
-
-.manual-mode-info {
-    color: var(--text-primary);
-    font-size: 0.875rem;
-}
-
-.manual-mode-info strong {
-    color: var(--warning-color);
-}
-
-.exit-manual-btn {
-    padding: 8px 16px;
-    background: var(--bg-panel);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    transition: all 0.2s;
-    white-space: nowrap;
-}
-
-.exit-manual-btn:hover {
-    background: var(--accent-color);
-    color: white;
-    border-color: var(--accent-color);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(145, 70, 255, 0.3);
-}
-
-/* Mobile Menu Toggle Button */
-.mobile-menu-toggle {
-    display: none;
-    width: 100%;
-    padding: 12px;
-    background: var(--accent-color);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: bold;
-    cursor: pointer;
-    margin-bottom: 10px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-/* Utilities */
-.hidden {
-    display: none !important;
-}
-
-.empty-message {
-    text-align: center;
-    color: var(--text-secondary);
-    padding: 40px;
-}
-
-/* Footer */
 .footer {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
@@ -1722,33 +1781,67 @@ header h1 {
     text-decoration: underline;
 }
 
+/* Utilities */
+.full-width {
+    width: 100%;
+}
+
+.help-text-inline {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.input-with-button {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+}
+
+.input-with-button input {
+    flex: 1;
+}
+
+.secondary-btn {
+    padding: 8px 12px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.secondary-btn:hover {
+    background-color: var(--border-color);
+}
+
+.verify-result {
+    margin-top: 4px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+}
+
+.verify-result.success { color: var(--success-color); }
+.verify-result.error { color: var(--error-color); }
+.verify-result.loading { color: var(--text-secondary); }
+
+.hidden {
+    display: none !important;
+}
+
+.empty-message {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 40px;
+}
+
 :disabled {
     cursor: not-allowed !important;
     filter: grayscale(1);
     opacity: 0.5;
-}
-
-.game-checkbox input[type="checkbox"]:disabled + span {
-    color: var(--text-secondary);
-}
-
-.campaign-drop-title {
-    color: #a970ff;
-    font-weight: bold;
-    font-size: 0.875rem;
-    margin: 10px 0 5px 0;
-    padding-bottom: 5px;
-    border-bottom: 1px solid #333;
-}
-
-.drop-block {
-    width: calc(100% + 15px); 
-    box-sizing: border-box;
-    margin-right: -15px;
-    margin-bottom: -8px !important; 
-    margin-top: 0 !important;
-    position: relative;
-    z-index: 1;
 }
 
 /* SVG Alignments */
@@ -1770,53 +1863,34 @@ header h1 {
     height: 12px;
 }
 
-/* Active Animations & States */
-@keyframes slowPulseGreen {
-    0% {
-        border-color: rgba(46, 204, 113, 0.4);
-        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
-    }
-    50% {
-        border-color: rgba(46, 204, 113, 1);
-        box-shadow: 0 0 18px rgba(46, 204, 113, 0.6);
-    }
-    100% {
-        border-color: rgba(46, 204, 113, 0.4);
-        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
-    }
+.campaign-header-icon svg, 
+.drop-item-header svg, 
+.benefit-status-icon svg,
+.external-link-icon svg {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
 }
 
-.wanted-card.active-mining {
-    animation: slowPulseGreen 3s infinite ease-in-out;
+/* Dynamic Image Placeholder */
+.image-placeholder {
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px dashed rgba(255, 255, 255, 0.15);
+    flex-shrink: 0;
+    align-self: center;
 }
 
-.wanted-card.active-mining .wanted-card-header {
-    background-color: rgba(46, 204, 113, 0.08);
-}
 
-.wanted-card.in-progress {
-    border-color: #f1c40f; 
-    box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
-}
+/* ===================================================================
+   17. RESPONSIVE MEDIA QUERIES
+   =================================================================== */
 
-.wanted-card.in-progress .wanted-card-header {
-    background-color: rgba(241, 196, 15, 0.08);
-}
-
-.drop-block.active-mining {
-    border-color: #2ecc71;
-}
-
-.drop-block.in-progress {
-    border-color: #f1c40f;
-}
-
-.drop-content-box.drop-active .benefit-item { border-left-color: var(--active-color); background-color: rgba(241, 196, 15, 0.05); }
-.drop-content-box.drop-ready .benefit-item { border-left-color: var(--warning-color); background-color: rgba(230, 126, 34, 0.05); }
-.drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
-.drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }
-
-/* --- RESPONSIVE MEDIA QUERIES --- */
 @media (max-width: 768px) {
     .container {
         padding: 10px;
@@ -1846,7 +1920,6 @@ header h1 {
         gap: 8px 12px;
     }
 
-    /* Show mobile menu toggle button on narrow screens */
     .mobile-menu-toggle {
         display: block;
     }

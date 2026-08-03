@@ -891,13 +891,7 @@ function renderDropCardLayout(data, rewardImgUrl, force = false) {
 
     if (!targetLeftEl) {
         targetLeftEl = document.createElement('div');
-        targetLeftEl.style.width = '72px';
-        targetLeftEl.style.height = '72px';
-        targetLeftEl.style.borderRadius = '6px';
-        targetLeftEl.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
-        targetLeftEl.style.border = '1px dashed rgba(255, 255, 255, 0.15)';
-        targetLeftEl.style.flexShrink = '0';
-        targetLeftEl.style.alignSelf = 'center';
+        targetLeftEl.className = 'image-placeholder';
     }
 
     targetLeftEl.id = 'drop-card-left-img';

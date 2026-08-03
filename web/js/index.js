@@ -808,201 +808,199 @@ function appendTrustedHelpContent(parent, text) {
     }
 }
 
-// ==================== Event Listeners ====================
+// ==================== Pomocné funkce a Event Handlery ====================
+
+// Debounce pro zamezení častého spouštění příkazů při psaní
+function debounce(fn, delay = 200) {
+    let timeoutId;
+    return (...args) => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => fn(...args), delay);
+    };
+}
+
+// Handler pro přepínání záložek
+function handleTabClick(e) {
+    const button = e.target.closest('.tab-button');
+    if (button?.dataset?.tab) {
+        switchTab(button.dataset.tab);
+    }
+}
+
+// Handler pro přepnutí Dark Mode
+function handleDarkModeChange(e) {
+    document.body.classList.toggle('dark-mode', e.target.checked);
+    saveSettings();
+}
+
+// Handler pro automatické řazení
+function handleAutoSortChange(e) {
+    saveSettings();
+    if (e.target.checked) {
+        sortGamesByEnding();
+    }
+}
+
+// Handler pro automatické přidávání všech her
+async function handleAutoAddAllGamesChange(e) {
+    if (state?.settings) {
+        state.settings.auto_add_all_games = e.target.checked;
+    }
+    renderGamesToWatch();
+    await saveSettings();
+}
+
+// Handler pro uložení změn v běžném nastavení (Selecty, Checkboxy)
+const SETTINGS_IDS_TO_SAVE = new Set([
+    'mine-badges-first', 'language', 'connection-quality', 'minimum-refresh-interval',
+    'mining-benefit-item', 'mining-benefit-badge', 'mining-benefit-emote', 'mining-benefit-unknown'
+]);
+
+function handleSettingsChange(e) {
+    if (SETTINGS_IDS_TO_SAVE.has(e.target.id)) {
+        saveSettings();
+    }
+}
+
+// Handler pro nastavení proxy
+function handleSetProxyClick() {
+    const proxyInput = document.getElementById('proxy-url');
+    const newValue = proxyInput ? proxyInput.value.trim() : '';
+
+    if (!state.settings) state.settings = {};
+    if (newValue !== (state.settings.proxy || '')) {
+        state.settings.proxy = newValue;
+        saveSettings();
+        updateUIState();
+    }
+}
+
+// Handler pro Reload tlačítko
+async function handleReloadClick() {
+    const reloadBtn = document.getElementById('reload-btn');
+    if (!reloadBtn) return;
+
+    saveSettings();
+
+    reloadBtn.disabled = true;
+    const originalText = reloadBtn.textContent;
+    reloadBtn.textContent = "Reloading...";
+
+    if (typeof updateStatus === 'function') {
+        updateStatus('Reloading campaigns...');
+    }
+
+    let timeoutId;
+    const unlockButton = () => {
+        reloadBtn.disabled = false;
+        reloadBtn.textContent = originalText;
+        if (timeoutId) clearTimeout(timeoutId);
+        if (typeof socket !== 'undefined' && socket) {
+            socket.off('reload_complete', unlockButton);
+        }
+    };
+
+    timeoutId = setTimeout(unlockButton, 15000);
+
+    try {
+        if (typeof socket !== 'undefined' && socket?.connected) {
+            socket.once('reload_complete', unlockButton);
+            socket.emit('request_reload');
+        } else if (typeof reloadCampaigns === 'function') {
+            await reloadCampaigns();
+            unlockButton();
+        } else {
+            unlockButton();
+        }
+    } catch (err) {
+        console.error('Failed to trigger campaign reload:', err);
+        if (typeof updateStatus === 'function') {
+            updateStatus('Failed to reload campaigns');
+        }
+        unlockButton();
+    }
+}
+
+// Handlery pro vyhledávání (s obaleným debounce)
+const handleGamesFilterInput = debounce(() => {
+    renderGamesToWatch();
+}, 150);
+
+const handleGameSearchInput = debounce((e) => {
+    renderGameDropdown(e.target.value);
+}, 150);
+
+function handleGameSearchFocus() {
+    showGameDropdown();
+}
+
+// Handler pro inventory filtry (Event Delegation)
+function handleInventoryFiltersChange(e) {
+    if (e.target.id?.startsWith('filter-') && typeof onInventoryFilterChange === 'function') {
+        onInventoryFilterChange(e);
+    }
+}
+
+// Handler pro zavření dropdownu při kliku mimo
+function handleOutsideClick(e) {
+    if (!gameDropdownVisible) return;
+    const container = document.querySelector('.game-dropdown-container');
+    if (container && !container.contains(e.target)) {
+        closeGameDropdown();
+    }
+}
+
+
+// ==================== Event Listeners Registrace ====================
 
 document.addEventListener('DOMContentLoaded', () => {
     fetchAndDisplayVersion();
 
-    document.querySelectorAll('.tab-button').forEach(button => {
-        button.addEventListener('click', () => {
-            switchTab(button.dataset.tab);
-        });
-    });
+    // 1. Přepínání záložek
+    (document.querySelector('.tabs-header') || document.body).addEventListener('click', handleTabClick);
 
-    const loginBtn = document.getElementById('login-button');
-    if (loginBtn) loginBtn.addEventListener('click', submitLogin);
+    // 2. Akční tlačítka
+    document.getElementById('login-button')?.addEventListener('click', submitLogin);
+    document.getElementById('oauth-confirm')?.addEventListener('click', confirmOAuth);
+    document.getElementById('verify-proxy-btn')?.addEventListener('click', verifyProxy);
+    document.getElementById('set-proxy-btn')?.addEventListener('click', handleSetProxyClick);
+    document.getElementById('reload-btn')?.addEventListener('click', handleReloadClick);
+    document.getElementById('select-all-btn')?.addEventListener('click', selectAllGames);
+    document.getElementById('deselect-all-btn')?.addEventListener('click', deselectAllGames);
+    document.getElementById('add-game-btn')?.addEventListener('click', addGameFromSearch);
+    document.getElementById('sort-by-end-btn')?.addEventListener('click', sortGamesByEnding);
+    document.getElementById('exit-manual-btn')?.addEventListener('click', exitManualMode);
 
-    const oauthBtn = document.getElementById('oauth-confirm');
-    if (oauthBtn) oauthBtn.addEventListener('click', confirmOAuth);
-
-    const darkModeCb = document.getElementById('dark-mode');
-    if (darkModeCb) {
-        darkModeCb.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                document.body.classList.add('dark-mode');
-            } else {
-                document.body.classList.remove('dark-mode');
-            }
-            saveSettings();
-        });
+    if (typeof clearInventoryFilters === 'function') {
+        document.getElementById('clear-filters-btn')?.addEventListener('click', clearInventoryFilters);
     }
 
-    const autoSortEl = document.getElementById('auto-sort-by-end');
-    if (autoSortEl) {
-        autoSortEl.addEventListener('change', (e) => {
-            saveSettings();
-            if (e.target.checked) {
-                sortGamesByEnding();
-            }
-        });
-    }
+    // 3. Přepínače a nastavení
+    document.getElementById('dark-mode')?.addEventListener('change', handleDarkModeChange);
+    document.getElementById('auto-sort-by-end')?.addEventListener('change', handleAutoSortChange);
+    document.getElementById('auto-add-all-games')?.addEventListener('change', handleAutoAddAllGamesChange);
 
-    const autoAddEl = document.getElementById('auto-add-all-games');
-    if (autoAddEl) {
-        autoAddEl.addEventListener('change', async (e) => {
-            const isChecked = e.target.checked;
-            if (state && state.settings) {
-                state.settings.auto_add_all_games = isChecked;
-            }
+    // 4. Delegation pro sekce (Nastavení a Filtry)
+    (document.getElementById('settings-tab') || document.body).addEventListener('change', handleSettingsChange);
+    (document.getElementById('inventory-filters-container') || document.body).addEventListener('change', handleInventoryFiltersChange);
 
-            renderGamesToWatch();
-            await saveSettings();
-        });
-    }
-
-    const bindSave = (id) => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener('change', saveSettings);
-    };
-
-    bindSave('mine-badges-first');
-    bindSave('language');
-    bindSave('connection-quality');
-    bindSave('minimum-refresh-interval');
-
-    const setProxyBtn = document.getElementById('set-proxy-btn');
-    if (setProxyBtn) {
-        setProxyBtn.addEventListener('click', () => {
-            const proxyInput = document.getElementById('proxy-url');
-            const newValue = proxyInput ? proxyInput.value : '';
-
-            if (!state.settings) state.settings = {};
-            if (newValue !== (state.settings.proxy || '')) {
-                state.settings.proxy = newValue;
-                saveSettings();
-                updateUIState();
-            }
-        });
-    }
-
-    const verifyProxyBtn = document.getElementById('verify-proxy-btn');
-    if (verifyProxyBtn) verifyProxyBtn.addEventListener('click', verifyProxy);
-
-	const reloadBtn = document.getElementById('reload-btn');
-	if (reloadBtn) {
-		reloadBtn.addEventListener('click', async () => {
-			saveSettings();
-
-			// 1. Lock button visually
-			reloadBtn.disabled = true;
-			const originalText = reloadBtn.textContent;
-			reloadBtn.textContent = "Reloading...";
-
-			if (typeof updateStatus === 'function') {
-				updateStatus('Reloading campaigns...');
-			}
-
-			// Helper function to restore original button state
-			let timeoutId;
-			const unlockButton = () => {
-				reloadBtn.disabled = false;
-				reloadBtn.textContent = originalText;
-				if (timeoutId) clearTimeout(timeoutId);
-				if (typeof socket !== 'undefined' && socket) {
-					socket.off('reload_complete', unlockButton);
-				}
-			};
-
-			// Safety fallback: unlock after 15s if backend fails/hangs
-			timeoutId = setTimeout(unlockButton, 15000);
-
-			try {
-				if (typeof socket !== 'undefined' && socket && socket.connected) {
-					// Listen once for the exact completion signal from Python
-					socket.once('reload_complete', unlockButton);
-					socket.emit('request_reload');
-				} else if (typeof reloadCampaigns === 'function') {
-					await reloadCampaigns();
-					unlockButton();
-				} else {
-					unlockButton();
-				}
-			} catch (err) {
-				console.error('Failed to trigger campaign reload:', err);
-
-				if (typeof updateStatus === 'function') {
-					updateStatus('Failed to reload campaigns');
-				}
-				unlockButton();
-			}
-		});
-	}
-
-    const selectAllBtn = document.getElementById('select-all-btn');
-    if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllGames);
-
-    const deselectAllBtn = document.getElementById('deselect-all-btn');
-    if (deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllGames);
-
-    const addGameBtn = document.getElementById('add-game-btn');
-    if (addGameBtn) addGameBtn.addEventListener('click', addGameFromSearch);
-
-    const sortByEndBtn = document.getElementById('sort-by-end-btn');
-    if (sortByEndBtn) sortByEndBtn.addEventListener('click', sortGamesByEnding);
-
+    // 5. Vyhledávací vstupy
     const gamesFilterInput = document.getElementById('games-filter');
-    if (gamesFilterInput) gamesFilterInput.addEventListener('input', renderGamesToWatch);
-
-    const bindInvFilter = (id) => {
-        const el = document.getElementById(id);
-        if (el && typeof onInventoryFilterChange === 'function') {
-            el.addEventListener('change', onInventoryFilterChange);
-        }
-    };
-
-    bindInvFilter('filter-active');
-    bindInvFilter('filter-not-linked');
-    bindInvFilter('filter-upcoming');
-    bindInvFilter('filter-expired');
-    bindInvFilter('filter-finished');
-    bindInvFilter('filter-benefit-item');
-    bindInvFilter('filter-benefit-badge');
-    bindInvFilter('filter-benefit-emote');
-    bindInvFilter('filter-benefit-other');
-
-    const clearFiltersBtn = document.getElementById('clear-filters-btn');
-    if (clearFiltersBtn && typeof clearInventoryFilters === 'function') {
-        clearFiltersBtn.addEventListener('click', clearInventoryFilters);
+    if (gamesFilterInput) {
+        gamesFilterInput.addEventListener('input', handleGamesFilterInput);
     }
-
-    bindSave('mining-benefit-item');
-    bindSave('mining-benefit-badge');
-    bindSave('mining-benefit-emote');
-    bindSave('mining-benefit-unknown');
 
     const gameSearchInput = document.getElementById('inventory-game-search');
     if (gameSearchInput) {
-        gameSearchInput.addEventListener('focus', () => {
-            showGameDropdown();
-        });
-        gameSearchInput.addEventListener('input', (e) => {
-            renderGameDropdown(e.target.value);
-        });
+        gameSearchInput.addEventListener('focus', handleGameSearchFocus);
+        gameSearchInput.addEventListener('input', handleGameSearchInput);
         gameSearchInput.addEventListener('keydown', handleGameSearchKeydown);
     }
 
-    document.addEventListener('click', (e) => {
-        const container = document.querySelector('.game-dropdown-container');
-        if (container && !container.contains(e.target) && gameDropdownVisible) {
-            closeGameDropdown();
-        }
-    });
+    // 6. Globální kliknutí mimo dropdown
+    document.addEventListener('click', handleOutsideClick);
 
-    const exitManualBtn = document.getElementById('exit-manual-btn');
-    if (exitManualBtn) {
-        exitManualBtn.addEventListener('click', exitManualMode);
-    }
-
+    // 7. Inicializace dat
     fetchAndPopulateLanguages();
     fetchAndApplyTranslations();
 

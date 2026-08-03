@@ -1,4 +1,6 @@
+///////////////////////////////////////////////////////////////////////////////
 // ==================== Games to Watch / Ignore Management ====================
+///////////////////////////////////////////////////////////////////////////////
 
 let renderGamesDebounceTimer = null;
 
@@ -132,16 +134,28 @@ function renderSelectedGames(games) {
     container.appendChild(fragment);
 }
 
-function renderAvailableGames(games, filterText) {
+let lastAvailableGamesHash = null;
+
+function renderAvailableGames(games, filterText, force = false) {
     const container = document.getElementById('available-games-list');
     if (!container) return;
 
-    const t = state.translations;
+    const t = state.translations || {};
     const isIgnoreMode = Boolean(state?.settings?.auto_add_all_games);
+    const watchedGames = state?.settings?.games_to_watch || [];
 
-    container.innerHTML = '';
+    // Safe fallback pro games
+    const safeGames = Array.isArray(games) ? games : [];
 
-    if (!games || games.length === 0) {
+    // Structural Fingerprint Check: Zabrání zbytečnému překreslování identical dat
+    const currentHash = `${safeGames.join(',')}_${filterText || ''}_${isIgnoreMode}_${watchedGames.length}`;
+    if (!force && lastAvailableGamesHash === currentHash) {
+        return;
+    }
+    lastAvailableGamesHash = currentHash;
+
+    // Empty States
+    if (safeGames.length === 0) {
         if (filterText) {
             const emptyMsg = t.gui?.settings?.no_games_match || 'No games match your search.';
             const addHint = t.gui?.settings?.add_game_hint || ' Click "Add Game" to add it manually.';
@@ -157,24 +171,30 @@ function renderAvailableGames(games, filterText) {
 
     const fragment = document.createDocumentFragment();
 
-    games.forEach(game => {
+    safeGames.forEach(game => {
         const label = document.createElement('label');
         label.className = 'game-checkbox';
 
         if (isIgnoreMode) {
-            const ignoreBtn = makeElement('button', { class: 'remove-btn', style: 'margin-right: 8px;', title: 'Add to Ignore List' }, '🚫');
+            const ignoreBtn = makeElement('button', { 
+                class: 'remove-btn', 
+                style: 'margin-right: 8px;', 
+                title: 'Add to Ignore List' 
+            }, '🚫');
+
             ignoreBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 if (typeof toggleGameIgnore === 'function') {
                     toggleGameIgnore(game, true);
                 } else {
+                    // Clean Fallback Handler
                     if (!state.settings) state.settings = {};
                     if (!state.settings.ignored_games) state.settings.ignored_games = [];
                     if (!state.settings.ignored_games.some(g => g.toLowerCase() === game.toLowerCase())) {
                         state.settings.ignored_games.push(game);
                     }
-                    renderGamesToWatch();
-                    saveSettings();
+                    if (typeof renderGamesToWatch === 'function') renderGamesToWatch();
+                    if (typeof saveSettings === 'function') saveSettings();
                 }
             });
 
@@ -183,12 +203,14 @@ function renderAvailableGames(games, filterText) {
                 makeElement('span', {}, game)
             );
         } else {
-            const isChecked = (state?.settings?.games_to_watch || []).includes(game);
+            const isChecked = watchedGames.includes(game);
             const input = makeElement('input', { type: 'checkbox', value: game });
             input.checked = isChecked;
 
             input.addEventListener('change', (e) => {
-                toggleGameWatch(game, e.target.checked);
+                if (typeof toggleGameWatch === 'function') {
+                    toggleGameWatch(game, e.target.checked);
+                }
             });
 
             label.replaceChildren(
@@ -200,7 +222,8 @@ function renderAvailableGames(games, filterText) {
         fragment.appendChild(label);
     });
 
-    container.appendChild(fragment);
+    // Atomické vložení všech prvků narázd (vytlačí starý obsah bez innerHTML = '')
+    container.replaceChildren(fragment);
 }
 
 // Drag and drop handlers
@@ -465,5 +488,5 @@ async function toggleGameIgnore(game, isIgnored) {
         if (typeof startCombinedRotation === 'function') {
             startCombinedRotation(true);
         }
-    }, 1000); 
+    }, 60 * 1000); 
 }

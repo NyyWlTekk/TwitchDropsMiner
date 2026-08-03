@@ -23,11 +23,13 @@ function getAvailableGamesForDropdown() {
     return allGames.sort((a, b) => a.localeCompare(b));
 }
 
-function renderGameDropdown(searchTerm = '') {
+let lastGameDropdownHash = null;
+
+function renderGameDropdown(searchTerm = '', force = false) {
     const dropdown = document.getElementById('game-dropdown-list');
     if (!dropdown) return;
 
-    const allGames = getAvailableGamesForDropdown();
+    const allGames = typeof getAvailableGamesForDropdown === 'function' ? getAvailableGamesForDropdown() : [];
 
     // Filter games by search term (case-insensitive)
     const searchLower = searchTerm.toLowerCase().trim();
@@ -35,17 +37,31 @@ function renderGameDropdown(searchTerm = '') {
         ? allGames.filter(game => game.toLowerCase().includes(searchLower))
         : allGames;
 
-    dropdown.innerHTML = '';
+    const selectedGames = Array.isArray(selectedInventoryGames) ? selectedInventoryGames : [];
+    const focusedIdx = typeof gameDropdownFocusedIndex !== 'undefined' ? gameDropdownFocusedIndex : -1;
 
+    // Structural Fingerprint Check: Zabrání zbytečnému re-renderu při identickém vstupu
+    const currentHash = `${searchLower}_${filteredGames.length}_${focusedIdx}_${selectedGames.length}`;
+    if (!force && lastGameDropdownHash === currentHash) {
+        return;
+    }
+    lastGameDropdownHash = currentHash;
+
+    // Handle Empty States
     if (filteredGames.length === 0) {
         dropdown.replaceChildren(makeElement('div', { class: 'dropdown-item no-results' }, 'No games found'));
-        gameDropdownFocusedIndex = -1;
+        if (typeof gameDropdownFocusedIndex !== 'undefined') {
+            gameDropdownFocusedIndex = -1;
+        }
         return;
     }
 
+    // Batch DOM Injection přes DocumentFragment
+    const fragment = document.createDocumentFragment();
+
     filteredGames.forEach((gameName, index) => {
-        const isSelected = selectedInventoryGames.includes(gameName);
-        const isFocused = index === gameDropdownFocusedIndex;
+        const isSelected = selectedGames.includes(gameName);
+        const isFocused = index === focusedIdx;
 
         const item = document.createElement('div');
         item.className = 'dropdown-item' + (isFocused ? ' focused' : '');
@@ -67,11 +83,16 @@ function renderGameDropdown(searchTerm = '') {
         // Click handler for the entire item
         item.addEventListener('click', (e) => {
             e.stopPropagation();
-            toggleGameSelection(gameName);
+            if (typeof toggleGameSelection === 'function') {
+                toggleGameSelection(gameName);
+            }
         });
 
-        dropdown.appendChild(item);
+        fragment.appendChild(item);
     });
+
+    // Atomické vložení celého stromu do DOMu najednou
+    dropdown.replaceChildren(fragment);
 }
 
 function showGameDropdown() {
@@ -652,17 +673,19 @@ function createCampaignCard(campaign, t) {
     return card;
 }
 
-// Main grid rendering procedure
-function renderInventory() {
+let lastInventoryRenderHash = null;
+
+// Main grid rendering procedure (OPTIMIZED)
+function renderInventory(force = false) {
     const container = document.getElementById('inventory-grid');
-    container.innerHTML = '';
+    if (!container) return;
 
     updateOverallProgress();
 
-    const t = state.translations;
-    const allCampaigns = Object.values(state.campaigns);
-
+    const t = state.translations || {};
+    const allCampaigns = state.campaigns ? Object.values(state.campaigns) : [];
     const filters = getInventoryFilters();
+
     const hasStatusFilter = filters.show_active || filters.show_not_linked ||
                             filters.show_upcoming || filters.show_expired || 
                             filters.show_finished;
@@ -676,13 +699,20 @@ function renderInventory() {
     const filteredCampaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
     const sortedCampaigns = sortCampaigns(filteredCampaigns);
 
+    // Fingerprint guard: Přeskočíme zbytečný re-render, pokud jsou data i filtry identické
+    const currentHash = `${sortedCampaigns.length}_${sortedCampaigns.map(c => c.id || c.game_name).join(',')}_${JSON.stringify(filters)}`;
+    if (!force && lastInventoryRenderHash === currentHash) {
+        return;
+    }
+    lastInventoryRenderHash = currentHash;
+
     console.debug('[Inventory Render] Filter results:', { 
         total: allCampaigns.length, 
         filteredCount: sortedCampaigns.length,
         filters 
     });
 
-    // Handle Empty States
+    // Handle Empty States (rychlý dom swap)
     if (allCampaigns.length === 0) {
         const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
         container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
@@ -694,8 +724,12 @@ function renderInventory() {
         return;
     }
 
-    // Render Cards
+    // Batch DOM Injection přes DocumentFragment (1 jediný zápis do DOMu)
+    const fragment = document.createDocumentFragment();
     sortedCampaigns.forEach(campaign => {
-        container.appendChild(createCampaignCard(campaign, t));
+        fragment.appendChild(createCampaignCard(campaign, t));
     });
+
+    // Provedeme nahrazení obsahu jedním krokem
+    container.replaceChildren(fragment);
 }

@@ -71,7 +71,7 @@ function performRenderWantedItems(tree) {
     const fragment = document.createDocumentFragment();
 
     tree.forEach((gameGroup, index) => {
-        fragment.appendChild(createGameGroupElement(gameGroup, index));
+        fragment.appendChild(renderGameGroupElement(gameGroup, index));
     });
 
     container.replaceChildren(fragment);
@@ -110,7 +110,7 @@ function evaluateCampaignMiningState(campaign, gameName) {
 /**
  * Creates a visual status badge/indicator element for active mining or progress state.
  */
-function createCampaignStatusIndicatorElement(isActivelyMining, hasProgress) {
+function renderCampaignStatusIndicatorElement(isActivelyMining, hasProgress) {
     if (isActivelyMining) {
         const badgeEl = makeElement('span', { 
             class: 'status-tag tag-mining',
@@ -135,7 +135,7 @@ function createCampaignStatusIndicatorElement(isActivelyMining, hasProgress) {
 /**
  * Creates a game group DOM element containing its campaigns.
  */
-function createGameGroupElement(gameGroup, index) {
+function renderGameGroupElement(gameGroup, index) {
     const gameName = gameGroup.game_name || gameGroup.name || '';
     const groupEl = makeElement('div', { 
         class: 'wanted-game-group',
@@ -175,7 +175,7 @@ function createGameGroupElement(gameGroup, index) {
     const campaigns = gameGroup.campaigns || gameGroup.campaign_list || [];
     
     campaigns.forEach(campaign => {
-        campaignListEl.appendChild(createCampaignCardElement(campaign, gameName));
+        campaignListEl.appendChild(renderCampaignCardElement(campaign, gameName));
     });
 
     groupEl.appendChild(campaignListEl);
@@ -185,15 +185,15 @@ function createGameGroupElement(gameGroup, index) {
 /**
  * Creates a single campaign card element with its drop items using modular helpers.
  */
-function createCampaignCardElement(campaign, gameName) {
+function renderCampaignCardElement(campaign, gameName) {
     const campaignState = evaluateCampaignMiningState(campaign, gameName);
 
     return makeElement('div', {
         class: campaignState.cardClasses,
         'data-campaign-id': String(campaignState.campaignId)
     }, '', cardEl => {
-        const headerEl = createCampaignHeaderElement(campaign, campaignState.drops, campaignState);
-        const bodyEl = createCampaignBodyElement(campaignState.drops, campaignState);
+        const headerEl = renderCampaignHeaderElement(campaign, campaignState.drops, campaignState);
+        const bodyEl = renderCampaignBodyElement(campaignState.drops, campaignState);
 
         cardEl.appendChild(headerEl);
         cardEl.appendChild(bodyEl);
@@ -203,7 +203,7 @@ function createCampaignCardElement(campaign, gameName) {
 /**
  * Creates the campaign card header element including titles, badges, and dates.
  */
-function createCampaignHeaderElement(campaign, drops, campaignState = null) {
+function renderCampaignHeaderElement(campaign, drops, campaignState = null) {
     return makeElement('div', { class: 'wanted-card-header' }, '', h => {
         const titleRow = makeElement('div', { class: 'wanted-card-header-main' }, '', row => {
             row.appendChild(makeElement('a', {
@@ -222,7 +222,7 @@ function createCampaignHeaderElement(campaign, drops, campaignState = null) {
             row.appendChild(makeElement('span', { class: 'wanted-campaign-badge' }, `(${claimedCount}/${totalCount})`));
 
             if (campaignState) {
-                const statusBadge = createCampaignStatusIndicatorElement(campaignState.isActivelyMining, campaignState.hasProgress);
+                const statusBadge = renderCampaignStatusIndicatorElement(campaignState.isActivelyMining, campaignState.hasProgress);
                 if (statusBadge) {
                     row.appendChild(statusBadge);
                 }
@@ -244,7 +244,7 @@ function createCampaignHeaderElement(campaign, drops, campaignState = null) {
 /**
  * Creates the body element containing all drop items container.
  */
-function createCampaignBodyElement(drops, campaignState = null) {
+function renderCampaignBodyElement(drops, campaignState = null) {
     const dropContainer = makeElement('div', { class: 'wanted-drops-container' });
 
     const sortedDrops = [...(drops || [])].sort((a, b) => {
@@ -254,8 +254,8 @@ function createCampaignBodyElement(drops, campaignState = null) {
     });
 
     sortedDrops.forEach((drop, index) => {
-        if (typeof createDropItemElement === 'function') {
-            dropContainer.appendChild(createDropItemElement(drop, index + 1, campaignState));
+        if (typeof renderDropItemElement === 'function') {
+            dropContainer.appendChild(renderDropItemElement(drop, index + 1, campaignState));
         }
     });
 
@@ -265,7 +265,7 @@ function createCampaignBodyElement(drops, campaignState = null) {
 /**
  * Creates an individual drop item element with state sync for active mining progress.
  */
-function createDropItemElement(drop, index = 1, campaignState = null) {
+function renderDropItemElement(drop, index = 1, campaignState = null) {
     const rawUuid = drop.id || drop.drop_id || (typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : `drop-${index}`);
     const textId = typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : rawUuid;
 

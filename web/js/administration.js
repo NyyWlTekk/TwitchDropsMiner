@@ -308,3 +308,24 @@ window.Administration = {
 document.addEventListener('DOMContentLoaded', function () {
     initAdmin();
 });
+
+
+
+
+
+
+// TESTS AND OTHERS
+
+function benchmark(name, fn) {
+    return function(...args) {
+        const start = performance.now();
+        const result = fn.apply(this, args);
+        const end = performance.now();
+        
+        // Vypíše do konzole jen to, co trvá déle než 10 ms, ať zbytečně nefiltroješ balast
+        if (end - start > 10) {
+            console.debug(`[Perf Warning] ${name} trvalo: ${(end - start).toFixed(2)} ms`);
+        }
+        return result;
+    };
+}

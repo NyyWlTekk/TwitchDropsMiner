@@ -550,6 +550,8 @@ function clearDropProgress() {
     }
 }
 
+// společná funkce pro update času pro - WANTED A PROGRESS BARY
+
 function updateRemainingTime(initialSeconds, currentData = null) {
     if (state.countdownTimer) {
         clearInterval(state.countdownTimer);
@@ -567,6 +569,13 @@ function updateRemainingTime(initialSeconds, currentData = null) {
 
     if (state.currentDrop) state.currentDrop.remaining_seconds = Math.max(0, Math.floor(initialSeconds));
     if (state.current_drop) state.current_drop.remaining_seconds = Math.max(0, Math.floor(initialSeconds));
+
+    if (typeof syncWantedItemsProgress === 'function') {
+        const treeUpdated = syncWantedItemsProgress(drop);
+        if (treeUpdated && typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
+            renderWantedItems(state.wantedItemsTree);
+        }
+    }
 }
 
 function updateDropTitle(data) {
@@ -636,52 +645,80 @@ function getCachedImage(url, alt, className, styles = {}) {
     return imgEl;
 }
 
-function renderDropGameHeader(data) {
+let lastDropHeaderHash = null;
+let cachedIconContainer = null;
+let cachedInfoTextDiv = null;
+
+function renderDropGameHeader(data, force = false) {
     const dropGameEl = document.getElementById('drop-game');
     if (!dropGameEl) return;
 
-    // 1. Pokud nemáme data, všechno vyčistíme a schováme
-    if (!data || typeof data !== 'object' || (!data.campaign_name && !data.game_name)) {
-        dropGameEl.innerHTML = '';
-        dropGameEl.style.display = 'none';
+    const campaignId = data?.campaign_id || '';
+    let foundCampaign = (state?.campaigns && campaignId) ? state.campaigns[campaignId] : null;
+
+    const titleText = data?.campaign_name || data?.game_name || foundCampaign?.campaign_name || foundCampaign?.game_name || '';
+    const subTextContent = data?.drop_name || '';
+    const rawBoxArt = data?.game_box_art_url || foundCampaign?.game_box_art_url || foundCampaign?.box_art_url || foundCampaign?.art_url || '';
+
+    // Reset při reálně neplatných datech
+    if (!data || typeof data !== 'object' || (!titleText && !campaignId)) {
+        if (lastDropHeaderHash !== 'empty') {
+            dropGameEl.innerHTML = '';
+            dropGameEl.style.display = 'none';
+            lastDropHeaderHash = 'empty';
+        }
         return;
     }
 
-    // Zjištění URL obrázku
-    let boxArtUrl = data.game_box_art_url;
-    if (!boxArtUrl && state.campaigns && data.campaign_id) {
-        const foundCampaign = state.campaigns[data.campaign_id] ||
-            Object.values(state.campaigns).find(c => c && (c.id === data.campaign_id || c.campaign_id === data.campaign_id));
-        if (foundCampaign) {
-            boxArtUrl = foundCampaign.game_box_art_url || foundCampaign.box_art_url || foundCampaign.art_url;
-        }
-    }
+    let boxArtUrl = rawBoxArt;
+    const iconUrl = boxArtUrl ? boxArtUrl.replace('{width}', '52').replace('{height}', '70') : null;
 
+    // ==========================================
+    // 1. DOM INTEGRITY CHECK (VŽDY na začátku)
+    // Zajišťuje, že prvky v DOMu fyzicky jsou, i když se data nezměnila
+    // ==========================================
     dropGameEl.style.display = 'flex';
     dropGameEl.style.alignItems = 'center';
     dropGameEl.style.gap = '12px';
     dropGameEl.style.margin = '8px 0';
 
-    // 2. Trvalý obal ikony (42x56px - brání skákání layoutu)
-    let iconContainer = dropGameEl.querySelector('.game-icon-container');
-    if (!iconContainer) {
-        iconContainer = document.createElement('div');
-        iconContainer.className = 'game-icon-container';
-        iconContainer.style.width = '42px';
-        iconContainer.style.height = '56px';
-        iconContainer.style.minWidth = '42px';
-        iconContainer.style.minHeight = '56px';
-        iconContainer.style.flexShrink = '0';
-        iconContainer.style.borderRadius = '6px';
-        iconContainer.style.overflow = 'hidden';
-        iconContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
-        iconContainer.style.border = '1px dashed rgba(255, 255, 255, 0.15)';
+    if (!cachedIconContainer) {
+        cachedIconContainer = document.createElement('div');
+        cachedIconContainer.className = 'game-icon-container';
+        cachedIconContainer.style.width = '42px';
+        cachedIconContainer.style.height = '56px';
+        cachedIconContainer.style.minWidth = '42px';
+        cachedIconContainer.style.minHeight = '56px';
+        cachedIconContainer.style.flexShrink = '0';
+        cachedIconContainer.style.borderRadius = '6px';
+        cachedIconContainer.style.overflow = 'hidden';
+        cachedIconContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+        cachedIconContainer.style.border = '1px dashed rgba(255, 255, 255, 0.15)';
     }
 
-    // Aktualizace samotného obrázku <img>
-    const iconUrl = boxArtUrl ? boxArtUrl.replace('{width}', '52').replace('{height}', '70') : null;
-    let imgEl = iconContainer.querySelector('img');
+    if (!cachedInfoTextDiv) {
+        cachedInfoTextDiv = document.createElement('div');
+        cachedInfoTextDiv.className = 'drop-game-text-info';
+        cachedInfoTextDiv.style.display = 'flex';
+        cachedInfoTextDiv.style.flexDirection = 'column';
+        cachedInfoTextDiv.style.justifyContent = 'center';
+    }
 
+    if (!dropGameEl.contains(cachedIconContainer) || !dropGameEl.contains(cachedInfoTextDiv)) {
+        dropGameEl.replaceChildren(cachedIconContainer, cachedInfoTextDiv);
+    }
+
+    // ==========================================
+    // 2. HASH GUARD (pokud se data nezměnila, končíme až teď, kdy už máme DOM jistý)
+    // ==========================================
+    const currentHash = `${campaignId}_${titleText}_${subTextContent}_${iconUrl}`;
+    if (!force && lastDropHeaderHash === currentHash) {
+        return;
+    }
+    lastDropHeaderHash = currentHash;
+
+    // 3. Aktualizace obrázku
+    let imgEl = cachedIconContainer.querySelector('img');
     if (iconUrl) {
         if (!imgEl) {
             imgEl = document.createElement('img');
@@ -690,7 +727,7 @@ function renderDropGameHeader(data) {
             imgEl.style.height = '100%';
             imgEl.style.objectFit = 'cover';
             imgEl.style.display = 'block';
-            iconContainer.appendChild(imgEl);
+            cachedIconContainer.appendChild(imgEl);
         }
         if (imgEl.src !== iconUrl) {
             imgEl.src = iconUrl;
@@ -699,116 +736,123 @@ function renderDropGameHeader(data) {
         imgEl.remove();
     }
 
-    // 3. Textový kontejner
-    let infoTextDiv = dropGameEl.querySelector('.drop-game-text-info');
-    if (!infoTextDiv) {
-        infoTextDiv = document.createElement('div');
-        infoTextDiv.className = 'drop-game-text-info';
-        infoTextDiv.style.display = 'flex';
-        infoTextDiv.style.flexDirection = 'column';
-        infoTextDiv.style.justifyContent = 'center';
-    }
+    // 4. Aktualizace titulku / odkazu
+    let titleNode = cachedInfoTextDiv.querySelector('.drop-campaign-link, .drop-campaign-title');
+    const isLink = Boolean(campaignId);
+    const targetTag = isLink ? 'A' : 'SPAN';
 
-    // Název kampaně / Odkaz
-    const titleText = data.campaign_name || data.game_name || '';
-    let titleNode = infoTextDiv.querySelector('.drop-campaign-link, .drop-campaign-title');
-
-    if (data.campaign_id) {
-        const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${data.campaign_id}`;
-        if (!titleNode || titleNode.tagName !== 'A') {
-            if (titleNode) titleNode.remove();
-            titleNode = document.createElement('a');
-            titleNode.className = 'drop-campaign-link';
+    if (!titleNode || titleNode.tagName !== targetTag) {
+        if (titleNode) titleNode.remove();
+        titleNode = document.createElement(isLink ? 'a' : 'span');
+        titleNode.className = isLink ? 'drop-campaign-link' : 'drop-campaign-title';
+        if (isLink) {
             titleNode.target = '_blank';
             titleNode.rel = 'noopener noreferrer';
-            infoTextDiv.prepend(titleNode);
         }
-        titleNode.href = campaignUrl;
-    } else {
-        if (!titleNode || titleNode.tagName !== 'SPAN') {
-            if (titleNode) titleNode.remove();
-            titleNode = document.createElement('span');
-            titleNode.className = 'drop-campaign-title';
-            infoTextDiv.prepend(titleNode);
-        }
+        cachedInfoTextDiv.prepend(titleNode);
     }
-    if (titleNode.textContent !== titleText) titleNode.textContent = titleText;
 
-    // Název dropu (podtitulek)
-    let subText = infoTextDiv.querySelector('.drop-sub-name');
+    if (isLink) {
+        const campaignUrl = `https://www.twitch.tv/drops/campaigns?dropID=${campaignId}`;
+        if (titleNode.href !== campaignUrl) titleNode.href = campaignUrl;
+    }
+    if (titleNode.textContent !== titleText) {
+        titleNode.textContent = titleText;
+    }
+
+    // 5. Aktualizace podtitulku
+    let subText = cachedInfoTextDiv.querySelector('.drop-sub-name');
     if (!subText) {
         subText = document.createElement('span');
         subText.className = 'drop-sub-name';
         subText.style.fontSize = '0.9em';
         subText.style.opacity = '0.85';
-        infoTextDiv.appendChild(subText);
+        cachedInfoTextDiv.appendChild(subText);
     }
-    const subTextContent = data.drop_name || '';
-    if (subText.textContent !== subTextContent) subText.textContent = subTextContent;
-
-    // 4. ÚKLID & SPRÁVNÉ POŘADÍ: Odstraníme jakýkoliv jiný neznámý prvek z dropGameEl
-    Array.from(dropGameEl.childNodes).forEach(node => {
-        if (node !== iconContainer && node !== infoTextDiv) {
-            node.remove();
-        }
-    });
-
-    // Vložíme přesně iconContainer a za něj infoTextDiv
-    if (dropGameEl.firstElementChild !== iconContainer) {
-        dropGameEl.prepend(iconContainer);
-    }
-    if (iconContainer.nextElementSibling !== infoTextDiv) {
-        iconContainer.after(infoTextDiv);
+    if (subText.textContent !== subTextContent) {
+        subText.textContent = subTextContent;
     }
 }
 
-function renderDropCardLayout(data, rewardImgUrl) {
+let lastDropCardLayoutHash = null;
+
+function renderDropCardLayout(data, rewardImgUrl, force = false) {
     const currentDropLabel = document.getElementById('current-drop-label');
     if (!currentDropLabel) return;
 
+    // Reset při neplatných datech
     if (!data || typeof data !== 'object') {
-        currentDropLabel.textContent = '';
+        if (lastDropCardLayoutHash !== 'empty') {
+            currentDropLabel.textContent = '';
+            lastDropCardLayoutHash = 'empty';
+        }
         return;
     }
 
+    const currentId = data.drop_id || data.id || '';
+    const dropName = data.drop_name || '';
+    const rawImgUrl = rewardImgUrl || '';
+
+    // Hash Guard: Pokud je stejný drop, název i obrázek, ukončíme funkci okamžitě
+    const currentHash = `${currentId}_${dropName}_${rawImgUrl}`;
+    if (!force && lastDropCardLayoutHash === currentHash) {
+        return;
+    }
+
+    // 1. Spočítáme index a velikost fronty aktivních dropů
     let activeDrops = [];
-    const { drops } = getCampaignAndDrops(data);
+    const { drops } = typeof getCampaignAndDrops === 'function' 
+        ? getCampaignAndDrops(data) 
+        : { drops: [] };
     
-    if (drops && drops.length > 0) activeDrops = drops.filter(d => !isClaimed(d));
-    if (activeDrops.length === 0 && state.activeDropsQueue && state.activeDropsQueue.length > 0) activeDrops = state.activeDropsQueue;
+    if (drops && drops.length > 0) {
+        activeDrops = drops.filter(d => typeof isClaimed === 'function' ? !isClaimed(d) : true);
+    }
+    if (activeDrops.length === 0 && Array.isArray(state?.activeDropsQueue) && state.activeDropsQueue.length > 0) {
+        activeDrops = state.activeDropsQueue;
+    }
 
     const dropQueueLen = activeDrops.length > 0 ? activeDrops.length : 1;
     let dropIdx = 1;
-    
-    if (activeDrops.length > 0) {
-        const currentId = data.drop_id || data.id;
+
+    if (activeDrops.length > 0 && currentId) {
         const foundIdx = activeDrops.findIndex(d => (d.drop_id || d.id) === currentId);
         if (foundIdx !== -1) dropIdx = foundIdx + 1;
     }
 
-    currentDropLabel.textContent = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${data.drop_name || ''}`;
+    // Aktualizace textu štítku
+    const newLabelText = `⚡ Drop (${dropIdx}/${dropQueueLen}): ${dropName}`;
+    if (currentDropLabel.textContent !== newLabelText) {
+        currentDropLabel.textContent = newLabelText;
+    }
+
+    // 2. Rychlé vyhledání nebo vytvoření obalového kontejneru
     let cardOuter = currentDropLabel.closest('.drop-card-container');
 
     if (!cardOuter) {
+        // Optimalizované vyhledání bez pomalého while cyklu přes contains()
         const progressTime = document.getElementById('progress-time');
         const progressFill = document.getElementById('progress-fill');
-        let parentSearch = currentDropLabel.parentElement;
+        const targetElement = progressTime || progressFill;
 
-        while (parentSearch && parentSearch !== document.body) {
-            if ((progressTime && parentSearch.contains(progressTime)) || (progressFill && parentSearch.contains(progressFill))) {
-                cardOuter = parentSearch;
-                cardOuter.classList.add('drop-card-container');
-                break;
+        if (targetElement) {
+            // Najdeme nejbližšího společného předka
+            let parent = currentDropLabel.parentElement;
+            while (parent && parent !== document.body) {
+                if (parent.contains(targetElement)) {
+                    cardOuter = parent;
+                    cardOuter.classList.add('drop-card-container');
+                    break;
+                }
+                parent = parent.parentElement;
             }
-            parentSearch = parentSearch.parentElement;
         }
     }
 
     if (!cardOuter) return;
 
+    // 3. Přestavba struktury (dvou sloupcový layout), pokud ještě neexistuje
     let rightCol = cardOuter.querySelector('#drop-card-right-col');
-    let leftImg = cardOuter.querySelector('#drop-card-left-img');
-
     if (!rightCol) {
         rightCol = document.createElement('div');
         rightCol.id = 'drop-card-right-col';
@@ -819,7 +863,8 @@ function renderDropCardLayout(data, rewardImgUrl) {
         rightCol.style.gap = '6px';
         rightCol.style.minWidth = '0';
 
-        while (cardOuter.firstChild) rightCol.appendChild(cardOuter.firstChild);
+        // Hromadný přesun dětských prvků bez cyklení po jednom
+        rightCol.append(...cardOuter.childNodes);
 
         cardOuter.style.display = 'flex';
         cardOuter.style.flexDirection = 'row';
@@ -828,11 +873,11 @@ function renderDropCardLayout(data, rewardImgUrl) {
         cardOuter.appendChild(rightCol);
     }
 
-    // Načtení obrázku nebo vytvoření placeholder čtverečku
+    // 4. Načtení/Vytvoření levého obrázku nebo náhradního čtverečku
     let targetLeftEl = null;
 
-    if (rewardImgUrl && typeof getCachedImage === 'function') {
-        targetLeftEl = getCachedImage(rewardImgUrl, data.drop_name || '', 'drop-reward-icon', {
+    if (rawImgUrl && typeof getCachedImage === 'function') {
+        targetLeftEl = getCachedImage(rawImgUrl, dropName, 'drop-reward-icon', {
             width: '72px',
             height: 'auto',
             maxHeight: '100%',
@@ -844,7 +889,6 @@ function renderDropCardLayout(data, rewardImgUrl) {
         });
     }
 
-    // Pokud obrázek není k dispozici, vytvoříme placeholder
     if (!targetLeftEl) {
         targetLeftEl = document.createElement('div');
         targetLeftEl.style.width = '72px';
@@ -858,13 +902,18 @@ function renderDropCardLayout(data, rewardImgUrl) {
 
     targetLeftEl.id = 'drop-card-left-img';
 
-    if (!leftImg || leftImg !== targetLeftEl) {
-        if (leftImg && cardOuter.contains(leftImg)) {
-            leftImg.replaceWith(targetLeftEl);
+    // Atomické nahrazení levého obrázku v DOMu
+    const existingLeftImg = cardOuter.querySelector('#drop-card-left-img');
+    if (existingLeftImg !== targetLeftEl) {
+        if (existingLeftImg) {
+            existingLeftImg.replaceWith(targetLeftEl);
         } else {
             cardOuter.insertBefore(targetLeftEl, rightCol);
         }
     }
+
+    // Až na samém konci uložíme úspěšný hash renderu
+    lastDropCardLayoutHash = currentHash;
 }
 
 function renderAllProgressBars(currentMins, dropData) {

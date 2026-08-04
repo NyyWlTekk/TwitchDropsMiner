@@ -1,6 +1,13 @@
+///////////////////////////////////////////////////////////////////////////////
+// SOCKETS MODULE - INITIALIZATION, BINDINGS & EVENT HANDLERS
+///////////////////////////////////////////////////////////////////////////////
+
 // ============================================================================
-// 1. SOCKET INITIALIZATION & DEBUG SETUP
+// 1. STATE & DEBUG SETUP
 // ============================================================================
+
+let isAdminSyncScheduled = false;
+let isDebugCached = null;
 
 const socket = io({
     transports: ['websocket', 'polling'],
@@ -10,8 +17,9 @@ const socket = io({
     reconnectionAttempts: Infinity
 });
 
-// Cache debug check to avoid constructing URLSearchParams on every single event
-let isDebugCached = null;
+/**
+ * Checks whether debug logging is enabled via URL param or global state
+ */
 const isDebugEnabled = () => {
     if (isDebugCached !== null) return isDebugCached;
     if (typeof window !== 'undefined') {
@@ -34,87 +42,57 @@ if (typeof socket.onAny === 'function') {
     });
 }
 
-
 // ============================================================================
-// 2. SOCKET EVENT HANDLERS (CLEAN BINDINGS)
-// ============================================================================
-
-// Connection & Status Events
-socket.on('connect', handleConnect);
-socket.on('disconnect', handleDisconnect);
-socket.on('connect_error', handleConnectError);
-socket.on('status_update', handleStatusUpdate);
-
-// Core Data & Campaign Sync Events
-socket.on('initial_state', handleInitialState);
-socket.on('wanted_items_update', handleWantedItemsUpdate);
-socket.on('drop_progress', handleDropProgress);
-socket.on('drop_progress_stop', handleDropProgressStop);
-socket.on('campaign_add', handleCampaignAdd);
-socket.on('inventory_clear', handleInventoryClear);
-socket.on('inventory_batch_update', handleInventoryBatchUpdate);
-socket.on('games_available', handleGamesAvailable);
-
-// Channels & Console Events
-socket.on('console_output', handleConsoleOutput);
-socket.on('channel_add', handleChannelAdd);
-socket.on('channel_update', handleChannelUpdate);
-socket.on('channel_remove', handleChannelRemove);
-socket.on('channels_clear', handleChannelsClear);
-socket.on('channels_batch_update', handleChannelsBatchUpdate);
-socket.on('channel_watching', handleChannelWatching);
-socket.on('channel_watching_clear', handleChannelWatchingClear);
-
-// Settings, Auth & Language Events
-socket.on('login_required', handleLoginRequired);
-socket.on('oauth_code_required', handleOAuthCodeRequired);
-socket.on('login_status', handleLoginStatus);
-socket.on('login_clear', handleLoginClear);
-socket.on('settings_updated', handleSettingsUpdated);
-socket.on('manual_mode_update', handleManualModeUpdate);
-socket.on('language_changed', handleLanguageChanged);
-
-// Theme & Notification Events
-socket.on('theme_change', handleThemeChange);
-socket.on('notification', handleNotification);
-socket.on('attention_required', handleAttentionRequired);
-
-
-// ============================================================================
-// 3. HELPER & UTILITY FUNCTIONS
+// 2. SOCKET EVENT HANDLERS BINDING (LAZY EVALUATION)
 // ============================================================================
 
-let isAdminSyncScheduled = false;
+// Core Connection & Status
+socket.on('connect', (...args) => typeof handleConnect === 'function' && handleConnect(...args));
+socket.on('disconnect', (...args) => typeof handleDisconnect === 'function' && handleDisconnect(...args));
+socket.on('connect_error', (...args) => typeof handleConnectError === 'function' && handleConnectError(...args));
+socket.on('status_update', (...args) => typeof handleStatusUpdate === 'function' && handleStatusUpdate(...args));
+socket.on('initial_state', (...args) => typeof handleInitialState === 'function' && handleInitialState(...args));
 
-/**
- * Throttled state synchronization with administration.js to prevent UI thrashing.
- */
-function syncAdminState() {
-    if (!window.Administration || isAdminSyncScheduled) return;
+// Progress & Drops
+socket.on('wanted_items_update', (...args) => typeof handleWantedItemsUpdate === 'function' && handleWantedItemsUpdate(...args));
+socket.on('drop_progress', (...args) => typeof handleDropProgress === 'function' && handleDropProgress(...args));
+socket.on('drop_progress_stop', (...args) => typeof handleDropProgressStop === 'function' && handleDropProgressStop(...args));
 
-    isAdminSyncScheduled = true;
-    requestAnimationFrame(() => {
-        isAdminSyncScheduled = false;
-        if (!window.Administration) return;
+// Inventory & Campaigns
+socket.on('campaign_add', (...args) => typeof handleCampaignAdd === 'function' && handleCampaignAdd(...args));
+socket.on('inventory_clear', (...args) => typeof handleInventoryClear === 'function' && handleInventoryClear(...args));
+socket.on('inventory_batch_update', (...args) => typeof handleInventoryBatchUpdate === 'function' && handleInventoryBatchUpdate(...args));
+socket.on('games_available', (...args) => typeof handleGamesAvailable === 'function' && handleGamesAvailable(...args));
 
-        let qCount = 0;
-        if (typeof state !== 'undefined') {
-            if (Array.isArray(state.wanted_items)) {
-                qCount = state.wanted_items.length;
-            } else if (state.campaigns) {
-                for (const _ in state.campaigns) qCount++;
-            }
-        }
+// Channels & Streamers
+socket.on('channel_add', (...args) => typeof handleChannelAdd === 'function' && handleChannelAdd(...args));
+socket.on('channel_update', (...args) => typeof handleChannelUpdate === 'function' && handleChannelUpdate(...args));
+socket.on('channel_remove', (...args) => typeof handleChannelRemove === 'function' && handleChannelRemove(...args));
+socket.on('channels_clear', (...args) => typeof handleChannelsClear === 'function' && handleChannelsClear(...args));
+socket.on('channels_batch_update', (...args) => typeof handleChannelsBatchUpdate === 'function' && handleChannelsBatchUpdate(...args));
+socket.on('channel_watching', (...args) => typeof handleChannelWatching === 'function' && handleChannelWatching(...args));
+socket.on('channel_watching_clear', (...args) => typeof handleChannelWatchingClear === 'function' && handleChannelWatchingClear(...args));
 
-        window.Administration.updateDiagnostics({
-            connected: Boolean(state?.connected),
-            queueCount: qCount,
-            rotationIndex: state?.rotation_index || state?.rotationIndex || 0
-        });
+// Console Output
+socket.on('console_output', (...args) => typeof handleConsoleOutput === 'function' && handleConsoleOutput(...args));
 
-        window.Administration.setState(state);
-    });
-}
+// Auth & Settings
+socket.on('login_required', (...args) => typeof handleLoginRequired === 'function' && handleLoginRequired(...args));
+socket.on('oauth_code_required', (...args) => typeof handleOAuthCodeRequired === 'function' && handleOAuthCodeRequired(...args));
+socket.on('login_status', (...args) => typeof handleLoginStatus === 'function' && handleLoginStatus(...args));
+socket.on('login_clear', (...args) => typeof handleLoginClear === 'function' && handleLoginClear(...args));
+socket.on('settings_updated', (...args) => typeof handleSettingsUpdated === 'function' && handleSettingsUpdated(...args));
+socket.on('manual_mode_update', (...args) => typeof handleManualModeUpdate === 'function' && handleManualModeUpdate(...args));
+socket.on('language_changed', (...args) => typeof handleLanguageChanged === 'function' && handleLanguageChanged(...args));
+
+// UI Theme & Notifications
+socket.on('theme_change', (...args) => typeof handleThemeChange === 'function' && handleThemeChange(...args));
+socket.on('notification', (...args) => typeof handleNotification === 'function' && handleNotification(...args));
+socket.on('attention_required', (...args) => typeof handleAttentionRequired === 'function' && handleAttentionRequired(...args));
+
+// ============================================================================
+// 3. CORE CONNECTION & SYSTEM HANDLERS
+// ============================================================================
 
 function handleConnect() {
     if (isDebugEnabled()) {
@@ -154,70 +132,6 @@ function handleConnectError(error) {
     }
 }
 
-let pendingStatusText = null;
-let isRafScheduled = false;
-let lastLoggedCampaignProgress = -1;
-
-function handleStatusUpdate(data) {
-    if (!data || !data.status) {
-        if (data) {
-            updateQueueAndState(data);
-        }
-        return;
-    }
-
-    const statusText = data.status;
-    let shouldLog = true;
-
-    if (statusText.startsWith('Adding campaigns to inventory...')) {
-        const match = statusText.match(/\((\d+)\/(\d+)\)/);
-        if (match) {
-            const current = parseInt(match[1], 10);
-            const total = parseInt(match[2], 10);
-            const percent = Math.floor((current / total) * 100);
-
-            const isQuarterStep = percent % 25 === 0 && percent !== lastLoggedCampaignProgress;
-            shouldLog = current === 1 || current === total || isQuarterStep;
-
-            if (shouldLog) {
-                lastLoggedCampaignProgress = percent;
-            }
-        }
-    } else {
-        lastLoggedCampaignProgress = -1;
-    }
-
-    if (shouldLog) {
-        console.log('[Status] Received update:', statusText);
-    }
-
-    scheduleStatusUpdate(statusText);
-
-    const statusLower = statusText.toLowerCase();
-    if (statusLower.includes('idle') || statusLower.includes('no active campaigns') || statusLower.includes('offline')) {
-        if (typeof clearDropProgress === 'function') {
-            clearDropProgress();
-        }
-    }
-
-    updateQueueAndState(data);
-}
-
-function scheduleStatusUpdate(statusText) {
-    pendingStatusText = statusText;
-
-    if (!isRafScheduled) {
-        isRafScheduled = true;
-        requestAnimationFrame(() => {
-            if (pendingStatusText !== null) {
-                updateStatus(pendingStatusText);
-                pendingStatusText = null;
-            }
-            isRafScheduled = false;
-        });
-    }
-}
-
 function updateQueueAndState(data) {
     if (data.queue_count !== undefined || data.rotation_index !== undefined) {
         if (typeof state !== 'undefined') {
@@ -228,6 +142,9 @@ function updateQueueAndState(data) {
     syncAdminState();
 }
 
+/**
+ * Synchronizes initial state when socket connects to the server
+ */
 function handleInitialState(data) {
     console.log('[Socket] Received initial state synchronization', data);
 
@@ -236,6 +153,15 @@ function handleInitialState(data) {
     }
 
     if (typeof state !== 'undefined') {
+        // --- PROPOJENÍ MANUÁLNÍHO REŽIMU DO STATE ---
+        if (data.manual_mode !== undefined) {
+            state.manual_mode = data.manual_mode;
+            state.is_manual = !!(data.manual_mode && data.manual_mode.active);
+            if (!data.manual_mode || !data.manual_mode.active) {
+                delete state.manual_game;
+            }
+        }
+
         if (data.watching_channel) {
             state.watching_channel = data.watching_channel;
         } else if (data.status && typeof data.status === 'string' && data.status.startsWith('Watching: ')) {
@@ -321,113 +247,9 @@ function handleInitialState(data) {
     syncAdminState();
 }
 
-function handleWantedItemsUpdate(data) {
-    console.log('[WantedItems] Received list update');
-    let filteredData = data;
-    if (Array.isArray(data)) {
-        filteredData = data.filter(item => !isGameIgnored(item.game_name || item.game));
-    }
-    if (typeof renderWantedItems === 'function') {
-        renderWantedItems(filteredData);
-    }
-    syncAdminState();
-}
-
-function handleDropProgress(data) {
-    if (!data) return;
-
-    const incomingGame = getDropGameName(data);
-    const watchedChannelObj = getWatchedChannelObject();
-    let currentlyWatchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game || watchedChannelObj.game_title) : null;
-
-    if (!currentlyWatchedGame && typeof state !== 'undefined' && state.active_game) {
-        currentlyWatchedGame = state.active_game;
-    }
-
-    if (incomingGame && isGameIgnored(incomingGame)) {
-        console.log(`[Drop] Blocked drop progress for ignored game: '${incomingGame}'`);
-        return;
-    }
-
-    if (currentlyWatchedGame && incomingGame) {
-        const cleanIncoming = incomingGame.trim().toLowerCase();
-        const cleanWatched = currentlyWatchedGame.trim().toLowerCase();
-
-        if (cleanIncoming !== cleanWatched) {
-            if (typeof logOnce === 'function') {
-                logOnce('ghost_blocked', `Ignored drop for '${incomingGame}' (Channel is watching '${currentlyWatchedGame}')`, true);
-            }
-            safeClearDrop();
-            return;
-        }
-    }
-
-    console.log(`[Drop] Updating progress for '${incomingGame || 'Unknown Game'}'`);
-
-    if (typeof state !== 'undefined') {
-        state.currentDrop = data;
-        state.current_drop = data;
-    }
-
-    const dropId = data.drop_id || data.id;
-    if (dropId && typeof syncAnyDropProgress === 'function') {
-        syncAnyDropProgress(String(dropId), data);
-    }
-
-    if (typeof updateDropProgress === 'function') {
-        updateDropProgress(data);
-    }
-    syncAdminState();
-}
-
-function handleDropProgressStop() {
-    console.log('[Drop] Stopped drop progress execution');
-    if (typeof clearDropProgress === 'function') {
-        clearDropProgress();
-    }
-}
-
-function handleCampaignAdd(data) {
-    const gameName = data.game_name || data.game;
-    console.log('[Campaign] Processing new campaign:', gameName || data.id);
-    if (!isGameIgnored(gameName) && typeof addCampaign === 'function') {
-        addCampaign(data);
-    }
-    syncAdminState();
-}
-
-function handleInventoryClear() {
-    console.log('[Inventory] Received clear command');
-    clearInventory();
-}
-
-function handleInventoryBatchUpdate(data) {
-    console.log('[Inventory] Processing batch inventory update');
-    state.campaigns = {};
-    const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
-    filtered.forEach(camp => {
-        state.campaigns[camp.id] = camp;
-    });
-    if (typeof renderInventory === 'function') renderInventory();
-    if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
-    syncAdminState();
-}
-
-function handleGamesAvailable(data) {
-    console.log('[Games] Received available games list update');
-    if (typeof availableGames !== 'undefined') {
-        availableGames = new Set(data.games || []);
-    }
-    if (typeof renderGamesToWatch === 'function') renderGamesToWatch();
-    if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
-    syncAdminState();
-}
-
-function handleConsoleOutput(data) {
-    if (data && data.message && typeof addConsoleLine === 'function') {
-        addConsoleLine(data.message);
-    }
-}
+// ============================================================================
+// 4. CHANNELS TAB HANDLERS & HELPERS
+// ============================================================================
 
 function handleChannelAdd(data) {
     console.log('[Channel] Channel added:', data?.displayName || data?.name || data?.id);
@@ -470,10 +292,10 @@ function handleChannelsBatchUpdate(data) {
     const activeDrop = state.currentDrop || state.current_drop;
 
     if (activeDrop && currentWatchedGame) {
-        const activeDropGame = getDropGameName(activeDrop);
+        const activeDropGame = typeof getDropGameName === 'function' ? getDropGameName(activeDrop) : null;
         if (activeDropGame && currentWatchedGame !== activeDropGame) {
             console.warn(`[SYNC CLEANUP] Mismatch after channels update: watched '${currentWatchedGame}' vs drop '${activeDropGame}'. Clearing.`);
-            safeClearDrop();
+            if (typeof safeClearDrop === 'function') safeClearDrop();
         }
     }
 
@@ -498,10 +320,10 @@ function handleChannelWatching(data) {
 
         if (state.currentDrop || state.current_drop) {
             const activeDrop = state.currentDrop || state.current_drop;
-            const currentDropGame = getDropGameName(activeDrop);
+            const currentDropGame = typeof getDropGameName === 'function' ? getDropGameName(activeDrop) : null;
             if (watchedGame && currentDropGame && watchedGame !== currentDropGame) {
                 console.log(`[CHANNEL SWITCH] Clearing stale drop '${currentDropGame}' (Channel plays '${watchedGame}')`);
-                safeClearDrop();
+                if (typeof safeClearDrop === 'function') safeClearDrop();
             }
         }
     }
@@ -525,6 +347,83 @@ function handleChannelWatchingClear() {
     }
     syncAdminState();
 }
+
+function getWatchedChannelObject() {
+    if (typeof state === 'undefined' || !state.watching_channel || !state.channels) return null;
+    const target = state.watching_channel;
+
+    if (Array.isArray(state.channels)) {
+        return state.channels.find(c => 
+            String(c.id) === String(target) || 
+            c.name === target || 
+            c.displayName === target ||
+            c.username === target
+        ) || null;
+    } else if (typeof state.channels === 'object') {
+        if (state.channels[target]) return state.channels[target];
+        if (state.channels[String(target)]) return state.channels[String(target)];
+        return Object.values(state.channels).find(c => 
+            String(c?.id) === String(target) || 
+            c?.name === target || 
+            c?.displayName === target ||
+            c?.username === target
+        ) || null;
+    }
+    return null;
+}
+
+// ============================================================================
+// 5. INVENTORY & GAMES TAB HANDLERS
+// ============================================================================
+
+function handleCampaignAdd(data) {
+    const gameName = data.game_name || data.game;
+    console.log('[Campaign] Processing new campaign:', gameName || data.id);
+    if (!isGameIgnored(gameName) && typeof addCampaign === 'function') {
+        addCampaign(data);
+    }
+    syncAdminState();
+}
+
+function handleInventoryClear() {
+    console.log('[Inventory] Received clear command');
+    clearInventory();
+}
+
+function clearInventory() {
+    console.log('[Inventory] Resetting state inventory object');
+    if (typeof state !== 'undefined') {
+        state.campaigns = {};
+    }
+    if (typeof renderInventory === 'function') renderInventory();
+    syncAdminState();
+}
+
+function handleInventoryBatchUpdate(data) {
+    console.log('[Inventory] Processing batch inventory update');
+    state.campaigns = {};
+    const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
+    filtered.forEach(camp => {
+        state.campaigns[camp.id] = camp;
+    });
+    if (typeof renderInventory === 'function') renderInventory();
+    if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
+    syncAdminState();
+}
+
+function handleGamesAvailable(data) {
+    console.log('[Games] Received available games list update');
+    if (typeof availableGames !== 'undefined') {
+        availableGames = new Set(data.games || []);
+    }
+    if (typeof renderGamesToWatch === 'function') renderGamesToWatch();
+    if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
+    syncAdminState();
+}
+
+// ============================================================================
+// 6. AUTH, SETTINGS & MANUAL MODE HANDLERS
+// ============================================================================
 
 function handleLoginRequired() {
     console.log('[Auth] Login required by server');
@@ -569,17 +468,70 @@ function handleSettingsUpdated(data) {
     syncAdminState();
 }
 
+function syncAutoAddUI(settings) {
+    if (!settings) return;
+
+    const autoaddEl = document.getElementById('auto-add-all-games');
+    if (autoaddEl) {
+        autoaddEl.checked = Boolean(settings.auto_add_all_games);
+    }
+
+    if (typeof renderGamesToWatch === 'function') {
+        renderGamesToWatch();
+    }
+}
+
 function handleManualModeUpdate(data) {
     console.log('[ManualMode] State updated:', data);
+
+    const isExitingManual = !data || !data.active;
+    
+    if (typeof state !== 'undefined') {
+        state.manual_mode = data;
+        state.is_manual = !isExitingManual;
+
+        if (isExitingManual) {
+            delete state.manual_game;
+        }
+    }
+
     if (typeof updateManualModeUI === 'function') {
         updateManualModeUI(data);
     }
+
+    // VYČIŠTĚNÍ PAMĚTI: Při výstupu z manuálního režimu promazat dokončené kampaně
+    if (isExitingManual && typeof cleanupInactiveCampaigns === 'function') {
+        cleanupInactiveCampaigns();
+    }
+
+    // Následný rebuild UI už vykreslí kompletně čistý stav
+    if (typeof renderWantedQueue === 'function') {
+        renderWantedQueue();
+    }
+    if (typeof renderWantedItems === 'function') {
+        renderWantedItems();
+    }
+    if (typeof refreshUI === 'function') {
+        refreshUI();
+    }
+
+    syncAdminState();
 }
 
 function handleLanguageChanged(data) {
     console.log('[Language] Changed to:', data.language);
     if (typeof fetchAndApplyTranslations === 'function') {
         fetchAndApplyTranslations();
+    }
+}
+
+// ============================================================================
+// 7. UI, CONSOLE, THEME & NOTIFICATION HANDLERS
+// ============================================================================
+
+function handleConsoleOutput(data) {
+    if (data && data.message && typeof addConsoleLine === 'function') {
+        addConsoleLine(data.message);
     }
 }
 
@@ -613,6 +565,44 @@ function handleAttentionRequired(data) {
         flashTitle();
     }
 }
+
+// ============================================================================
+// 8. ADMIN & DIAGNOSTICS HELPERS
+// ============================================================================
+
+/**
+ * Throttled state synchronization with administration.js to prevent UI thrashing.
+ */
+function syncAdminState() {
+    if (!window.Administration || isAdminSyncScheduled) return;
+
+    isAdminSyncScheduled = true;
+    requestAnimationFrame(() => {
+        isAdminSyncScheduled = false;
+        if (!window.Administration) return;
+
+        let qCount = 0;
+        if (typeof state !== 'undefined') {
+            if (Array.isArray(state.wanted_items)) {
+                qCount = state.wanted_items.length;
+            } else if (state.campaigns) {
+                for (const _ in state.campaigns) qCount++;
+            }
+        }
+
+        window.Administration.updateDiagnostics({
+            connected: Boolean(state?.connected),
+            queueCount: qCount,
+            rotationIndex: state?.rotation_index || state?.rotationIndex || 0
+        });
+
+        window.Administration.setState(state);
+    });
+}
+
+// ============================================================================
+// 9. GAME FILTERING & UTILITIES
+// ============================================================================
 
 function isGameIgnored(gameName) {
     if (!gameName || typeof state === 'undefined' || !state.settings || !Array.isArray(state.settings.ignored_games)) {
@@ -650,100 +640,4 @@ function filterIgnoredData(data) {
     }
 
     return data;
-}
-
-function updateStatus(status) {
-    const statusEl = document.getElementById('status-text');
-    if (statusEl) {
-        statusEl.textContent = status;
-    }
-
-    if (typeof renderWantedQueue === 'function') {
-        renderWantedQueue();
-    }
-    if (typeof refreshUI === 'function') {
-        refreshUI();
-    }
-    syncAdminState();
-}
-
-function syncAutoAddUI(settings) {
-    if (!settings) return;
-
-    const autoaddEl = document.getElementById('auto-add-all-games');
-    if (autoaddEl) {
-        autoaddEl.checked = Boolean(settings.auto_add_all_games);
-    }
-
-    if (typeof renderGamesToWatch === 'function') {
-        renderGamesToWatch();
-    }
-}
-
-function clearInventory() {
-    console.log('[Inventory] Resetting state inventory object');
-    state.campaigns = {};
-    if (typeof renderInventory === 'function') renderInventory();
-    syncAdminState();
-}
-
-function getWatchedChannelObject() {
-    if (typeof state === 'undefined' || !state.watching_channel || !state.channels) return null;
-    const target = state.watching_channel;
-
-    if (Array.isArray(state.channels)) {
-        return state.channels.find(c => 
-            String(c.id) === String(target) || 
-            c.name === target || 
-            c.displayName === target ||
-            c.username === target
-        ) || null;
-    } else if (typeof state.channels === 'object') {
-        if (state.channels[target]) return state.channels[target];
-        if (state.channels[String(target)]) return state.channels[String(target)];
-        return Object.values(state.channels).find(c => 
-            String(c?.id) === String(target) || 
-            c?.name === target || 
-            c?.displayName === target ||
-            c?.username === target
-        ) || null;
-    }
-    return null;
-}
-
-function getDropGameName(data) {
-    if (!data) return null;
-    let game = data.game_name || data.game || data.game_title || data.campaign?.game_name || data.drop?.game_name;
-    if (game) return game;
-
-    const dropId = data.drop_id || data.id;
-    if (dropId && typeof state !== 'undefined' && state.campaigns) {
-        if (Array.isArray(state.campaigns)) {
-            for (const camp of state.campaigns) {
-                if (camp.time_based_drops?.some(d => String(d.id) === String(dropId))) {
-                    return camp.game_name || camp.game;
-                }
-            }
-        } else {
-            for (const key in state.campaigns) {
-                const camp = state.campaigns[key];
-                if (camp.time_based_drops?.some(d => String(d.id) === String(dropId))) {
-                    return camp.game_name || camp.game;
-                }
-            }
-        }
-    }
-    return null;
-}
-
-function safeClearDrop() {
-    console.log('[Drop] Clearing active drop from state');
-    if (typeof state !== 'undefined') {
-        state.currentDrop = null;
-        state.current_drop = null;
-    }
-    if (typeof clearDropProgress === 'function') {
-        clearDropProgress(true);
-    }
-    syncAdminState();
 }

@@ -54,15 +54,6 @@ class InventoryService:
     async def fetch_campaigns(
         self, campaigns_chunk: list[tuple[str, JsonType]]
     ) -> dict[str, JsonType]:
-        """
-        Fetch detailed campaign data for a chunk of campaign IDs.
-
-        Args:
-            campaigns_chunk: List of (campaign_id, campaign_data) tuples
-
-        Returns:
-            Dictionary mapping campaign IDs to their detailed data
-        """
         campaign_ids: dict[str, JsonType] = dict(campaigns_chunk)
         auth_state = await self._twitch.get_auth()
 
@@ -75,15 +66,16 @@ class InventoryService:
             ]
         )
 
-        # Ensure we have a list
         response_list: list[JsonType] = (
             response_list_raw if isinstance(response_list_raw, list) else [response_list_raw]
         )
 
-        fetched_data: dict[str, JsonType] = {
-            (campaign_data := response_json["data"]["user"]["dropCampaign"])["id"]: campaign_data
-            for response_json in response_list
-        }
+        fetched_data: dict[str, JsonType] = {}
+        for response_json in response_list:
+            # Safe extraction in case Twitch returns null for user/dropCampaign
+            user_data = response_json.get("data", {}).get("user", {})
+            if user_data and (campaign_data := user_data.get("dropCampaign")):
+                fetched_data[campaign_data["id"]] = campaign_data
 
         return GQLClient.merge_data(campaign_ids, fetched_data)
 

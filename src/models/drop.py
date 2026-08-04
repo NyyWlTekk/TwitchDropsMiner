@@ -104,11 +104,17 @@ class BaseDrop:
         )
 
     def _can_earn_within(self, stamp: datetime) -> bool:
-        return (
-            self._base_earn_conditions()
-            and self.ends_at > datetime.now(timezone.utc)
-            and self.starts_at < stamp
-        )
+        now = datetime.now(timezone.utc)
+
+        if not (self.starts_at < stamp and self.ends_at > now):
+            return False
+
+        time_left_minutes = (self.ends_at - now).total_seconds() / 60
+        
+        if time_left_minutes < getattr(self, "needed_minutes", 1):
+            return False
+
+        return self._base_earn_conditions()
 
     def can_earn(self, channel: Channel | None = None, ignore_channel_status: bool = False) -> bool:
         return self._base_can_earn() and self.campaign._base_can_earn(

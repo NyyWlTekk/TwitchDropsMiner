@@ -28,6 +28,7 @@ if (!state.activeDropsQueue) state.activeDropsQueue = [];
 if (state.dropRotationIndex === undefined) state.dropRotationIndex = 0;
 if (!state.rotationTimer) state.rotationTimer = null;
 if (!state.campaigns) state.campaigns = {};
+if (!state._lastSyncedMinutes) state._lastSyncedMinutes = {};
 
 let dropTotalSeconds = 0;
 
@@ -153,22 +154,31 @@ function formatTime(secs) {
 }
 
 /**
- * Helper to extract image URL from any drop or reward object structure
+ * Helper to extract image URL from any drop or reward object structure (supports snake_case and camelCase)
  */
 function extractUrlFromObject(obj) {
-    if (!obj) return null;
+    if (!obj || typeof obj !== 'object') return null;
 
-    let url = obj.image_url || obj.reward_image_url || obj.icon_url || obj.benefit_icon_url || 
+    let url = obj.image_url || obj.imageUrl || 
+              obj.reward_image_url || obj.rewardImageUrl || 
+              obj.icon_url || obj.iconUrl || 
+              obj.benefit_icon_url || obj.benefitIconUrl || 
+              obj.asset_url || obj.assetUrl || 
+              obj.box_art_url || obj.boxArtURL || obj.boxArtUrl ||
               obj.image || obj.thumbnail || obj.url;
     if (url) return url;
 
     if (obj.reward) {
-        url = obj.reward.image_url || obj.reward.icon_url;
+        url = obj.reward.image_url || obj.reward.imageUrl || 
+              obj.reward.icon_url || obj.reward.iconUrl || 
+              obj.reward.asset_url || obj.reward.assetUrl;
         if (url) return url;
     }
 
     if (obj.benefit) {
-        url = obj.benefit.image_url || obj.benefit.icon_url;
+        url = obj.benefit.image_url || obj.benefit.imageUrl || 
+              obj.benefit.icon_url || obj.benefit.iconUrl || 
+              obj.benefit.asset_url || obj.benefit.assetUrl;
         if (url) return url;
     }
 
@@ -176,16 +186,16 @@ function extractUrlFromObject(obj) {
     if (Array.isArray(benefits) && benefits.length > 0) {
         const b = benefits[0];
         if (b) {
-            url = b.image_url || b.icon_url || b.thumbnail || b.url || b.asset_url;
+            url = b.image_url || b.imageUrl || b.icon_url || b.iconUrl || b.thumbnail || b.url || b.asset_url || b.assetUrl;
             if (url) return url;
         }
     }
 
-    const benefitEdges = obj.benefit_edges;
+    const benefitEdges = obj.benefit_edges || obj.benefitEdges;
     if (Array.isArray(benefitEdges) && benefitEdges.length > 0) {
         const node = benefitEdges[0]?.node;
         if (node) {
-            url = node.asset_url || node.image_url;
+            url = node.asset_url || node.assetUrl || node.image_url || node.imageUrl;
             if (url) return url;
         }
     }
@@ -194,7 +204,7 @@ function extractUrlFromObject(obj) {
 }
 
 /**
- * Resolves drop reward/asset image URL accurately and efficiently
+ * Resolves drop reward/asset image URL accurately with campaign fallbacks
  */
 function resolveDropRewardImageUrl(data, targetId = null) {
     if (!data) return null;
@@ -202,26 +212,20 @@ function resolveDropRewardImageUrl(data, targetId = null) {
     let rewardImgUrl = extractUrlFromObject(data);
     if (rewardImgUrl) return rewardImgUrl;
 
-    const campId = data.campaign_id;
-    if (targetId && state && state.campaigns && campId) {
+    const campId = data.campaign_id || data.campaignId;
+    if (state && state.campaigns && campId) {
         let camp = null;
         const campaigns = state.campaigns;
 
         if (!Array.isArray(campaigns) && campaigns[campId]) {
             camp = campaigns[campId];
         } else if (Array.isArray(campaigns)) {
-            for (let i = 0; i < campaigns.length; i++) {
-                const c = campaigns[i];
-                if (c && (c.id === campId || c.campaign_id === campId)) {
-                    camp = c;
-                    break;
-                }
-            }
+            camp = campaigns.find(c => c && (c.id === campId || c.campaign_id === campId || c.campaignId === campId));
         } else {
             for (const key in campaigns) {
                 if (Object.prototype.hasOwnProperty.call(campaigns, key)) {
                     const c = campaigns[key];
-                    if (c && (c.id === campId || c.campaign_id === campId)) {
+                    if (c && (c.id === campId || c.campaign_id === campId || c.campaignId === campId)) {
                         camp = c;
                         break;
                     }
@@ -229,16 +233,20 @@ function resolveDropRewardImageUrl(data, targetId = null) {
             }
         }
 
-        if (camp && camp.drops && Array.isArray(camp.drops)) {
+        if (camp && camp.drops && Array.isArray(camp.drops) && targetId) {
             const drops = camp.drops;
-            const dropsLen = drops.length;
-            for (let i = 0; i < dropsLen; i++) {
+            for (let i = 0; i < drops.length; i++) {
                 const d = drops[i];
-                if (d && (d.id === targetId || d.drop_id === targetId)) {
+                if (d && (d.id === targetId || d.drop_id === targetId || d.dropId === targetId)) {
                     rewardImgUrl = extractUrlFromObject(d);
                     if (rewardImgUrl) break;
                 }
             }
+        }
+
+        // Fallback to campaign box art / image if drop image is missing
+        if (!rewardImgUrl && camp) {
+            rewardImgUrl = extractUrlFromObject(camp);
         }
     }
 
@@ -283,43 +291,76 @@ function preloadQueueImages(queue) {
 // ==========================================
 
 /**
- * Unified entry point for updating drop progress in active queue and wanted tree simultaneously
+ * Unified entry point for updating drop progress in active queue and wanted tree simultaneously.
  */
 function syncAnyDropProgress(incomingIdStr, data) {
-    if (!state || !data || typeof data !== 'object' || data.gathering) return;
+    if (!state || !data || typeof data !== 'object') return;
 
+    const targetIdStr = String(incomingIdStr);
     const currMins = data.current_minutes !== undefined ? data.current_minutes : data.currentMinutes;
     const reqMins = data.required_minutes !== undefined ? data.required_minutes : data.requiredMinutes;
     const remSecs = data.remaining_seconds !== undefined ? data.remaining_seconds : data.remainingSeconds;
 
     if (currMins === undefined && remSecs === undefined) return;
 
+    let targetCampaignId = data.campaign_id || data.campaignId;
+
+    if (!targetCampaignId && Array.isArray(state.activeDropsQueue)) {
+        const found = state.activeDropsQueue.find(d => String(d.drop_id || d.id) === targetIdStr);
+        if (found) targetCampaignId = found.campaign_id || found.campaignId;
+    }
+
     if (Array.isArray(state.activeDropsQueue)) {
-        const activeQueueDrop = state.activeDropsQueue.find(d => String(d.drop_id || d.id) === incomingIdStr);
-        if (activeQueueDrop) {
-            if (currMins !== undefined) activeQueueDrop.current_minutes = currMins;
-            if (reqMins !== undefined) activeQueueDrop.required_minutes = reqMins;
-            if (remSecs !== undefined) activeQueueDrop.remaining_seconds = remSecs;
-            if (data.is_claimed !== undefined) activeQueueDrop.is_claimed = data.is_claimed;
+        state.activeDropsQueue.forEach(activeQueueDrop => {
+            const dropId = String(activeQueueDrop.drop_id || activeQueueDrop.id);
+            const dropCampaignId = activeQueueDrop.campaign_id || activeQueueDrop.campaignId;
 
-            const activeReq = activeQueueDrop.required_minutes || 0;
-            const activeCur = activeQueueDrop.current_minutes || 0;
+            const isSameDrop = dropId === targetIdStr;
+            const isSameCampaign = targetCampaignId && dropCampaignId && String(targetCampaignId) === String(dropCampaignId);
 
-            if (activeReq > 0) {
-                activeQueueDrop.progress = Math.min(100, (activeCur / activeReq) * 100);
-                activeQueueDrop.can_claim = activeCur >= activeReq && !activeQueueDrop.is_claimed;
+            if (isSameDrop || isSameCampaign) {
+                if (currMins !== undefined) activeQueueDrop.current_minutes = currMins;
+
+                if (isSameDrop && reqMins !== undefined) {
+                    activeQueueDrop.required_minutes = reqMins;
+                }
+
+                const dropReq = Number(activeQueueDrop.required_minutes || activeQueueDrop.requiredMinutes || 0);
+                const dropCur = Number(activeQueueDrop.current_minutes || 0);
+
+                if (dropReq > 0) {
+                    const calculatedRemSecs = Math.max(0, (dropReq - dropCur) * 60);
+                    activeQueueDrop.remaining_seconds = isSameDrop && remSecs !== undefined ? remSecs : calculatedRemSecs;
+                    activeQueueDrop.progress = Math.min(100, (dropCur / dropReq) * 100);
+                    activeQueueDrop.can_claim = dropCur >= dropReq && !activeQueueDrop.is_claimed;
+                }
+
+                if (isSameDrop && data.is_claimed !== undefined) {
+                    activeQueueDrop.is_claimed = data.is_claimed;
+                }
+
+                if (!state.liveDropsCache) state.liveDropsCache = {};
+                state.liveDropsCache[dropId] = {
+                    ...(state.liveDropsCache[dropId] || {}),
+                    current_minutes: activeQueueDrop.current_minutes,
+                    required_minutes: activeQueueDrop.required_minutes,
+                    remaining_seconds: activeQueueDrop.remaining_seconds,
+                    progress: activeQueueDrop.progress,
+                    can_claim: activeQueueDrop.can_claim
+                };
+
+                if (typeof renderAllProgressBars === 'function') {
+                    renderAllProgressBars(dropCur, activeQueueDrop);
+                }
             }
-
-            if (typeof renderAllProgressBars === 'function') {
-                renderAllProgressBars(activeCur, activeQueueDrop);
-            }
-        }
+        });
     }
 
     if (Array.isArray(state.wantedItemsTree)) {
         if (typeof syncWantedItemsProgress === 'function') {
             syncWantedItemsProgress({
-                drop_id: incomingIdStr,
+                drop_id: targetIdStr,
+                campaign_id: targetCampaignId,
                 ...data,
                 current_minutes: currMins,
                 remaining_seconds: remSecs
@@ -440,9 +481,7 @@ function cleanupClaimedCampaigns() {
  */
 function mapDropsForQueue(drops, parentData) {
     return drops.map(d => {
-        const dropImg = d.image_url || d.reward_image_url || d.icon_url || d.benefit_icon_url || 
-                        d.reward?.image_url || d.benefit?.image_url || d.benefits?.[0]?.image_url || 
-                        d.benefit_edges?.[0]?.node?.asset_url || parentData.image_url;
+        const dropImg = extractUrlFromObject(d) || extractUrlFromObject(parentData);
 
         const curMins = d.current_minutes !== undefined ? d.current_minutes : (parentData.current_minutes || 0);
         const reqMins = d.required_minutes || parentData.required_minutes || 1;
@@ -454,6 +493,7 @@ function mapDropsForQueue(drops, parentData) {
             drop_name: dropName,
             name: dropName,
             image_url: dropImg,
+            imageUrl: dropImg,
             current_minutes: curMins,
             required_minutes: reqMins,
             remaining_seconds: d.remaining_seconds !== undefined ? d.remaining_seconds : Math.max(0, (reqMins - curMins) * 60)
@@ -494,10 +534,17 @@ function clearWantedActiveState() {
 function clearDropProgress() {
     logProgressOnce('ui_clear_executed', '🧹 [UI CLEAR] Executing clearDropProgress() - resetting RAM state and UI');
 
+    // Reset core state
     state.currentDrop = null;
     state.current_drop = null;
     state.activeDropsQueue = [];
     dropTotalSeconds = 0;
+
+    // Reset layout hashes and cached DOM elements to force clean rebuild on next render pass
+    lastDropHeaderHash = null;
+    lastDropCardLayoutHash = null;
+    cachedIconContainer = null;
+    cachedInfoTextDiv = null;
 
     const noDropMessage = document.getElementById('no-drop-message');
     const dropInfo = document.getElementById('drop-info');
@@ -569,13 +616,12 @@ function updateRemainingTime(initialSeconds, currentData = null) {
         state.current_drop.current_minutes = currentMinutes;
     }
 
-    // FIX: Call syncWantedItemsProgress ONLY when minute changes to prevent redundant re-renders
     if (typeof syncWantedItemsProgress === 'function') {
         const dropId = drop.id || drop.drop_id;
-        if (!window._lastSyncedMinutes) window._lastSyncedMinutes = {};
+        if (!state._lastSyncedMinutes) state._lastSyncedMinutes = {};
         
-        if (dropId && window._lastSyncedMinutes[dropId] !== currentMinutes) {
-            window._lastSyncedMinutes[dropId] = currentMinutes;
+        if (dropId && state._lastSyncedMinutes[dropId] !== currentMinutes) {
+            state._lastSyncedMinutes[dropId] = currentMinutes;
             syncWantedItemsProgress(drop);
         }
     }
@@ -611,33 +657,6 @@ function updateDropTitle(data) {
 }
 
 const _fallbackImageCache = (typeof imageCache !== 'undefined') ? imageCache : new Map();
-
-function getCachedImage(url, alt, className, styles = {}) {
-    if (!url) return null;
-
-    const cache = (typeof imageCache !== 'undefined') ? imageCache : _fallbackImageCache;
-
-    let templateImg = cache.get(url);
-    if (!templateImg) {
-        templateImg = document.createElement('img');
-        templateImg.src = url;
-        cache.set(url, templateImg);
-    }
-
-    const imgEl = templateImg.cloneNode(false);
-
-    if (alt) imgEl.alt = alt;
-    if (className) imgEl.className = className;
-
-    if (styles && typeof styles === 'object') {
-        const styleKeys = Object.keys(styles);
-        if (styleKeys.length > 0) {
-            Object.assign(imgEl.style, styles);
-        }
-    }
-
-    return imgEl;
-}
 
 function resetDropHeader(dropGameEl, reason = 'invalid or missing data') {
     if (lastDropHeaderHash !== 'empty') {
@@ -723,8 +742,13 @@ function ensureHeaderContainers(dropGameEl) {
     }
 }
 
+/**
+ * Updates campaign header icon with placeholder support
+ */
 function updateHeaderIcon(iconUrl) {
     let imgEl = cachedIconContainer.querySelector('img');
+    let placeholderEl = cachedIconContainer.querySelector('.campaign-icon-placeholder');
+
     if (iconUrl) {
         if (!imgEl) {
             imgEl = document.createElement('img');
@@ -733,13 +757,31 @@ function updateHeaderIcon(iconUrl) {
             imgEl.style.height = '100%';
             imgEl.style.objectFit = 'cover';
             imgEl.style.display = 'block';
+            imgEl.onerror = () => {
+                imgEl.style.display = 'none';
+                if (placeholderEl) placeholderEl.style.display = 'flex';
+            };
             cachedIconContainer.appendChild(imgEl);
         }
-        if (imgEl.src !== iconUrl) {
-            imgEl.src = iconUrl;
+        imgEl.src = iconUrl;
+        imgEl.style.display = 'block';
+        if (placeholderEl) placeholderEl.style.display = 'none';
+    } else {
+        if (imgEl) imgEl.style.display = 'none';
+        if (!placeholderEl) {
+            placeholderEl = document.createElement('div');
+            placeholderEl.className = 'campaign-icon-placeholder';
+            placeholderEl.style.width = '100%';
+            placeholderEl.style.height = '100%';
+            placeholderEl.style.display = 'flex';
+            placeholderEl.style.alignItems = 'center';
+            placeholderEl.style.justifyContent = 'center';
+            placeholderEl.style.fontSize = '18px';
+            placeholderEl.style.color = 'rgba(255, 255, 255, 0.4)';
+            placeholderEl.innerHTML = '🎮';
+            cachedIconContainer.appendChild(placeholderEl);
         }
-    } else if (imgEl) {
-        imgEl.remove();
+        placeholderEl.style.display = 'flex';
     }
 }
 
@@ -829,28 +871,35 @@ function resetDropCardLayout(currentDropLabel, reason = 'invalid data') {
     }
 }
 
+/**
+ * Calculates current drop index and queue length for the active campaign display.
+ */
 function calculateDropQueueInfo(data, currentId) {
     let activeDrops = [];
     const { drops } = typeof getCampaignAndDrops === 'function' 
         ? getCampaignAndDrops(data) 
         : { drops: [] };
     
-    if (drops && drops.length > 0) {
+    if (Array.isArray(drops) && drops.length > 0) {
         activeDrops = drops.filter(d => typeof isClaimed === 'function' ? !isClaimed(d) : true);
     }
+
     if (activeDrops.length === 0 && Array.isArray(state?.activeDropsQueue) && state.activeDropsQueue.length > 0) {
-        activeDrops = [...state.activeDropsQueue];
+        activeDrops = state.activeDropsQueue;
     }
 
     const getDropMinutes = (d) => Number(d.required_minutes || d.total_minutes || d.requiredMinutes || 0);
-    activeDrops.sort((a, b) => getDropMinutes(a) - getDropMinutes(b));
+    const sortedDrops = activeDrops.slice().sort((a, b) => getDropMinutes(a) - getDropMinutes(b));
 
-    const dropQueueLen = activeDrops.length > 0 ? activeDrops.length : 1;
+    const dropQueueLen = sortedDrops.length > 0 ? sortedDrops.length : 1;
     let dropIdx = 1;
 
-    if (activeDrops.length > 0 && currentId) {
-        const foundIdx = activeDrops.findIndex(d => (d.drop_id || d.id) === currentId);
-        if (foundIdx !== -1) dropIdx = foundIdx + 1;
+    if (sortedDrops.length > 0 && currentId !== undefined && currentId !== null) {
+        const targetIdStr = String(currentId);
+        const foundIdx = sortedDrops.findIndex(d => String(d.drop_id || d.id || '') === targetIdStr);
+        if (foundIdx !== -1) {
+            dropIdx = foundIdx + 1;
+        }
     }
 
     return { dropIdx, dropQueueLen };
@@ -902,13 +951,28 @@ function ensureDropCardRightCol(cardOuter) {
     return rightCol;
 }
 
+/**
+ * Resolves left drop card image element with placeholder fallback
+ */
 function resolveDropCardLeftImage(rawImgUrl, dropName) {
     let targetLeftEl = null;
 
-    if (rawImgUrl && typeof getCachedImage === 'function') {
-        targetLeftEl = getCachedImage(rawImgUrl, dropName, 'drop-reward-icon', {
+    if (rawImgUrl) {
+        const cache = (typeof imageCache !== 'undefined') ? imageCache : _fallbackImageCache;
+
+        let templateImg = cache.get(rawImgUrl);
+        if (!templateImg) {
+            templateImg = document.createElement('img');
+            templateImg.src = rawImgUrl;
+            cache.set(rawImgUrl, templateImg);
+        }
+
+        const imgEl = templateImg.cloneNode(false);
+        imgEl.alt = dropName || 'Drop Reward';
+        imgEl.className = 'drop-reward-icon';
+        Object.assign(imgEl.style, {
             width: '72px',
-            height: 'auto',
+            height: '72px',
             maxHeight: '100%',
             alignSelf: 'center',
             objectFit: 'contain',
@@ -916,11 +980,43 @@ function resolveDropCardLeftImage(rawImgUrl, dropName) {
             flexShrink: '0',
             display: 'block'
         });
+
+        // Error fallback to placeholder if image fails to load
+        imgEl.onerror = function() {
+            const placeholder = document.createElement('div');
+            placeholder.id = 'drop-card-left-img';
+            placeholder.className = 'image-placeholder drop-reward-placeholder';
+            placeholder.style.width = '72px';
+            placeholder.style.height = '72px';
+            placeholder.style.borderRadius = '6px';
+            placeholder.style.display = 'flex';
+            placeholder.style.alignItems = 'center';
+            placeholder.style.justifyContent = 'center';
+            placeholder.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+            placeholder.style.border = '1px dashed rgba(255, 255, 255, 0.2)';
+            placeholder.style.fontSize = '24px';
+            placeholder.innerHTML = '🎁';
+            if (this.parentNode) {
+                this.parentNode.replaceChild(placeholder, this);
+            }
+        };
+
+        targetLeftEl = imgEl;
     }
 
     if (!targetLeftEl) {
         targetLeftEl = document.createElement('div');
-        targetLeftEl.className = 'image-placeholder';
+        targetLeftEl.className = 'image-placeholder drop-reward-placeholder';
+        targetLeftEl.style.width = '72px';
+        targetLeftEl.style.height = '72px';
+        targetLeftEl.style.borderRadius = '6px';
+        targetLeftEl.style.display = 'flex';
+        targetLeftEl.style.alignItems = 'center';
+        targetLeftEl.style.justifyContent = 'center';
+        targetLeftEl.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+        targetLeftEl.style.border = '1px dashed rgba(255, 255, 255, 0.2)';
+        targetLeftEl.style.fontSize = '24px';
+        targetLeftEl.innerHTML = '🎁';
     }
 
     targetLeftEl.id = 'drop-card-left-img';
@@ -1001,13 +1097,89 @@ function renderAllProgressBars(currentMins, dropData) {
     }
 }
 
-function updateGameHeaderTimeBadge(groupIdx, remainingMinutes) {
-    const groups = document.querySelectorAll('.wanted-game-group');
-    if (!groups[groupIdx]) return;
+/**
+ * Comprehensive debug logger and DOM updater for Wanted Queue time badges.
+ */
+function updateGameHeaderTimeBadgeDebug(target, remainingSeconds, callerSource = 'UNKNOWN') {
+    const gameName = typeof target === 'string' ? target : (target?.name || target?.game_name || 'Unknown Game');
+    
+    const groupEl = document.querySelector(`[data-game-name="${CSS.escape(gameName)}"]`)
+                 || document.querySelector(`[data-game-id="${CSS.escape(gameName)}"]`);
 
-    const badge = groups[groupIdx].querySelector('.wanted-game-time-badge');
-    if (badge) {
-        badge.textContent = remainingMinutes > 0 ? `${remainingMinutes} min` : 'Done';
+    if (!groupEl) {
+        console.warn(`[BADGE_DEBUG] ❌ Target DOM group not found for: '${gameName}' (Caller: ${callerSource})`);
+        return;
+    }
+
+    const badgeEl = groupEl.querySelector('.wanted-game-time-badge, .campaign-badge-time');
+    if (!badgeEl) {
+        console.warn(`[BADGE_DEBUG] ❌ Badge DOM element missing inside group: '${gameName}'`);
+        return;
+    }
+
+    const remSecs = Number(remainingSeconds || 0);
+    const totalMins = Math.ceil(remSecs / 60);
+    const hours = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    const newText = totalMins > 0 ? `${hours}h ${mins}m` : 'Done';
+
+    const oldText = badgeEl.textContent.trim();
+    const hasChanged = oldText !== newText;
+
+    const statusIcon = hasChanged ? '🔄 [WRITE]' : '⏭️ [SKIP]';
+    console.groupCollapsed(`[BADGE_DEBUG] ${statusIcon} '${gameName}' ➔ ${newText} (${callerSource})`);
+    
+    console.table({
+        'Game Target': gameName,
+        'Trigger Source': callerSource,
+        'Raw Seconds': remSecs,
+        'Calculated Mins': totalMins,
+        'Previous Value': oldText,
+        'New Value': newText,
+        'DOM Updated': hasChanged
+    });
+
+    if (hasChanged) {
+        badgeEl.textContent = newText;
+        console.log(`✅ DOM text updated from "${oldText}" to "${newText}"`);
+    } else {
+        console.log(`ℹ️ Values match ("${oldText}"). DOM write skipped to preserve performance.`);
+    }
+
+    console.groupEnd();
+}
+
+/**
+ * Updates game group header badge using group identifier or index, formatted into "Xh Ym".
+ */
+function updateGameHeaderTimeBadge(groupTarget, remainingMinutes) {
+    let groupEl = null;
+
+    if (typeof groupTarget === 'string') {
+        const targetStr = groupTarget.trim();
+        groupEl = document.querySelector(`[data-game-group-id="${CSS.escape(targetStr)}"]`) 
+               || document.querySelector(`[data-game-name="${CSS.escape(targetStr)}"]`);
+    } else if (typeof groupTarget === 'number') {
+        const groups = document.querySelectorAll('.wanted-game-group');
+        groupEl = groups[groupTarget];
+    }
+
+    if (!groupEl) return;
+
+    const badge = groupEl.querySelector('.wanted-game-time-badge');
+    if (!badge) return;
+
+    let formattedText = 'Done';
+    const totalMins = Number(remainingMinutes || 0);
+
+    if (totalMins > 0) {
+        const hours = Math.floor(totalMins / 60);
+        const mins = totalMins % 60;
+        formattedText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+    }
+
+    if (badge.textContent !== formattedText) {
+        badge.textContent = formattedText;
     }
 }
 
@@ -1026,7 +1198,6 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
     const activeId = activeDrop ? (activeDrop.drop_id || activeDrop.id) : null;
     const isCurrentDrop = activeId && String(activeId) === String(targetId);
 
-    // 1. PING-PONG GUARD: Ignore updates for non-active drops unless explicitly coming from rotation
     if (!isFromRotation && activeId && !isCurrentDrop) {
         return;
     }
@@ -1038,10 +1209,28 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
         if (queueItem) data = { ...queueItem, ...data };
     }
 
+    if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
+        const freshQueueItem = state.activeDropsQueue.find(d => (d.drop_id || d.id) === targetId);
+        if (freshQueueItem && freshQueueItem.current_minutes !== undefined) {
+            data.current_minutes = freshQueueItem.current_minutes;
+            data.currentMinutes = freshQueueItem.current_minutes;
+        }
+    }
+
+    if (activeDrop && activeDrop.current_minutes !== undefined && !data.is_claimed) {
+        const isSameContext = (data.campaign_id && activeDrop.campaign_id && String(data.campaign_id) === String(activeDrop.campaign_id)) ||
+                              (data.game_name && activeDrop.game_name && data.game_name === activeDrop.game_name);
+        
+        if (isSameContext) {
+            const liveMins = Math.max(Number(data.current_minutes || 0), Number(activeDrop.current_minutes));
+            data.current_minutes = liveMins;
+            data.currentMinutes = liveMins;
+        }
+    }
+
     const reqMins = Number(data.required_minutes ?? data.requiredMinutes ?? 0);
     const curMins = Number(data.current_minutes ?? data.currentMinutes ?? 0);
 
-    // Drop completion check
     if (isClaimed(data) || (reqMins > 0 && curMins >= reqMins)) {
         logProgressOnce(`drop_finished_${targetId}`, `🎉 [DROP COMPLETE] Drop '${data.drop_name || targetId}' is claimed or finished. Removing from queue.`);
         if (state.activeDropsQueue && Array.isArray(state.activeDropsQueue)) {
@@ -1052,11 +1241,10 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
         return;
     }
 
-    // 2. SECONDS PERSISTENCE: Maintain smooth countdown timers without jumping backward
     let remSecs;
-    if (data.remaining_seconds !== undefined && data.remaining_seconds !== null) {
+    if (data.remaining_seconds !== undefined && data.remaining_seconds !== null && !isFromRotation) {
         remSecs = Number(data.remaining_seconds);
-    } else if (isCurrentDrop && activeDrop?.remaining_seconds !== undefined && activeDrop?.remaining_seconds !== null) {
+    } else if (isCurrentDrop && activeDrop?.remaining_seconds !== undefined && activeDrop?.remaining_seconds !== null && !isFromRotation) {
         remSecs = activeDrop.remaining_seconds;
     } else {
         remSecs = Math.max(0, (reqMins - curMins) * 60);
@@ -1068,11 +1256,9 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
         debugTime('2. DISPLAY_UPDATE', data);
     }
     
-    // Save state
     state.currentDrop = data;
     state.current_drop = data;
 
-    // Toggle container visibility
     const noDropMessage = document.getElementById('no-drop-message');
     const dropInfo = document.getElementById('drop-info');
     if (noDropMessage) noDropMessage.style.display = 'none';
@@ -1080,17 +1266,14 @@ function updateSingleDropDisplay(data, isFromRotation = false) {
 
     const rewardImgUrl = resolveDropRewardImageUrl(data, targetId);
 
-    // 3. DOM RENDERING: Internal hash caching prevents redundant DOM touch
     updateDropTitle(data);
     renderDropGameHeader(data);
     renderDropCardLayout(data, rewardImgUrl);
 
-    // Update live elements (timer & progress bar)
     renderAllProgressBars(curMins, data);
     updateRemainingTime(remSecs, data);
 }
 
-// Added 3rd parameter 'shouldUpdateDisplay' defaulting to true
 function switchCampaignDisplay(data, isManualSwitch = false, shouldUpdateDisplay = true) {
     if (data) {
         const now = Date.now();
@@ -1116,11 +1299,11 @@ function switchCampaignDisplay(data, isManualSwitch = false, shouldUpdateDisplay
     cleanupClaimedCampaigns();
 
     if (!state.activeCampaignsQueue || state.activeCampaignsQueue.length === 0) {
-        if (window._lastValidActiveCampaignsQueue && window._lastValidActiveCampaignsQueue.length > 0) {
-            state.activeCampaignsQueue = window._lastValidActiveCampaignsQueue;
+        if (state._lastValidActiveCampaignsQueue && state._lastValidActiveCampaignsQueue.length > 0) {
+            state.activeCampaignsQueue = state._lastValidActiveCampaignsQueue;
         }
     } else {
-        window._lastValidActiveCampaignsQueue = state.activeCampaignsQueue;
+        state._lastValidActiveCampaignsQueue = state.activeCampaignsQueue;
     }
 
     const activeDrop = state.currentDrop || state.current_drop;
@@ -1163,7 +1346,6 @@ function switchCampaignDisplay(data, isManualSwitch = false, shouldUpdateDisplay
     const newDropId = initialActiveDrop ? (initialActiveDrop.drop_id || initialActiveDrop.id) : null;
     const dropChanged = !previousDropId || !newDropId || previousDropId !== newDropId;
 
-    // Trigger UI update ONLY if shouldUpdateDisplay is true
     if (shouldUpdateDisplay) {
         updateSingleDropDisplay(initialActiveDrop, dropChanged);
     }
@@ -1184,39 +1366,6 @@ function updateDropProgress(dropData) {
 
     const validDrop = dropData;
     const dropGame = validDrop.game_name || validDrop.game || validDrop.game_title;
-    
-    let watchedGame = null;
-    if (typeof getWatchedChannelObject === 'function') {
-        const watchedObj = getWatchedChannelObject();
-        if (watchedObj) {
-            watchedGame = watchedObj.game_name || watchedObj.game || watchedObj.game_title;
-        }
-    } else if (typeof state !== 'undefined' && state.watching_channel && state.channels) {
-        let chObj = null;
-        if (Array.isArray(state.channels)) {
-            chObj = state.channels.find(c => 
-                String(c.id) === String(state.watching_channel) || 
-                c.name === state.watching_channel ||
-                c.displayName === state.watching_channel
-            );
-        } else if (typeof state.channels === 'object') {
-            chObj = state.channels[state.watching_channel] || state.channels[String(state.watching_channel)];
-        }
-        if (chObj) {
-            watchedGame = chObj.game_name || chObj.game || chObj.game_title;
-        }
-    }
-
-    if (watchedGame && dropGame) {
-        const cleanWatched = watchedGame.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        const cleanDrop = dropGame.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (cleanWatched !== cleanDrop && !cleanWatched.includes(cleanDrop) && !cleanDrop.includes(cleanWatched)) {
-            logProgressOnce(
-                `mismatch_${dropGame}_vs_${watchedGame}`,
-                `⚠️ [UI GUARD MISMATCH] Game title mismatch ('${dropGame}' vs watched '${watchedGame}'), but continuing sync.`
-            );
-        }
-    }
 
     logProgressOnce(`render_${dropGame}`, `✅ [UI UPDATE] Rendering drop progress for '${dropGame || 'Unknown Game'}'`);
 
@@ -1278,12 +1427,10 @@ function updateDropProgress(dropData) {
         timeRemainingEl.style.display = 'block';
     }
 
-    if (typeof renderAllProgressBars === 'function') {
-        renderAllProgressBars(currentMins, validDrop);
-    }
-
     if (typeof syncAnyDropProgress === 'function') {
         syncAnyDropProgress(incomingIdStr, validDrop);
+    } else if (typeof renderAllProgressBars === 'function') {
+        renderAllProgressBars(currentMins, validDrop);
     }
 
     if (typeof updateSingleDropDisplay === 'function') {
@@ -1292,15 +1439,6 @@ function updateDropProgress(dropData) {
 
     if (typeof updateCampaignProgressData === 'function') {
         updateCampaignProgressData(validDrop, currentMins);
-    }
-
-    if (typeof syncWantedItemsProgress === 'function') {
-        syncWantedItemsProgress({
-            drop_id: incomingIdStr,
-            ...validDrop,
-            current_minutes: currentMins,
-            remaining_seconds: remSecs
-        });
     }
 }
 
@@ -1319,7 +1457,7 @@ function updateCampaignProgressData(data, liveCurrentMins) {
     const targetDropId = String(data.drop_id || data.id || '');
 
     let totalCampaignCurrent = currentDropCurrent;
-    let totalCampaignRequired = Number(data.required_minutes || data.duration || data.total_minutes) || 0;
+    let totalCampaignRequired = 0;
 
     if (state.campaigns && data.campaign_id) {
         let campaign = state.campaigns[data.campaign_id];
@@ -1339,6 +1477,7 @@ function updateCampaignProgressData(data, liveCurrentMins) {
             const dropsCount = drops.length;
 
             let dropVisualIndex = 1;
+            let maxCampaignRequired = 0;
 
             for (let i = 0; i < dropsCount; i++) {
                 const d = drops[i];
@@ -1348,10 +1487,18 @@ function updateCampaignProgressData(data, liveCurrentMins) {
                     d.current_minutes = currentDropCurrent;
                     dropVisualIndex = i + 1;
                 }
+
+                const dReq = Number(d.required_minutes || d.requiredMinutes || d.duration || 0);
+                if (dReq > maxCampaignRequired) {
+                    maxCampaignRequired = dReq;
+                }
             }
 
+            totalCampaignRequired = maxCampaignRequired > 0 
+                ? maxCampaignRequired 
+                : (Number(campaign.total_minutes || campaign.required_minutes) || 0);
+
             totalCampaignCurrent = currentDropCurrent;
-            totalCampaignRequired = Number(data.required_minutes || data.duration) || totalCampaignRequired;
 
             if (campaignTitle) {
                 const newTitle = `${campName} • Drop ${dropVisualIndex}/${dropsCount}`;
@@ -1360,6 +1507,10 @@ function updateCampaignProgressData(data, liveCurrentMins) {
                 }
             }
         }
+    }
+
+    if (totalCampaignRequired === 0) {
+        totalCampaignRequired = Number(data.required_minutes || data.duration || data.total_minutes) || 0;
     }
 
     if (totalCampaignRequired > 0) {
@@ -1388,7 +1539,7 @@ function updateOverallProgress() {
         const overallText = document.getElementById('overall-progress-text');
         if (!overallFill || !overallText) return;
 
-        const queueTree = state.wantedItemsTree || window._lastValidWantedTree || [];
+        const queueTree = state.wantedItemsTree || state._lastValidWantedTree || [];
 
         if (!queueTree || queueTree.length === 0) {
             overallFill.style.width = '0%';
@@ -1400,8 +1551,8 @@ function updateOverallProgress() {
             return;
         }
 
-        window._lastValidWantedTree = queueTree;
-        const stats = calculateOverallStats(queueTree);
+        state._lastValidWantedTree = queueTree;
+        const stats = calculateOverallStats();
 
         if (stats.totalRequired > 0) {
             const percentage = Math.min(100, Math.round((stats.totalCurrent / stats.totalRequired) * 100));
@@ -1509,29 +1660,26 @@ function executeRotationStep() {
         currentDrop.game_name = currentCampaign.game_name || currentCampaign.gameName;
         currentDrop.drop_name = currentDrop.name || currentDrop.drop_name || currentDrop.title || currentDrop.dropName || 'Drop';
 
-        // FIX: Safe ID comparison and live WebSocket data sync
+        const currentId = String(getDropId(currentDrop) || '');
+
+        const liveData = (state.liveDropsCache && state.liveDropsCache[currentId]) || null;
+
+        if (liveData) {
+            if (liveData.current_minutes !== undefined) currentDrop.current_minutes = liveData.current_minutes;
+            if (liveData.remaining_seconds !== undefined) currentDrop.remaining_seconds = liveData.remaining_seconds;
+            if (liveData.required_minutes !== undefined) currentDrop.required_minutes = liveData.required_minutes;
+            if (liveData.progress !== undefined) currentDrop.progress = liveData.progress;
+
+            if (liveData.name && !currentDrop.name) currentDrop.name = liveData.name;
+            if (liveData.title && !currentDrop.title) currentDrop.title = liveData.title;
+            if (liveData.drop_name && !currentDrop.drop_name) currentDrop.drop_name = liveData.drop_name;
+        }
+
         const existingDrop = state.currentDrop || state.current_drop;
         const existingId = getDropId(existingDrop);
-        const currentId = getDropId(currentDrop);
+        const hasChanged = !existingId || String(existingId) !== currentId;
 
-        if (existingId && currentId && existingId === currentId) {
-            if (existingDrop.current_minutes !== undefined) currentDrop.current_minutes = existingDrop.current_minutes;
-            if (existingDrop.remaining_seconds !== undefined) currentDrop.remaining_seconds = existingDrop.remaining_seconds;
-            if (existingDrop.required_minutes !== undefined) currentDrop.required_minutes = existingDrop.required_minutes;
-            if (existingDrop.progress !== undefined) currentDrop.progress = existingDrop.progress;
-
-            // FIX 1: Transfer drop names from WebSocket if missing in campaign object
-            if (existingDrop.name && !currentDrop.name) currentDrop.name = existingDrop.name;
-            if (existingDrop.title && !currentDrop.title) currentDrop.title = existingDrop.title;
-            if (existingDrop.drop_name && !currentDrop.drop_name) currentDrop.drop_name = existingDrop.drop_name;
-        }
-        
-        const hasChanged = !existingId || existingId !== currentId;
-
-        // FIX 2: Prepare campaign active drops without immediate UI overwrite
         switchCampaignDisplay(currentCampaign, false, false);
-
-        // Primary re-render with synchronized data
         updateSingleDropDisplay(currentDrop, hasChanged);
 
         state.dropRotationIndex++;
@@ -1552,7 +1700,7 @@ function executeRotationStep() {
 let isExecutingRotation = false;
 
 /**
- * Initializes drop rotation interval safely
+ * Initializes drop rotation interval safely with concurrency locks
  */
 function startCombinedRotation(forceRestart = true) {
     if (state.rotationTimer && !forceRestart) return; 
@@ -1563,7 +1711,16 @@ function startCombinedRotation(forceRestart = true) {
     }
 
     logProgressOnce('rot_start', `🔄 [ROTATION] Combined rotation started (interval: 4000ms, forceRestart: ${forceRestart})`);
-    state.rotationTimer = setInterval(executeRotationStep, 4000);
+    
+    state.rotationTimer = setInterval(() => {
+        if (isExecutingRotation) return;
+        isExecutingRotation = true;
+        try {
+            executeRotationStep();
+        } finally {
+            isExecutingRotation = false;
+        }
+    }, 4000);
     
     if (document.querySelectorAll('.wanted-drop-item').length > 0) {
         if (!isExecutingRotation) {

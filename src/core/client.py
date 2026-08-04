@@ -259,14 +259,24 @@ class Twitch:
 
     async def fetch_inventory(self) -> None:
         raw_inventory = await self.gql_request(GQL_OPERATIONS["Inventory"])
-        claimed_benefits = {b["id"]: isoparse(b["lastAwardedAt"]) for b in raw_inventory.get("gameEventDrops", [])}
+        claimed_benefits = {
+            b["id"]: isoparse(b["lastAwardedAt"]) 
+            for b in raw_inventory.get("gameEventDrops", [])
+        }
+
+        # Fetch both in-progress and potential new campaigns if returned by GQL query
         campaigns_data = raw_inventory.get("dropCampaignsInProgress", [])
-        for camp_data in campaigns_data:
+        
+        # Keep reference to created instances
+        self.campaigns = [
             DropsCampaign(self, camp_data, claimed_benefits)
+            for camp_data in campaigns_data
+        ]
+
         self._inventory_dirty = True
         await self._inventory_service.fetch_inventory()
 
-        # Po načtení zavoláme prioritizaci
+        # Call prioritization after loading
         handle_prioritize_badge_games(self)
 
     async def bulk_check_online(self, channels: abc.Iterable[Channel]) -> None:
@@ -761,9 +771,16 @@ def handle_prioritize_badge_games(client: Twitch, filtered_inventory: list[Drops
         client.settings.save()
         force_stream_reevaluation(client)
 
-def get_wanted_games(client: Twitch, filtered_inventory: list[DropsCampaign], next_hour: datetime, force_rebuild: bool = False) -> list[Game]:
+def get_wanted_games(
+    client: Twitch, 
+    filtered_inventory: list[DropsCampaign], 
+    next_hour: datetime, 
+    force_rebuild: bool = False
+) -> list[Game]:
     if client._inventory_dirty or force_rebuild or not client._wanted_games_cache:
         logger.info("Building wanted games list")
+        
+        # Předáme filtered_inventory i do stream selectoru
         client._wanted_games_cache = client._stream_selector.get_wanted_games(
             client.settings, filtered_inventory
         )
@@ -776,8 +793,9 @@ def get_wanted_games(client: Twitch, filtered_inventory: list[DropsCampaign], ne
             logger.warning(
                 "No wanted games found! games_to_watch=%s, eligible_campaigns=%d",
                 client.settings.games_to_watch,
-                sum(1 for c in client.inventory if c.eligible and c.can_earn_within(next_hour)),
+                sum(1 for c in filtered_inventory if c.eligible and c.can_earn_within(next_hour)),
             )
+            
     return client._wanted_games_cache
 
 
@@ -796,14 +814,19 @@ def handle_manual_mode_priority(client: Twitch) -> None:
             logger.info(f"Manual mode: prioritizing game {client._manual_target_game.name}")
 
 
-def filter_wanted_campaigns(client: Twitch, next_hour: datetime) -> list[Game]:
+def filter_wanted_campaigns(
+    client: Twitch, 
+    filtered_inventory: list[DropsCampaign], 
+    next_hour: datetime
+) -> list[Game]:
     wanted_games: list[Game] = []
     games_to_watch: list[str] = client.settings.games_to_watch
     mining_benefits: dict[str, bool] = client.settings.mining_benefits
 
     for game_name in games_to_watch:
         game_name_lower: str = game_name.lower()
-        for campaign in client.inventory:
+        # Použijeme předaný vyfiltrovaný seznam kampaní
+        for campaign in filtered_inventory:
             game: Game = campaign.game
             if (
                 game.name.lower() == game_name_lower

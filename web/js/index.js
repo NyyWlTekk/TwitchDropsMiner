@@ -5,8 +5,12 @@
 
 
 // DISABLE LOGGING 
+/**
 console.log = () => {};
 console.debug = () => {};
+console.warn = () => {};
+console.info = () => {};
+**/
 
 let availableGames = new Set(); // All games from campaigns
 let draggedElement = null;

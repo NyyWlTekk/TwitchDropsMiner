@@ -30,25 +30,39 @@ class DropsCampaign:
         self.id: str = data["id"]
         self.campaign_url: str = f"https://www.twitch.tv/drops/campaigns?dropID={self.id}"
         self.name: str = data["name"]
-        self.game: Game = Game(data["game"])
-        self.linked: bool = data["self"]["isAccountConnected"]
-        self.link_url: str = data["accountLinkURL"]
-        # campaign's image actually comes from the game object
-        # we use regex to get rid of the dimensions part (ex. ".../game_id-285x380.jpg")
+        
+        game_data = data.get("game")
+        self.game: Game = Game(game_data) if game_data else Game({"id": "special_event", "name": self.name})
+        
+        self.link_url: str = data.get("accountLinkURL", "")
+        
+        self_data = data.get("self") or {}
+        logger.warning(f"[DEBUG CAMPAIGN] Name: {self.name} | ID: {self.id} | raw_self: {data.get('self')} | raw_linkURL: {self.link_url}")
+        
+        is_connected = self_data.get("isAccountConnected", False)
+        
+        fake_link_domains = ("twitch.tv", "help.twitch.tv")
+        # Zjistíme, jestli jde o reálný externí link pro propojení účtu
+        has_real_link = bool(self.link_url) and not any(domain in self.link_url for domain in fake_link_domains)
+        
+        # Logika: 
+        # - Pokud reálný link nemá, propojení se nevyžaduje -> je to "hotovo/splněno" (True).
+        # - Pokud reálný link má, stav propojení se odvíjí čistě od toho, co vrátí Twitch (is_connected).
+        self.linked: bool = not has_real_link or bool(is_connected)
+        
         self.starts_at: datetime = isoparse(data["startAt"])
         self.ends_at: datetime = isoparse(data["endAt"])
         self._valid: bool = data["status"] != "EXPIRED"
-        allowed: JsonType = data["allow"]
+        allowed: JsonType = data.get("allow", {})
         self.allowed_channels: list[Channel] = (
-            [Channel.from_acl(twitch, channel_data) for channel_data in allowed["channels"]]
-            if allowed["channels"] and allowed.get("isEnabled", True)
+            [Channel.from_acl(twitch, channel_data) for channel_data in allowed.get("channels", [])]
+            if allowed.get("channels") and allowed.get("isEnabled", True)
             else []
         )
         self.timed_drops: dict[str, TimedDrop] = {
             drop_data["id"]: TimedDrop(self, drop_data, claimed_benefits)
-            for drop_data in data["timeBasedDrops"]
+            for drop_data in data.get("timeBasedDrops", [])
         }
-
     def __repr__(self) -> str:
         return f"Campaign({self.game!s}, {self.name}, {self.claimed_drops}/{self.total_drops})"
 
@@ -131,6 +145,19 @@ class DropsCampaign:
             key=lambda d: d.remaining_minutes,
         )
         return drops[0] if drops else None
+        
+    @property
+    def has_watchable_drops(self) -> bool:
+        """Return True if campaign contains at least one unclaimed drop requiring > 0 minutes."""
+        return any(
+            not d.is_claimed
+            and (
+                getattr(d, "required_minutes", 0) > 0
+                or getattr(d, "needed_minutes", 0) > 0
+                or getattr(d, "total_required_minutes", 0) > 0
+            )
+            for d in self.drops
+        )
 
     def _update_real_minutes(self, delta: int) -> None:
         for drop in self.drops:
@@ -196,10 +223,25 @@ class DropsCampaign:
         # Verify if there is enough time left in the campaign to complete remaining drops
         if self.ends_at:
             remaining_drop_mins = sum(
-                max(0, getattr(d, "required_minutes", 0) - getattr(d, "current_minutes", 0))
+                max(
+                    0,
+                    getattr(
+                        d,
+                        "required_minutes",
+                        getattr(d, "needed_minutes", getattr(d, "total_required_minutes", 0)),
+                    )
+                    - getattr(d, "current_minutes", 0),
+                )
                 for d in self.drops
                 if not getattr(d, "is_claimed", False)
-                and not (getattr(d, "current_minutes", 0) >= getattr(d, "required_minutes", 0))
+                and not (
+                    getattr(d, "current_minutes", 0)
+                    >= getattr(
+                        d,
+                        "required_minutes",
+                        getattr(d, "needed_minutes", getattr(d, "total_required_minutes", 0)),
+                    )
+                )
             )
             
             time_left_mins = (self.ends_at - now_utc).total_seconds() / 60
@@ -225,4 +267,27 @@ class DropsCampaign:
             first_drop.display()
 
     def has_wanted_unclaimed_benefits(self, allowed_benefits: dict[str, bool]) -> bool:
-        return any(drop.has_wanted_unclaimed_benefits(allowed_benefits) for drop in self.drops)
+        """Check if campaign contains at least one unclaimed drop permitted by allowed_benefits with debug logging."""
+        logger.debug(
+            '[DEBUG-BENEFITS] Checking campaign "%s" (Game: %s) with allowed_benefits: %s',
+            self.name,
+            self.game.name,
+            allowed_benefits,
+        )
+        has_wanted = False
+        for drop in self.drops:
+            if drop.is_claimed:
+                continue
+            drop_wanted = drop.has_wanted_unclaimed_benefits(allowed_benefits)
+            logger.debug(
+                '[DEBUG-BENEFITS]   -> Drop "%s" (ID: %s) wanted: %s | Benefits: %s',
+                getattr(drop, "name", "Unknown"),
+                getattr(drop, "id", "Unknown"),
+                drop_wanted,
+                getattr(drop, "benefits", []),
+            )
+            if drop_wanted:
+                has_wanted = True
+        
+        logger.debug('[DEBUG-BENEFITS] Campaign "%s" final has_wanted: %s', self.name, has_wanted)
+        return has_wanted

@@ -50,20 +50,21 @@ class BaseDrop:
         self.failed_claim = False
         self.claimed_count = 0
         
-        if "self" in data:
-            self.claim_id = data["self"]["dropInstanceID"]
-            self.is_claimed = data["self"]["isClaimed"]
+        if "self" in data and data["self"]:
+            self.claim_id = data["self"].get("dropInstanceID")
+            self.is_claimed = data["self"].get("isClaimed", False)
+            logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: True | isClaimed: {self.is_claimed} | dropInstanceID: {self.claim_id}")
         else:
-            dts = [
-                claimed_benefits[bid]
-                for benefit in self.benefits
+            matched_benefits = [
+                bid for benefit in self.benefits 
                 if (bid := benefit.id) in claimed_benefits
             ]
             
-            if dts and all(self.starts_at <= dt < self.ends_at for dt in dts):
+            if matched_benefits:
                 self.is_claimed = True
-                logger.debug(f"Drop {self.id} marked as claimed (found in claimed_benefits).")
-
+                logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | Found in claimed_benefits: {matched_benefits}")
+            else:
+                logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | NOT found in claimed_benefits. benefits: {[b.id for b in self.benefits]}")
         self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
 
     def __repr__(self) -> str:
@@ -106,12 +107,19 @@ class BaseDrop:
     def _can_earn_within(self, stamp: datetime) -> bool:
         now = datetime.now(timezone.utc)
 
+        # Kampaň/drop musí být aktivní nebo začínat před vypršením limitu (stamp)
         if not (self.starts_at < stamp and self.ends_at > now):
             return False
 
         time_left_minutes = (self.ends_at - now).total_seconds() / 60
         
-        if time_left_minutes < getattr(self, "needed_minutes", 1):
+        # Výpočet REÁLNĚ zbývajících minut (zohledňuje již získaný progress)
+        total_needed = getattr(self, "needed_minutes", 1)
+        current_progress = getattr(self, "current_minutes", 0)
+        remaining_needed = max(1, total_needed - current_progress)
+
+        # Pokud do konce zbývá méně času, než kolik REÁLNĚ potřebujeme k dokončení, vyřadit
+        if time_left_minutes < remaining_needed:
             return False
 
         return self._base_earn_conditions()
@@ -248,13 +256,19 @@ class TimedDrop(BaseDrop):
         self, campaign: DropsCampaign, data: JsonType, claimed_benefits: dict[str, datetime]
     ):
         super().__init__(campaign, data, claimed_benefits)
+        
+        # Získání reálných minut z dat, s ošetřením chybějícího objektu "self"
         self.real_current_minutes: int = (
-            "self" in data and data["self"]["currentMinutesWatched"] or 0
+            data.get("self") and data["self"].get("currentMinutesWatched") or 0
         )
         self.required_minutes: int = data["requiredMinutesWatched"]
         self.extra_current_minutes: int = 0
+        
+        # Pokud je drop již označen jako claimnutý (např. nalezen v historii),
+        # nastavíme rovnou plný počet minut, aby se v aplikaci zobrazil jako hotový (100 %)
         if self.is_claimed:
             self.real_current_minutes = self.required_minutes
+            logger.debug(f"[DEBUG TIMED DROP] Forcing real_current_minutes to required ({self.required_minutes}) for claimed drop: {self.name}")
 
     def __repr__(self) -> str:
         if self.is_claimed:

@@ -105,10 +105,18 @@ function getDropGameName(data) {
 
     const dropId = data.drop_id || data.id;
     if (dropId && typeof state !== 'undefined' && state.campaigns) {
-        const campList = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        for (const camp of campList) {
-            if (camp?.time_based_drops?.some(d => String(d.id) === String(dropId))) {
-                return camp.game_name || camp.game;
+        if (Array.isArray(state.campaigns)) {
+            for (const camp of state.campaigns) {
+                if (camp.time_based_drops?.some(d => String(d.id) === String(dropId))) {
+                    return camp.game_name || camp.game;
+                }
+            }
+        } else {
+            for (const key in state.campaigns) {
+                const camp = state.campaigns[key];
+                if (camp.time_based_drops?.some(d => String(d.id) === String(dropId))) {
+                    return camp.game_name || camp.game;
+                }
             }
         }
     }
@@ -148,7 +156,7 @@ function handleInitialCurrentDrop(dropData) {
 
 function handleStatusUpdate(data) {
     if (!data || !data.status) {
-        if (data && typeof updateQueueAndState === 'function') {
+        if (data) {
             updateQueueAndState(data);
         }
         return;
@@ -188,14 +196,7 @@ function handleStatusUpdate(data) {
         }
     }
 
-    if (typeof updateQueueAndState === 'function') {
-        updateQueueAndState(data);
-    }
-
-    // Direct UI refresh trigger upon status updates/channel switches
-    if (typeof renderWantedItems === 'function' && typeof state !== 'undefined' && state.wantedItemsTree) {
-        renderWantedItems(state.wantedItemsTree);
-    }
+    updateQueueAndState(data);
 }
 
 function scheduleStatusUpdate(statusText) {
@@ -215,13 +216,16 @@ function scheduleStatusUpdate(statusText) {
 
 function updateStatus(status) {
     const statusEl = document.getElementById('status-text');
-    if (statusEl && statusEl.textContent !== status) {
+    if (statusEl) {
         statusEl.textContent = status;
     }
 
-    // OPTIMIZATION: Removing aggressive renderWantedQueue() / refreshUI() calls from high-frequency status updates.
-    // Dynamic updates are now safely handled via syncWantedItemsProgress or explicit handleWantedItemsUpdate.
-
+    if (typeof renderWantedQueue === 'function') {
+        renderWantedQueue();
+    }
+    if (typeof refreshUI === 'function') {
+        refreshUI();
+    }
     syncAdminState();
 }
 
@@ -262,19 +266,12 @@ function handleInitialChannels(channelsData) {
 function handleWantedItemsUpdate(data) {
     console.log('[WantedItems] Received list update');
     let filteredData = data;
-    
     if (Array.isArray(data)) {
-        filteredData = data.filter(item => typeof isGameIgnored === 'function' ? !isGameIgnored(item.game_name || item.game) : true);
+        filteredData = data.filter(item => !isGameIgnored(item.game_name || item.game));
     }
-
-    if (typeof state !== 'undefined') {
-        state.wantedItemsTree = filteredData;
-    }
-
     if (typeof renderWantedItems === 'function') {
         renderWantedItems(filteredData);
     }
-    
     syncAdminState();
 }
 
@@ -290,8 +287,11 @@ function handleInitialWantedItems(wantedData) {
         treeToRender = Object.values(treeToRender);
     }
 
-    if (Array.isArray(treeToRender)) {
-        handleWantedItemsUpdate(treeToRender);
+    if (Array.isArray(treeToRender) && treeToRender.length > 0) {
+        state.wantedItemsTree = treeToRender;
+        if (typeof renderWantedItems === 'function') {
+            renderWantedItems(treeToRender);
+        }
     }
 }
 
@@ -338,18 +338,11 @@ function checkSyncConsistency(evt = null, data = null) {
     }
 }
 
-// Auto-attach inspector & UI refresher to socket events
+// Auto-attach inspector to socket events (without high-frequency status_update spam)
 if (typeof socket !== 'undefined') {
-    ['drop_progress', 'channel_watching', 'channel_switch', 'initial_state', 'channels_batch_update', 'status_update'].forEach(evt => {
+    ['drop_progress', 'channel_watching', 'initial_state', 'channels_batch_update'].forEach(evt => {
         socket.on(evt, (data) => {
-            setTimeout(() => {
-                checkSyncConsistency(evt, data);
-
-                // Re-render Wanted Items when switching channels or status changes (ignoring high-frequency drop_progress)
-                if (evt !== 'drop_progress' && typeof renderWantedItems === 'function' && typeof state !== 'undefined' && state.wantedItemsTree) {
-                    renderWantedItems(state.wantedItemsTree);
-                }
-            }, 20);
+            setTimeout(() => checkSyncConsistency(evt, data), 20);
         });
     });
 }

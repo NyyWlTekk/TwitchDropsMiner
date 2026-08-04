@@ -382,9 +382,8 @@ function syncAnyDropProgress(incomingIdStr, data) {
 
 /**
  * Calculates total requirements for the overall progress bar from full inventory (state.campaigns)
- * @param {boolean} isParallel - True if campaigns/games mine in parallel, false for sequential
  */
-function calculateOverallStats(isParallel = false) {
+function calculateOverallStats() {
     const stats = { totalCurrent: 0, totalRequired: 0, totalRemainingSecs: 0 };
     
     if (!state || !state.campaigns) return stats;
@@ -422,17 +421,13 @@ function calculateOverallStats(isParallel = false) {
     if (gamesMap.size === 0) return stats;
 
     for (const campaignList of gamesMap.values()) {
-        let gameReq = 0;
-        let gameCur = 0;
-        let gameRemSecs = 0;
-
         let maxReq = 0;
         let maxCur = 0;
         let maxRemSecs = 0;
 
         for (let i = 0; i < campaignList.length; i++) {
             const campaign = campaignList[i];
-            const drops = extractCampaignDrops(campaign); // Využívá tvou existující helper funkci
+            const drops = campaign.drops;
             if (!drops || !Array.isArray(drops)) continue;
 
             let campReq = 0;
@@ -445,39 +440,27 @@ function calculateOverallStats(isParallel = false) {
 
                 const req = Number(drop.required_minutes || drop.requiredMinutes || drop.duration) || 0;
                 let cur = Number(drop.current_minutes || drop.currentMinutes) || 0;
-                const claimed = isClaimed(drop); // Využívá tvou existující isClaimed() funkci
+                const isClaimed = Boolean(drop.is_claimed || drop.claimed || drop.isClaimed);
 
-                if (claimed || cur > req) {
+                if (isClaimed || cur > req) {
                     cur = req;
                 }
 
                 campReq += req;
                 campCur += cur;
-                campRemSecs += claimed ? 0 : Math.max(0, req - cur) * 60;
+                campRemSecs += isClaimed ? 0 : Math.max(0, req - cur) * 60;
             }
 
-            if (isParallel) {
-                if (campReq > maxReq) {
-                    maxReq = campReq;
-                    maxCur = campCur;
-                    maxRemSecs = campRemSecs;
-                }
-            } else {
-                gameReq += campReq;
-                gameCur += campCur;
-                gameRemSecs += campRemSecs;
+            if (campReq > maxReq) {
+                maxReq = campReq;
+                maxCur = campCur;
+                maxRemSecs = campRemSecs;
             }
         }
 
-        if (isParallel) {
-            stats.totalRequired += maxReq;
-            stats.totalCurrent += maxCur;
-            stats.totalRemainingSecs += maxRemSecs;
-        } else {
-            stats.totalRequired += gameReq;
-            stats.totalCurrent += gameCur;
-            stats.totalRemainingSecs += gameRemSecs;
-        }
+        stats.totalRequired += maxReq;
+        stats.totalCurrent += maxCur;
+        stats.totalRemainingSecs += maxRemSecs;
     }
 
     return stats;

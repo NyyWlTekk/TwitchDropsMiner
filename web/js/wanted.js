@@ -1,14 +1,14 @@
-/////////////////////////////////////////////////////////////////
-// WANTED QUEUE
-/////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+// WANTED QUEUE MODULE (OPTIMIZED & IN-PLACE DOM UPDATES)
+///////////////////////////////////////////////////////////////////////////////
 
-// ==================== 1. Core UI Rendering ====================
+// ==================== 1. Core UI Rendering & Batching ====================
 
 let wantedRenderDebounceTimer = null;
 let lastRenderedTreeHash = '';
 
 /**
- * Debounced queue rendering to batch rapid socket and channel updates into a single frame.
+ * Debounced queue rendering to batch rapid socket updates.
  */
 function renderWantedItems(tree, force = false) {
     if (tree) {
@@ -25,18 +25,16 @@ function renderWantedItems(tree, force = false) {
         return;
     }
 
-    if (wantedRenderDebounceTimer) {
-        clearTimeout(wantedRenderDebounceTimer);
-    }
+    if (wantedRenderDebounceTimer) return;
 
     wantedRenderDebounceTimer = setTimeout(() => {
         wantedRenderDebounceTimer = null;
         performRenderWantedItems(state.wantedItemsTree);
-    }, 200);
+    }, 150);
 }
 
 /**
- * Internal direct DOM renderer with structural fingerprint guard to eliminate redundant DOM rebuilds.
+ * Smart DOM renderer with targeted node reconciliation.
  */
 function performRenderWantedItems(tree) {
     const container = document.getElementById('wanted-items-list');
@@ -47,60 +45,65 @@ function performRenderWantedItems(tree) {
 
     if (!tree || tree.length === 0) {
         lastRenderedTreeHash = 'empty';
-        console.log('[WantedQueue] Queue is empty, rendering default empty message');
         const emptyMsg = state.translations?.gui?.wanted?.none || 'No wanted drops queued...';
         container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
         if (typeof updateOverallProgress === 'function') updateOverallProgress();
         return;
     }
 
-    // Include active states & current drop in fingerprint so status updates trigger DOM rebuilds
     const activeDrop = state?.currentDrop || state?.current_drop;
     const activeDropId = activeDrop?.drop_id || activeDrop?.id || '';
     const activeCampId = activeDrop?.campaign_id || '';
     const isManual = !!(state?.manual_mode?.active || state?.is_manual);
 
-    const currentHash = JSON.stringify({
-        activeDropId,
-        activeCampId,
-        isManual,
-        groups: tree.map(g => ({
-            name: g.game_name,
-            cCount: (g.campaigns || []).length,
-            pActive: g.isParallelActive,
-            cStates: (g.campaigns || []).map(c => {
-                const stateEval = evaluateCampaignMiningState(c, g.game_name);
-                return `${c.id || c.campaign_id}_${stateEval.isActivelyMining}_${stateEval.hasProgress}`;
-            })
-        }))
-    });
+    // Fast structural hash check
+    const currentHash = `${tree.length}_${activeDropId}_${activeCampId}_${isManual}_` + 
+        tree.map(g => `${g.game_name}:${(g.campaigns || []).length}`).join('|');
 
-    // Skip DOM destruction only if structural fingerprint AND mining states haven't changed
     if (currentHash === lastRenderedTreeHash && container.children.length > 0) {
+        // Just update dynamic states in-place without rebuilding DOM structure
+        updateAllCampaignStatesInDOM(tree);
         return;
     }
     lastRenderedTreeHash = currentHash;
 
-    console.log(`[WantedQueue] Performing full DOM rebuild for ${tree.length} game group(s)`);
+    console.log(`[WantedQueue] Performing smart DOM update for ${tree.length} game group(s)`);
+    
+    // In-place reconciliation of Game Groups
+    const existingGroups = new Map();
+    Array.from(container.querySelectorAll('.wanted-game-group')).forEach(el => {
+        if (el.dataset.gameName) existingGroups.set(el.dataset.gameName, el);
+    });
+
     const fragment = document.createDocumentFragment();
 
     tree.forEach((gameGroup, index) => {
-        fragment.appendChild(renderGameGroupElement(gameGroup, index));
+        const gameName = gameGroup.game_name || gameGroup.name || '';
+        let groupEl = existingGroups.get(gameName);
+
+        if (groupEl) {
+            existingGroups.delete(gameName);
+            updateGameGroupElement(groupEl, gameGroup, index);
+        } else {
+            groupEl = renderGameGroupElement(gameGroup, index);
+        }
+        fragment.appendChild(groupEl);
     });
 
-    container.replaceChildren(fragment);
+    // Remove obsolete groups
+    existingGroups.forEach(el => el.remove());
+
+    if (container.children.length === 0 || container.querySelector('.empty-message-small')) {
+        container.replaceChildren(fragment);
+    } else {
+        container.appendChild(fragment); // DOM reconciliation attaches existing reused nodes
+    }
+
     if (typeof updateOverallProgress === 'function') updateOverallProgress();
 }
 
-
 // ==================== 2. DOM Builders & Components ====================
 
-/**
- * Evaluates the mining state of a campaign using active drop queues and watched channel anchor.
- * @param {Object} campaign - Campaign data structure.
- * @param {string} [gameName] - Name of the game context.
- * @returns {Object} Evaluated state flags and CSS classes.
- */
 function evaluateCampaignMiningState(campaign, gameName) {
     if (!campaign) return { isActivelyMining: false, hasProgress: false, cardClasses: 'wanted-card' };
 
@@ -112,102 +115,80 @@ function evaluateCampaignMiningState(campaign, gameName) {
     const hasProgress = checkIfCampaignHasProgress(drops, isActivelyMining);
 
     let cardClasses = 'wanted-card';
-    if (isActivelyMining) {
-        cardClasses += ' active-mining';
-    } else if (hasProgress) {
-        cardClasses += ' in-progress';
-    }
+    if (isActivelyMining) cardClasses += ' is-mining';
+    else if (hasProgress) cardClasses += ' in-progress';
 
-    return {
-        campaignId,
-        drops,
-        isActivelyMining,
-        hasProgress,
-        cardClasses
-    };
+    return { campaignId, drops, isActivelyMining, hasProgress, cardClasses };
 }
 
-/**
- * Creates a visual status badge/indicator element for active mining or progress state.
- */
 function renderCampaignStatusIndicatorElement(isActivelyMining, hasProgress) {
     const t = state?.translations?.gui?.wanted;
 
     if (isActivelyMining) {
-        const badgeEl = makeElement('span', { 
-            class: 'status-tag tag-mining'
-        });
-        const label = t?.mining || 'Mining';
-        badgeEl.innerHTML = `${getStatusIconSVG('drop-active')} ${label}`;
+        const badgeEl = makeElement('span', { class: 'status-tag tag-mining' });
+        badgeEl.innerHTML = `${getStatusIconSVG('drop-active')} ${t?.mining || 'Mining'}`;
         return badgeEl;
     }
     
     if (hasProgress) {
-        const badgeEl = makeElement('span', { 
-            class: 'status-tag tag-in-progress'
-        });
-        const label = t?.in_progress || 'In Progress';
-        badgeEl.innerHTML = `${getStatusIconSVG('drop-progress')} ${label}`;
+        const badgeEl = makeElement('span', { class: 'status-tag tag-in-progress' });
+        badgeEl.innerHTML = `${getStatusIconSVG('drop-progress')} ${t?.in_progress || 'In Progress'}`;
         return badgeEl;
     }
 
     return null;
 }
 
-/**
- * Creates a game group DOM element containing its campaigns.
- */
 function renderGameGroupElement(gameGroup, index) {
     const gameName = gameGroup.game_name || gameGroup.name || '';
-    const groupEl = makeElement('div', { 
-        class: 'wanted-game-group',
-        'data-game-name': gameName 
-    });
+    const groupEl = makeElement('div', { class: 'wanted-game-group', 'data-game-name': gameName });
 
     let iconUrl = gameGroup.game_icon || gameGroup.icon || gameGroup.box_art_url;
-    if (iconUrl) {
-        iconUrl = iconUrl.replace('{width}', '40').replace('{height}', '53');
-    }
+    if (iconUrl) iconUrl = iconUrl.replace('{width}', '40').replace('{height}', '53');
 
-    const headerChildren = [makeElement('span', { class: 'wanted-game-index' }, `#${index + 1}`)];
-    if (iconUrl) {
-        headerChildren.push(makeImageElement(iconUrl, gameName, 'wanted-game-icon'));
-    }
-    headerChildren.push(makeElement('span', { class: 'wanted-game-title' }, gameName));
+    // Spočítej zbývající čas přímo z kampaní v objektu
+    const campaigns = gameGroup.campaigns || gameGroup.campaign_list || [];
+    const mins = calculateMaxRemainingTime(campaigns);
+    const hours = Math.floor(mins / 60);
+    const remainderMins = mins % 60;
+    const timeText = hours > 0 ? `${hours}h ${remainderMins}m` : `${remainderMins}m`;
 
-    const rawMins = Number(gameGroup.total_remaining_minutes);
-    if (gameGroup.total_remaining_minutes !== undefined && !isNaN(rawMins)) {
-        const hours = Math.floor(rawMins / 60);
-        const mins = rawMins % 60;
-        const timeText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
-
-        const badgeEl = makeElement('span', { 
-            class: 'wanted-game-time-badge',
-            'data-game-badge': gameName 
-        });
+    const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', h => {
+        h.appendChild(makeElement('span', { class: 'wanted-game-index' }, `#${index + 1}`));
+        if (iconUrl) h.appendChild(makeImageElement(iconUrl, gameName, 'wanted-game-icon'));
+        h.appendChild(makeElement('span', { class: 'wanted-game-title' }, gameName));
+        
+        // Vložíme odhadovaný čas rovnou do nového badge!
+        const badgeEl = makeElement('span', { class: 'wanted-game-time-badge', 'data-game-badge': gameName });
         badgeEl.innerHTML = `${getStatusIconSVG('active')} ${timeText}`;
-        headerChildren.push(badgeEl);
-    }
-
-    const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', el => {
-        headerChildren.forEach(child => el.appendChild(child));
+        h.appendChild(badgeEl);
     });
+
     groupEl.appendChild(headerEl);
 
     const campaignListEl = makeElement('div', { class: 'wanted-campaign-list' });
-    const campaigns = gameGroup.campaigns || gameGroup.campaign_list || [];
-    
     campaigns.forEach(campaign => {
         campaignListEl.appendChild(renderCampaignCardElement(campaign, gameName));
     });
 
     groupEl.appendChild(campaignListEl);
+
     return groupEl;
 }
 
-/**
- * Creates a single campaign card element with its drop items using modular helpers.
- */
+function updateGameGroupElement(groupEl, gameGroup, index) {
+    const idxEl = groupEl.querySelector('.wanted-game-index');
+    if (idxEl) idxEl.textContent = `#${index + 1}`;
+
+    const campaignListEl = groupEl.querySelector('.wanted-campaign-list');
+    if (campaignListEl) {
+        const campaigns = gameGroup.campaigns || gameGroup.campaign_list || [];
+        campaignListEl.replaceChildren(...campaigns.map(c => renderCampaignCardElement(c, gameGroup.game_name)));
+    }
+
+    updateGameGroupBadge(gameGroup.game_name, gameGroup.total_remaining_minutes);
+}
+
 function renderCampaignCardElement(campaign, gameName) {
     const campaignState = evaluateCampaignMiningState(campaign, gameName);
 
@@ -215,37 +196,22 @@ function renderCampaignCardElement(campaign, gameName) {
         class: campaignState.cardClasses,
         'data-campaign-id': String(campaignState.campaignId)
     }, '', cardEl => {
-        const headerEl = renderCampaignHeaderElement(campaign, campaignState.drops, campaignState);
-        const bodyEl = renderCampaignBodyElement(campaignState.drops, campaignState);
-
-        cardEl.appendChild(headerEl);
-        cardEl.appendChild(bodyEl);
+        cardEl.appendChild(renderCampaignHeaderElement(campaign, campaignState.drops, campaignState));
+        cardEl.appendChild(renderCampaignBodyElement(campaignState.drops, campaignState));
     });
 }
 
-/**
- * Updates or creates the campaign card header element including titles, badges, and dates.
- */
-function renderCampaignHeaderElement(campaign, drops, campaignState = null, existingHeader = null) {
+function renderCampaignHeaderElement(campaign, drops, campaignState = null) {
     if (!campaign || typeof campaign !== 'object') return null;
 
-    const claimedCount = typeof calculateClaimedDropsCount === 'function' 
-        ? calculateClaimedDropsCount(campaign, drops)
-        : (drops || []).filter(d => Boolean(d.is_claimed ?? d.isClaimed ?? d.claimed)).length;
-    
+    const claimedCount = calculateClaimedDropsCount(campaign, drops);
     const totalCount = campaign.total_drops_count || campaign.totalDropsCount || (drops ? drops.length : 0);
     const campaignName = campaign.name || campaign.campaign_name || 'Campaign';
     const campaignUrl = campaign.url || '#';
     const startsAt = campaign.starts_at || campaign.startsAt || '';
     const endsAt = campaign.ends_at || campaign.endsAt || '';
 
-    const currentHash = `${campaign.id || campaignName}_${campaignUrl}_${claimedCount}_${totalCount}_${campaignState?.isActivelyMining}_${campaignState?.hasProgress}_${startsAt}_${endsAt}`;
-
-    if (existingHeader && existingHeader.dataset.hash === currentHash) {
-        return existingHeader;
-    }
-
-    const newHeader = makeElement('div', { class: 'wanted-card-header' }, '', h => {
+    return makeElement('div', { class: 'wanted-card-header' }, '', h => {
         const titleRow = makeElement('div', { class: 'wanted-card-header-main' }, '', row => {
             row.appendChild(makeElement('a', {
                 href: campaignUrl,
@@ -259,143 +225,109 @@ function renderCampaignHeaderElement(campaign, drops, campaignState = null, exis
 
             if (campaignState) {
                 const statusBadge = renderCampaignStatusIndicatorElement(campaignState.isActivelyMining, campaignState.hasProgress);
-                if (statusBadge) {
-                    row.appendChild(statusBadge);
-                }
+                if (statusBadge) row.appendChild(statusBadge);
             }
         });
         h.appendChild(titleRow);
 
-        if (typeof formatCampaignDates === 'function') {
-            const dateText = formatCampaignDates(startsAt, endsAt);
-            if (dateText) {
-                const datesEl = makeElement('div', { class: 'wanted-campaign-dates' });
-                datesEl.innerHTML = `${getStatusIconSVG('upcoming')} ${dateText}`;
-                h.appendChild(datesEl);
-            }
+        const dateText = formatCampaignDates(startsAt, endsAt);
+        if (dateText) {
+            const datesEl = makeElement('div', { class: 'wanted-campaign-dates' });
+            datesEl.innerHTML = `${getStatusIconSVG('upcoming')} ${dateText}`;
+            h.appendChild(datesEl);
         }
     });
-
-    newHeader.dataset.hash = currentHash;
-
-    if (existingHeader && existingHeader.parentNode) {
-        existingHeader.replaceWith(newHeader);
-    }
-
-    return newHeader;
 }
 
-/**
- * Creates the body element containing all drop items container.
- */
 function renderCampaignBodyElement(drops, campaignState = null) {
     const dropContainer = makeElement('div', { class: 'wanted-drops-container' });
 
     const sortedDrops = [...(drops || [])].sort((a, b) => {
-        const timeA = Number(a.required_minutes ?? a.requiredMinutes ?? a.required_time ?? a.needed_minutes ?? a.duration ?? a.total_minutes ?? 0);
-        const timeB = Number(b.required_minutes ?? b.requiredMinutes ?? b.required_time ?? b.needed_minutes ?? b.duration ?? b.total_minutes ?? 0);
+        const timeA = Number(a.required_minutes ?? a.requiredMinutes ?? a.required_time ?? 0);
+        const timeB = Number(b.required_minutes ?? b.requiredMinutes ?? b.required_time ?? 0);
         return timeA - timeB;
     });
 
     sortedDrops.forEach((drop, index) => {
-        if (typeof renderDropItemElement === 'function') {
-            dropContainer.appendChild(renderDropItemElement(drop, index + 1, campaignState));
-        }
+        dropContainer.appendChild(renderDropItemElement(drop, index + 1, campaignState));
     });
 
     return makeElement('div', { class: 'wanted-card-body' }, '', b => b.appendChild(dropContainer));
 }
 
-/**
- * Creates an individual drop item element with state sync for active mining progress.
- */
 function renderDropItemElement(drop, index = 1, campaignState = null) {
-    const rawUuid = drop.id || drop.drop_id || drop.uuid || drop.benefit_id || 
-                    (typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : `drop-${index}`);
-    
-    const textId = typeof getDropUniqueId === 'function' ? getDropUniqueId(drop, index) : rawUuid;
+    const rawUuid = getDropUniqueId(drop, index);
     const dropName = drop.name || drop.title || 'Drop';
 
     const isClaimed = Boolean(drop.is_claimed ?? drop.isClaimed ?? drop.claimed ?? false);
     const canClaim = Boolean(drop.can_claim ?? drop.canClaim ?? false);
-    
-    const required = Number(drop.required_minutes ?? drop.requiredMinutes ?? drop.required_time ?? drop.needed_minutes ?? drop.duration ?? drop.total_minutes ?? 0);
+    const required = Number(drop.required_minutes ?? drop.requiredMinutes ?? drop.required_time ?? 0);
 
-    let current = isClaimed 
-        ? required 
-        : Math.round(Number(drop.current_minutes ?? drop.currentMinutes ?? drop.current_time ?? drop.progress ?? 0));
+    let current = isClaimed ? required : Math.round(Number(drop.current_minutes ?? drop.currentMinutes ?? drop.progress ?? 0));
 
     const activeDrop = state?.currentDrop || state?.current_drop;
     if (activeDrop && !isClaimed) {
         const activeDropId = String(activeDrop.drop_id || activeDrop.id || '').trim();
-        const dropId = String(rawUuid).trim();
-
-        if (activeDropId && dropId && activeDropId === dropId) {
-            current = Math.round(Number(activeDrop.current_minutes ?? activeDrop.currentMinutes ?? activeDrop.current_time ?? activeDrop.progress ?? 0));
+        if (activeDropId && activeDropId === String(rawUuid).trim()) {
+            current = Math.round(Number(activeDrop.current_minutes ?? activeDrop.currentMinutes ?? activeDrop.progress ?? 0));
         }
     }
 
-    const element = makeElement('div', {
+    return makeElement('div', {
         class: `wanted-drop-item ${isClaimed ? 'is-claimed' : ''}`,
         'data-wanted-drop-id': String(rawUuid),
         'data-drop-id': String(rawUuid),
-        'data-drop-name': String(dropName).trim(),
-        'data-text-id': String(textId)
+        'data-drop-name': String(dropName).trim()
     }, '', el => {
         const infoEl = makeElement('div', { class: 'wanted-drop-info' }, '', info => {
             const displayName = index ? `Drop ${index}: ${dropName}` : dropName;
             info.appendChild(makeElement('span', { class: 'wanted-drop-name' }, displayName));
 
-            const rawName = (dropName || '').toLowerCase();
-            const normalizedDropName = rawName.replace(/^\d+[\.\)]?\s*/, '').trim();
-
+            const rawName = (dropName || '').toLowerCase().replace(/^\d+[\.\)]?\s*/, '').trim();
             const benefits = drop.benefits || drop.rewards || [];
+
             benefits.forEach(benefit => {
-                if (benefit) {
-                    const benefitText = typeof benefit === 'string' ? benefit : (benefit.name || benefit.title || '');
-                    const cleanBenefit = benefitText.trim().toLowerCase();
-                    if (cleanBenefit && !normalizedDropName.includes(cleanBenefit) && cleanBenefit !== normalizedDropName) {
-                        info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefitText));
-                    }
+                if (!benefit) return;
+                const benefitText = typeof benefit === 'string' ? benefit : (benefit.name || benefit.title || '');
+                const cleanBenefit = benefitText.trim().toLowerCase();
+                if (cleanBenefit && !rawName.includes(cleanBenefit) && cleanBenefit !== rawName) {
+                    info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefitText));
                 }
             });
         });
         el.appendChild(infoEl);
 
         const statusEl = makeElement('div', { class: 'wanted-drop-status' });
-
-        if (isClaimed) {
-            const label = state?.translations?.gui?.wanted?.claimed || 'Claimed';
-            statusEl.innerHTML = `
-                <span class="status-tag tag-claimed">${getStatusIconSVG('drop-claimed')} ${label} (100%)</span>
-                ${required > 0 ? `
-                <div class="wanted-drop-progress">
-                    <div class="wanted-drop-progress-bar" style="width: 100%;"></div>
-                </div>` : ''}
-            `;
-        } else if (canClaim || (required > 0 && current >= required)) {
-            const label = state?.translations?.gui?.wanted?.ready || 'Ready to claim!';
-            statusEl.innerHTML = `
-                <span class="status-tag tag-ready">${getStatusIconSVG('drop-ready')} ${label} (100%)</span>
-                <div class="wanted-drop-progress">
-                    <div class="wanted-drop-progress-bar" style="width: 100%;"></div>
-                </div>
-            `;
-        } else if (required > 0) {
-            const progressPercent = Math.min(100, Math.max(0, Math.round((current / required) * 100)));
-            statusEl.innerHTML = `
-                <span class="status-tag tag-progress">${getStatusIconSVG('drop-active')} ${current} / ${required} min</span>
-                <div class="wanted-drop-progress">
-                    <div class="wanted-drop-progress-bar" style="width: ${progressPercent}%;"></div>
-                </div>
-            `;
-        }
+        renderDropStatusHTML(statusEl, { isClaimed, canClaim, required, current });
         el.appendChild(statusEl);
     });
-
-    return element;
 }
 
+function renderDropStatusHTML(statusEl, { isClaimed, canClaim, required, current }) {
+    if (isClaimed) {
+        const label = state?.translations?.gui?.wanted?.claimed || 'Claimed';
+        statusEl.innerHTML = `
+            <span class="status-tag tag-claimed">${getStatusIconSVG('drop-claimed')} ${label} (100%)</span>
+            ${required > 0 ? `<div class="wanted-drop-progress"><div class="wanted-drop-progress-bar bar-fill" style="width: 100%;"></div></div>` : ''}
+        `;
+    } else if (canClaim || (required > 0 && current >= required)) {
+        const label = state?.translations?.gui?.wanted?.ready || 'Ready to claim!';
+        statusEl.innerHTML = `
+            <span class="status-tag tag-ready">${getStatusIconSVG('drop-ready')} ${label} (100%)</span>
+            <div class="wanted-drop-progress"><div class="wanted-drop-progress-bar bar-fill" style="width: 100%;"></div></div>
+        `;
+    } else if (required > 0) {
+        const pct = Math.min(100, Math.max(0, Math.round((current / required) * 100)));
+        statusEl.innerHTML = `
+            <span class="status-tag tag-progress wanted-drop-text">${getStatusIconSVG('drop-active')} ${current} / ${required} min</span>
+            <div class="wanted-drop-progress">
+                <div class="wanted-drop-progress-bar bar-fill" style="width: ${pct}%;"></div>
+            </div>
+        `;
+    } else {
+        statusEl.innerHTML = '';
+    }
+}
 
 // ==================== 3. State & Active Checks ====================
 
@@ -408,28 +340,19 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
 
     if (watchedChannel) {
         const channelCampId = String(watchedChannel.campaign_id || watchedChannel.campaignId || '').trim();
-        
-        if (campaignIdStr && channelCampId && channelCampId === campaignIdStr) {
-            return true;
-        }
+        if (campaignIdStr && channelCampId && channelCampId === campaignIdStr) return true;
 
         const channelGame = watchedChannel.game_name || watchedChannel.game || watchedChannel.game_title;
-        if (channelGame && gameName) {
-            const isGameMatch = channelGame.trim().toLowerCase() === gameName.trim().toLowerCase();
-            if (isGameMatch) {
-                const hasUnclaimed = drops && drops.some(d => !(d.is_claimed ?? d.isClaimed ?? d.claimed));
-                return hasUnclaimed || drops.length === 0;
-            }
+        if (channelGame && gameName && channelGame.trim().toLowerCase() === gameName.trim().toLowerCase()) {
+            const hasUnclaimed = drops && drops.some(d => !(d.is_claimed ?? d.isClaimed ?? d.claimed));
+            return hasUnclaimed || drops.length === 0;
         }
-
         return false;
     }
 
     if (currentDrop) {
         const curCampId = String(currentDrop.campaign_id || currentDrop.parent_campaign_id || '').trim();
-        if (campaignIdStr && curCampId && curCampId === campaignIdStr) {
-            return true;
-        }
+        if (campaignIdStr && curCampId && curCampId === campaignIdStr) return true;
 
         const curGameName = currentDrop.game_name || currentDrop.game || currentDrop.game_title;
         if (curGameName && gameName) {
@@ -441,173 +364,56 @@ function checkIfCampaignIsActive(campaignId, drops, gameName) {
 }
 
 function checkIfCampaignHasProgress(drops, isActivelyMining) {
-    if (isActivelyMining) return false;
-    
+    if (isActivelyMining || !Array.isArray(drops)) return false;
     return drops.some(d => {
-        const current = Math.round(
-            d.current_minutes ?? d.currentMinutes ?? d.current_time ?? d.progress ?? 0
-        );
+        const current = Math.round(d.current_minutes ?? d.currentMinutes ?? d.progress ?? 0);
         const isClaimed = d.is_claimed ?? d.isClaimed ?? d.claimed ?? false;
         return current > 0 && !isClaimed;
     });
 }
 
-/**
- * Checks whether multiple campaigns within a game group are actively being mined or queued.
- * @param {Object} gameGroup - Game group containing campaigns.
- * @returns {boolean} True if parallel mining or multiple active campaigns detected.
- */
-function checkParallelMiningState(gameGroup) {
-    if (!gameGroup || !Array.isArray(gameGroup.campaigns)) return false;
+function updateAllCampaignStatesInDOM(tree) {
+    tree.forEach(gameGroup => {
+        const campaigns = gameGroup.campaigns || [];
+        campaigns.forEach(campaign => {
+            const campId = campaign.campaign_id || campaign.id;
+            if (!campId) return;
 
-    const activeCampaigns = state?.activeCampaignsQueue || state?.active_campaigns_queue || [];
-    const activeDrops = state?.activeDropsQueue || state?.active_drops_queue || [];
-    const watchedChannel = getWatchedChannelContext();
+            const cardEl = document.querySelector(`.wanted-card[data-campaign-id="${CSS.escape(String(campId))}"]`);
+            if (!cardEl) return;
 
-    const activeCampaignsInGroup = gameGroup.campaigns.filter(c => {
-        const cId = c.campaign_id || c.id;
-        if (!cId) return false;
+            const campaignState = evaluateCampaignMiningState(campaign, gameGroup.game_name);
+            cardEl.className = campaignState.cardClasses;
 
-        const cleanCId = String(cId).trim();
+            // Refresh header status badge
+            const headerMain = cardEl.querySelector('.wanted-card-header-main');
+            if (headerMain) {
+                const oldTag = headerMain.querySelector('.status-tag');
+                if (oldTag) oldTag.remove();
 
-        // 1. Check against active campaigns queue
-        const isInActiveQueue = activeCampaigns.some(ac => {
-            const acId = ac.campaign_id || ac.id;
-            return acId && String(acId).trim() === cleanCId;
-        });
-
-        // 2. Check against active drops queue (s podpora pro c.items)
-        const dropsList = c.drops || c.items || [];
-        const hasActiveDrop = activeDrops.some(ad => {
-            const adCampId = ad.campaign_id || ad.parent_campaign_id;
-            if (adCampId && String(adCampId).trim() === cleanCId) return true;
-
-            const adDropId = ad.drop_id || ad.id;
-            return adDropId && dropsList.some(d => {
-                const dId = d.drop_id || d.id;
-                return dId && String(dId).trim() === String(adDropId).trim();
-            });
-        });
-
-        // 3. Check against current watched channel campaign (ID nebo název hry)
-        const channelCampId = watchedChannel?.campaign_id || watchedChannel?.campaignId;
-        let isWatchedChannelCampaign = channelCampId && String(channelCampId).trim() === cleanCId;
-
-        if (!isWatchedChannelCampaign && watchedChannel) {
-            const channelGame = watchedChannel.game_name || watchedChannel.game || watchedChannel.game_title;
-            if (channelGame && gameGroup.game_name) {
-                isWatchedChannelCampaign = channelGame.trim().toLowerCase() === gameGroup.game_name.trim().toLowerCase();
+                const newTag = renderCampaignStatusIndicatorElement(campaignState.isActivelyMining, campaignState.hasProgress);
+                if (newTag) headerMain.appendChild(newTag);
             }
+        });
+
+        if (gameGroup.game_name) {
+            updateGameGroupBadge(gameGroup.game_name);
         }
-
-        return isInActiveQueue || hasActiveDrop || isWatchedChannelCampaign;
-    });
-
-    return activeCampaignsInGroup.length > 1;
-}
-
-
-// ==================== 4. Calculations & Formatting Helpers ====================
-
-function calculateClaimedDropsCount(campaign, drops) {
-    const totalCount = campaign.total_drops_count || drops.length;
-    const completedOutsideArray = Math.max(0, totalCount - drops.length);
-
-    const finishedInArray = drops.filter(d => {
-        const isClaimed = d.is_claimed === true || d.is_claimed === 1 || d.is_claimed === 'true' || d.is_claimed === '1';
-        const canClaim = d.can_claim === true || d.can_claim === 1;
-        const current = Math.round(d.current_minutes || 0);
-        const required = d.required_minutes || 0;
-        return isClaimed || canClaim || (required > 0 && current >= required);
-    }).length;
-
-    return completedOutsideArray + finishedInArray;
-}
-
-function calculateMaxRemainingTime(uncompletedCampaigns) {
-    if (uncompletedCampaigns.length === 0) return 0;
-
-    const campaignInfoList = uncompletedCampaigns.map(c => {
-        const uncompletedDrops = (c.drops || []).filter(d => !d.is_claimed);
-        const maxRequired = uncompletedDrops.length > 0 
-            ? Math.max(...uncompletedDrops.map(d => Number(d.required_minutes) || 0)) 
-            : 0;
-        const currentMins = uncompletedDrops.length > 0 ? (Number(uncompletedDrops[0].current_minutes) || 0) : 0;
-
-        return Math.max(0, maxRequired - currentMins);
-    });
-
-    return Math.max(...campaignInfoList, 0);
-}
-
-function formatCampaignDates(startIso, endIso) {
-    if (!startIso || !endIso) {
-        return '';
-    }
-
-    try {
-        const start = new Date(startIso);
-        const end = new Date(endIso);
-        const formatOpts = { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' };
-        return `${start.toLocaleDateString(undefined, formatOpts)} – ${end.toLocaleDateString(undefined, formatOpts)}`;
-    } catch (e) {
-        console.error('[WantedQueue] Failed to format campaign dates:', e);
-        return '';
-    }
-}
-
-function getDropUniqueId(drop, index = 1) {
-    return String(drop.id || drop.drop_id || drop.uuid || `drop-${index}`).trim();
-}
-
-/**
- * Retrieves the currently active watched channel context from state or getter function.
- * Handles both channel objects and string channel IDs seamlessly.
- * @returns {Object|null}
- */
-function getWatchedChannelContext() {
-    if (typeof getWatchedChannelObject === 'function') {
-        const channel = getWatchedChannelObject();
-        if (channel) return channel;
-    }
-    const ch = state?.watchedChannel || state?.currentChannel || state?.watching_channel;
-    if (typeof ch === 'string' && state?.channels) {
-        const chList = Array.isArray(state.channels) ? state.channels : Object.values(state.channels);
-        const found = chList.find(c => String(c.id || c.username || c.name || c.displayName) === String(ch));
-        if (found) return found;
-    }
-    return typeof ch === 'object' ? ch : null;
-}
-
-// ==================== 5. Progress Synchronization ====================
-
-/**
- * Updates drop minutes inside state.campaigns so queue state stays consistent.
- */
-function updateStateDropMinutes(dropId, currentMins) {
-    if (!state?.campaigns || !dropId) return;
-    
-    const targetId = String(dropId).trim();
-
-    Object.values(state.campaigns).forEach(campaign => {
-        const drops = campaign.drops || campaign.drop_list || campaign.items || [];
-        drops.forEach(drop => {
-            const id = String(drop.id || drop.drop_id || drop.uuid || '').trim();
-            if (id === targetId) {
-                drop.current_minutes = currentMins;
-                drop.currentMinutes = currentMins;
-            }
-        });
     });
 }
 
+// ==================== 4. Direct Fast DOM Updates (Real-time Socket) ====================
+
 /**
- * Directly updates DOM nodes of a specific Wanted Drop row without destroying layout.
+ * Direct targeted update of a single drop DOM node without rebuilding layout.
  */
 function updateWantedDropDOMNode(dropIdentifier, currentMins, requiredMins, isClaimed = false, remainingSecs = null) {
     if (!dropIdentifier) return;
 
-    const targetStr = String(dropIdentifier).trim();
+    let targetStr = String(dropIdentifier).trim();
+    if ((targetStr.startsWith('"') && targetStr.endsWith('"')) || (targetStr.startsWith("'") && targetStr.endsWith("'"))) {
+        targetStr = targetStr.slice(1, -1).trim();
+    }
 
     const dropRow = document.querySelector(`[data-wanted-drop-id="${CSS.escape(targetStr)}"]`) 
                  || document.querySelector(`[data-drop-id="${CSS.escape(targetStr)}"]`)
@@ -620,39 +426,26 @@ function updateWantedDropDOMNode(dropIdentifier, currentMins, requiredMins, isCl
         effectiveMins = Math.max(0, requiredMins - Math.ceil(Number(remainingSecs) / 60));
     }
 
-    let timeTextEl = dropRow.querySelector('.wanted-drop-time, .drop-time-text, .status-tag.tag-progress, .progress-text, .drop-progress');
+    const pct = isClaimed ? 100 : (requiredMins > 0 ? Math.min(100, Math.max(0, Math.round((effectiveMins / requiredMins) * 100))) : 0);
 
-    if (!timeTextEl) {
-        const candidateDivs = dropRow.querySelectorAll('.drop-content-box div, div');
-        for (const div of candidateDivs) {
-            if (div.children.length === 0 && (div.textContent.includes('minutes') || div.textContent.includes('min') || /\d+\s*\/\s*\d+/.test(div.textContent))) {
-                timeTextEl = div;
-                break;
-            }
-        }
-    }
-
+    // Update Text Node Directly
+    const timeTextEl = dropRow.querySelector('.wanted-drop-text, .status-tag.tag-progress');
     if (timeTextEl && requiredMins > 0) {
-        const pct = isClaimed ? 100 : Math.min(100, Math.max(0, Math.round((effectiveMins / requiredMins) * 100)));
-        const iconSVG = typeof getStatusIconSVG === 'function' ? `${getStatusIconSVG('drop-active')} ` : '';
-        
-        const newHTML = `${iconSVG}${effectiveMins} / ${requiredMins} min`;
+        const newHTML = `${getStatusIconSVG('drop-active')} ${effectiveMins} / ${requiredMins} min`;
         if (timeTextEl.innerHTML !== newHTML) {
             timeTextEl.innerHTML = newHTML;
-            console.log(`[WantedQueue DOM Update] Updated drop "${targetStr}" -> ${effectiveMins}/${requiredMins} min (${pct}%)`);
         }
     }
 
-    const progressBarEl = dropRow.querySelector('.wanted-drop-bar, .progress-bar-fill, .wanted-drop-progress-bar, .progress-fill, .bar-fill');
-    if (progressBarEl && requiredMins > 0) {
-        const pct = isClaimed ? 100 : Math.min(100, Math.max(0, Math.round((effectiveMins / requiredMins) * 100)));
+    // Update Progress Bar Directly
+    const progressBarEl = dropRow.querySelector('.bar-fill, .wanted-drop-progress-bar');
+    if (progressBarEl) {
         progressBarEl.style.width = `${pct}%`;
     }
 }
 
 /**
- * Unified progress sync method: updates state in memory and applies in-place DOM updates.
- * @param {Object} payload - Progress payload from bot event or WebSocket.
+ * Unified progress sync: updates state memory & applies fast in-place DOM updates.
  */
 function syncWantedItemsProgress(payload) {
     if (!payload || typeof payload !== 'object') return;
@@ -672,7 +465,6 @@ function syncWantedItemsProgress(payload) {
         const campaigns = gameGroup.campaigns || gameGroup.campaign_list || [];
         let groupUpdated = false;
 
-        // Verify if game matches active channel context
         const isMatchingGameGroup = activeGameName && 
             gameGroup.game_name && 
             gameGroup.game_name.trim().toLowerCase() === activeGameName.trim().toLowerCase();
@@ -681,8 +473,7 @@ function syncWantedItemsProgress(payload) {
             const campId = String(campaign.id || campaign.campaign_id || '');
             const drops = campaign.drops || campaign.items || [];
             
-            const isTargetCampaign = targetCampId && campId === targetCampId;
-            const matchesCampaign = isTargetCampaign || 
+            const matchesCampaign = (targetCampId && campId === targetCampId) || 
                                     isMatchingGameGroup || 
                                     drops.some(d => targetDropName && String(d.name || '').trim() === targetDropName);
 
@@ -723,10 +514,6 @@ function syncWantedItemsProgress(payload) {
     });
 }
 
-/**
- * Cleans up finished or inactive campaigns from memory and triggers DOM refresh if needed.
- * Uses watched channel context to ensure offline/untracked games are updated.
- */
 function cleanupInactiveCampaigns() {
     if (!Array.isArray(state?.wantedItemsTree)) return;
 
@@ -751,68 +538,54 @@ function cleanupInactiveCampaigns() {
         }
     });
 
-    state.wantedItemsTree = state.wantedItemsTree.filter(gameGroup => {
-        return Array.isArray(gameGroup.campaigns) && gameGroup.campaigns.length > 0;
-    });
+    state.wantedItemsTree = state.wantedItemsTree.filter(gameGroup => Array.isArray(gameGroup.campaigns) && gameGroup.campaigns.length > 0);
 }
 
-/**
- * Normalizes incoming sync data (handles raw string drop IDs).
- */
-function normalizeSyncData(data) {
-    if (typeof data === 'string') {
-        const dropId = data;
+// ==================== 5. Helpers & Calculations ====================
 
-        let activeDrop = (state.activeDropsQueue || []).find(d => String(d.drop_id || d.id) === String(dropId)) ||
-                         ((state.currentDrop && String(state.currentDrop.drop_id || state.currentDrop.id) === String(dropId)) ? state.currentDrop : null);
+function calculateClaimedDropsCount(campaign, drops) {
+    const totalCount = campaign.total_drops_count || (drops ? drops.length : 0);
+    const completedOutsideArray = Math.max(0, totalCount - (drops ? drops.length : 0));
 
-        if (!activeDrop && state.wantedItemsTree) {
-            for (const group of state.wantedItemsTree) {
-                for (const camp of (group.campaigns || [])) {
-                    const found = (camp.drops || []).find(d => String(d.id || d.drop_id || d.uuid) === String(dropId));
-                    if (found) {
-                        activeDrop = found;
-                        break;
-                    }
-                }
-                if (activeDrop) break;
-            }
-        }
+    const finishedInArray = (drops || []).filter(d => {
+        const isClaimed = d.is_claimed === true || d.is_claimed === 1 || d.is_claimed === 'true';
+        const canClaim = d.can_claim === true || d.can_claim === 1;
+        const current = Math.round(d.current_minutes || 0);
+        const required = d.required_minutes || 0;
+        return isClaimed || canClaim || (required > 0 && current >= required);
+    }).length;
 
-        const currentMins = activeDrop && activeDrop.current_minutes !== undefined 
-            ? Number(activeDrop.current_minutes) 
-            : undefined;
-            
-        return activeDrop ? { ...activeDrop, current_minutes: currentMins } : { drop_id: dropId, current_minutes: currentMins };
-    }
-    return data;
+    return completedOutsideArray + finishedInArray;
 }
 
-/**
- * Updates game group status and syncs parallel mining state.
- */
-function processGameGroupSync(gameGroup) {
-    const uncompletedCampaigns = gameGroup.campaigns.filter(c => {
-        return (c.drops || []).some(d => !d.is_claimed);
+function calculateMaxRemainingTime(uncompletedCampaigns, isParallel = false) {
+    if (!Array.isArray(uncompletedCampaigns) || uncompletedCampaigns.length === 0) return 0;
+
+    const campaignInfoList = uncompletedCampaigns.map(c => {
+        const drops = c.drops || c.drop_list || c.items || [];
+        
+        const uncompletedDrops = drops.filter(d => {
+            const isClaimed = Boolean(d.is_claimed ?? d.isClaimed ?? d.claimed ?? false);
+            return !isClaimed;
+        });
+
+        if (uncompletedDrops.length === 0) return 0;
+
+        const maxRequired = Math.max(...uncompletedDrops.map(d => Number(d.required_minutes ?? d.requiredMinutes ?? d.required_time ?? 0)));
+        const currentMins = Number(uncompletedDrops[0].current_minutes ?? uncompletedDrops[0].currentMinutes ?? uncompletedDrops[0].progress ?? 0);
+
+        return Math.max(0, maxRequired - Math.round(currentMins));
     });
 
-    const maxRemainingMins = calculateMaxRemainingTime(uncompletedCampaigns);
-    const currentParallelState = checkParallelMiningState(gameGroup);
-
-    const prevParallelState = gameGroup.isParallelActive || false;
-    gameGroup.isParallelActive = currentParallelState;
-
-    if (gameGroup.total_remaining_minutes !== maxRemainingMins) {
-        gameGroup.total_remaining_minutes = maxRemainingMins;
-        updateGameGroupBadge(gameGroup.game_name, maxRemainingMins);
+    if (isParallel) {
+        // Při paralelním těžení platí nejdelší čas
+        return Math.max(...campaignInfoList, 0);
+    } else {
+        // Při sériovém těžení (jedna po druhé) se časy sečítají
+        return campaignInfoList.reduce((acc, curr) => acc + curr, 0);
     }
-
-    return prevParallelState !== currentParallelState;
 }
 
-/**
- * Updates the game group time badge element in the DOM only if HTML value changes.
- */
 function updateGameGroupBadge(gameName, totalRemainingMins = null) {
     if (!gameName) return;
 
@@ -821,10 +594,7 @@ function updateGameGroupBadge(gameName, totalRemainingMins = null) {
     if (totalRemainingMins === null || totalRemainingMins === undefined || isNaN(mins)) {
         const gameGroup = state?.wantedItemsTree?.find(g => (g.game_name || g.name) === gameName);
         const campaigns = gameGroup?.campaigns || gameGroup?.campaign_list || [];
-        
-        mins = typeof calculateMaxRemainingTime === 'function' 
-            ? calculateMaxRemainingTime(campaigns) 
-            : 0;
+        mins = calculateMaxRemainingTime(campaigns);
     }
 
     mins = Math.max(0, isNaN(mins) ? 0 : mins);
@@ -842,12 +612,38 @@ function updateGameGroupBadge(gameName, totalRemainingMins = null) {
     }
 }
 
+function formatCampaignDates(startIso, endIso) {
+    if (!startIso || !endIso) return '';
+    try {
+        const start = new Date(startIso);
+        const end = new Date(endIso);
+        const formatOpts = { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' };
+        return `${start.toLocaleDateString(undefined, formatOpts)} – ${end.toLocaleDateString(undefined, formatOpts)}`;
+    } catch (e) {
+        return '';
+    }
+}
+
+function getDropUniqueId(drop, index = 1) {
+    return String(drop.id || drop.drop_id || drop.uuid || `drop-${index}`).trim();
+}
+
+function getWatchedChannelContext() {
+    if (typeof getWatchedChannelObject === 'function') {
+        const channel = getWatchedChannelObject();
+        if (channel) return channel;
+    }
+    const ch = state?.watchedChannel || state?.currentChannel || state?.watching_channel;
+    if (typeof ch === 'string' && state?.channels) {
+        const chList = Array.isArray(state.channels) ? state.channels : Object.values(state.channels);
+        const found = chList.find(c => String(c.id || c.username || c.name || c.displayName) === String(ch));
+        if (found) return found;
+    }
+    return typeof ch === 'object' ? ch : null;
+}
 
 // ==================== 6. Icons & Assets ====================
 
-/**
- * Returns consistent SVG assets mapped by status class.
- */
 function getStatusIconSVG(statusClass) {
     const svgCheck = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`;
     const svgBox = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`;

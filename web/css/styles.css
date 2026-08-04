@@ -30,10 +30,10 @@ html {
 }
 
 body.dark-mode {
-    --bg-primary: #181520;
-    --bg-secondary: #252030;
-    --bg-tertiary: #1d1827;
-    --bg-panel: #252030;
+    --bg-primary: #15121b;   /* Nejhlubší pozadí */
+    --bg-tertiary: #1c1824;  /* Pro vnitřní elementy / odměny */
+    --bg-secondary: #252030; /* Pro hlavní boxy (.drop-content-box) */
+    --bg-panel: #2e283c;     /* Pro vrchní panely / hlavičky */
     --text-primary: #e0e0e0;
     --text-secondary: #a0a0a0;
     --border-color: #9146ff;
@@ -1032,18 +1032,17 @@ header h1 {
 }
 
 .drop-content-box {
-    border: 1px solid #444;
-    background: #2a2a2a;
+    border: 1px solid var(--bg-tertiary);
+    background: var(--bg-tertiary);
     border-radius: 6px;
     padding: 10px;
     margin-top: 5px;
-    border-left: 4px solid #444;
+    border-left: 4px solid var(--border-color);
     transition: border-color 0.2s, background-color 0.2s;
 }
 
 .drop-content-box:hover {
-    border-color: #666;
-    background-color: #333;
+    border-color: var(--accent-color);
     cursor: pointer;
 }
 
@@ -1051,34 +1050,78 @@ header h1 {
 .drop-item.drop-claimed, .drop-content-box.drop-claimed { 
     border-left-color: var(--success-color); 
     background-color: rgba(46, 204, 113, 0.05); 
-    color: var(--success-color);
 }
 .drop-item.drop-ready, .drop-content-box.drop-ready { 
     border-left-color: var(--warning-color); 
     background-color: rgba(230, 126, 34, 0.05); 
-    color: var(--warning-color);
 }
 .drop-item.drop-active, .drop-content-box.drop-active { 
     border-left-color: var(--active-color); 
     background-color: rgba(241, 196, 15, 0.05); 
-    color: var(--active-color);
 }
 .drop-item.drop-expired, .drop-content-box.drop-expired { 
     border-left-color: var(--error-color); 
     background-color: rgba(231, 76, 60, 0.05); 
+}
+
+/* Barvení pro ikonky stavu */
+.drop-item.drop-claimed .benefit-status-icon,
+.drop-content-box.drop-claimed .benefit-status-icon {
+    color: var(--success-color);
+}
+
+.drop-item.drop-ready .benefit-status-icon,
+.drop-content-box.drop-ready .benefit-status-icon {
+    color: var(--warning-color);
+}
+
+.drop-item.drop-active .benefit-status-icon,
+.drop-content-box.drop-active .benefit-status-icon {
+    color: var(--active-color);
+}
+
+.drop-item.drop-expired .benefit-status-icon,
+.drop-content-box.drop-expired .benefit-status-icon {
     color: var(--error-color);
 }
 
+/* Hlavička uvnitř tmavého boxu */
 .drop-item-header {
     display: flex;
     align-items: center;
     gap: 10px;
     margin-bottom: 8px;
+    background-color: transparent;
+    padding: 0;
 }
 
 .drop-item-info {
     flex: 1;
     min-width: 0;
+}
+
+/* Samotná položka odměny uvnitř */
+.benefit-item {
+    background-color: var(--bg-secondary);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* 2. stupeň vnoření: Samotná odměna (nejhlubší vrstva pomocí --bg-primary) */
+.benefit-item {
+    background-color: var(--bg-primary);
+    border: 1px solid var(--bg-tertiary);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .benefits-list {
@@ -1171,7 +1214,7 @@ header h1 {
     width: 100%;
     max-width: none;
     background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    border: 1px solid rgba(145, 70, 255, 0.3);
     border-radius: 8px;
     margin-bottom: 0;
     break-inside: avoid;
@@ -1179,10 +1222,11 @@ header h1 {
     position: relative;
 }
 
+/* === HEADERY HER (Hlavní skupina) === */
 .wanted-game-header {
     padding: 10px 15px;
-    background: var(--bg-panel);
-    border-bottom: 1px solid var(--border-color);
+    background: rgba(145, 70, 255, 0.1);
+    border-bottom: 1px solid rgba(145, 70, 255, 0.25);
     font-weight: 700;
     font-size: 0.9375rem;
     display: flex;
@@ -1191,8 +1235,8 @@ header h1 {
 }
 
 .wanted-game-index {
-    background: var(--accent-color);
-    color: white;
+    background: var(--accent-color, #9146ff);
+    color: #ffffff;
     font-size: 0.6875rem;
     font-weight: 700;
     padding: 2px 6px;
@@ -1206,7 +1250,7 @@ header h1 {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--text-primary);
+    color: var(--text-primary, #ffffff);
 }
 
 .wanted-game-icon {
@@ -1214,7 +1258,7 @@ header h1 {
     height: 40px;
     object-fit: cover;
     border-radius: 3px;
-    background: var(--bg-tertiary, #2a2a3c); 
+    background: rgba(255, 255, 255, 0.05); 
     position: relative;
 }
 
@@ -1224,14 +1268,14 @@ header h1 {
 
 .wanted-game-time-badge {
     font-size: 0.75rem;
-    color: var(--accent-color);
+    color: var(--accent-color, #9146ff);
     font-weight: 600;
     margin-left: auto;
 }
 
 @keyframes pulse-placeholder {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.8; }
 }
 
 .wanted-campaign-list {
@@ -1241,21 +1285,98 @@ header h1 {
     gap: 10px;
 }
 
+/* === BASE KARTA KAMPANĚ === */
 .wanted-card {
     background: var(--bg-panel);
-    border: 1px solid var(--border-color);
+    border: 1px solid rgba(145, 70, 255, 0.25);
     border-radius: 6px;
     overflow: hidden;
     position: relative;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    transition: all 0.2s ease;
 }
 
+/* Base header (výchozí stav) */
 .wanted-card-header {
     padding: 8px 12px;
-    background: var(--bg-tertiary, #262626);
-    border-bottom: 1px solid var(--border-color);
+    background: rgba(145, 70, 255, 0.08);
+    border-bottom: 1px solid rgba(145, 70, 255, 0.2);
+    transition: all 0.2s ease;
 }
 
+/* === ANIMACE PRO MINING === */
+@keyframes mining-glow {
+    0%, 100% {
+        box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
+        border-color: rgba(16, 185, 129, 0.6);
+    }
+    50% {
+        box-shadow: 0 0 18px rgba(16, 185, 129, 0.7);
+        border-color: rgba(16, 185, 129, 0.95);
+    }
+}
+
+/* === STAVY KARET & JEJICH HEADERŮ === */
+
+/* 1. MINING (Aktivní těžení - Zelená s pulzováním) */
+.wanted-card.is-mining {
+    border: 1px solid rgba(16, 185, 129, 0.6) !important;
+    animation: mining-glow 2s ease-in-out infinite !important;
+}
+
+.wanted-card.is-mining .wanted-card-header {
+    background: rgba(16, 185, 129, 0.15) !important;
+    border-bottom: 1px solid rgba(16, 185, 129, 0.3) !important;
+}
+
+.wanted-card.is-mining .wanted-card-campaign-link,
+.wanted-card.is-mining .wanted-card-header-main a {
+    color: #10b981 !important;
+}
+
+/* 2. IN PROGRESS (Rozpracováno - Žlutá/Oranžová) */
+.wanted-card.in-progress {
+    border: 1px solid rgba(245, 158, 11, 0.6) !important;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
+}
+
+.wanted-card.in-progress .wanted-card-header {
+    background: rgba(245, 158, 11, 0.15) !important;
+    border-bottom: 1px solid rgba(245, 158, 11, 0.3) !important;
+}
+
+.wanted-card.in-progress .wanted-card-campaign-link,
+.wanted-card.in-progress .wanted-card-header-main a {
+    color: #f59e0b !important;
+}
+
+/* 3. DROP READY (Pripraveno k vyzvednuti - Modrá/Tyrkysová) */
+.wanted-card.is-ready {
+    border: 1px solid rgba(59, 130, 246, 0.6) !important;
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+}
+
+.wanted-card.is-ready .wanted-card-header {
+    background: rgba(59, 130, 246, 0.15) !important;
+    border-bottom: 1px solid rgba(59, 130, 246, 0.3) !important;
+}
+
+.wanted-card.is-ready .wanted-card-campaign-link,
+.wanted-card.is-ready .wanted-card-header-main a {
+    color: #3b82f6 !important;
+}
+
+/* 4. CLAIMED (Dokončeno / Vyzvednuto - Vyšedivělé) */
+.wanted-card.is-claimed {
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    opacity: 0.6;
+}
+
+.wanted-card.is-claimed .wanted-card-header {
+    background: rgba(0, 0, 0, 0.2) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* === OBSAH KARTY === */
 .wanted-card-header-main {
     display: flex;
     align-items: center;
@@ -1267,13 +1388,14 @@ header h1 {
 .wanted-card-campaign-link {
     font-size: 0.75rem;
     font-weight: 600;
-    color: var(--accent-color);
+    color: var(--accent-color, #9146ff);
     text-decoration: none;
     display: block;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 180px;
+    transition: color 0.2s ease;
 }
 
 .wanted-card-campaign-link:hover {
@@ -1282,13 +1404,13 @@ header h1 {
 
 .wanted-campaign-badge {
     font-size: 0.75rem;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #adadb8);
     font-weight: 500;
 }
 
 .wanted-campaign-dates {
     font-size: 0.6875rem;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #adadb8);
     margin-top: 4px;
 }
 
@@ -1301,10 +1423,9 @@ header h1 {
     margin-bottom: 0; 
     padding: 8px 10px; 
     background: transparent; 
-    /* Dělicí linka ve fialové akcentní barvě (s jemnou průhledností, aby neřvala) */
-    border-bottom: 1px solid rgba(145, 70, 255, 0.3);
+    border-bottom: 1px solid rgba(145, 70, 255, 0.2);
     display: flex;
-    flex-wrap: wrap; /* Změněno z nowrap na wrap pro správný přechod progress baru */
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px 12px;
     justify-content: space-between;
@@ -1315,7 +1436,7 @@ header h1 {
 }
 
 .wanted-drop-item.is-claimed {
-    opacity: 0.6;
+    opacity: 0.5;
 }
 
 .wanted-drop-info {
@@ -1328,12 +1449,12 @@ header h1 {
 
 .wanted-drop-name {
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #adadb8);
 }
 
 .wanted-benefit-pill {
-    background: rgba(145, 70, 255, 0.15);
-    color: var(--accent-color);
+    background: rgba(145, 70, 255, 0.2);
+    color: var(--accent-color, #9146ff);
     padding: 1px 5px;
     border-radius: 8px;
     font-size: 0.625rem;

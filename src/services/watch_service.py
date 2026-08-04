@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-
 from contextlib import suppress
 from time import time
 from typing import TYPE_CHECKING, NoReturn
@@ -101,6 +99,8 @@ class WatchService:
 
         matching_campaigns = []
         for campaign in self._twitch.inventory:
+            if not campaign.has_watchable_drops:
+                continue
             camp_game_name = campaign.game.name if hasattr(campaign.game, 'name') else str(campaign.game)
             if camp_game_name.lower() == channel_game_name.lower():
                 can = campaign.can_earn(channel)
@@ -110,7 +110,6 @@ class WatchService:
         if not matching_campaigns:
             if not self._twitch.inventory:
                 logger.debug("Inventory is currently empty during sync, waiting for campaigns update...")
-                time.sleep(1)
 
             logger.debug(
                 "Skipping channel %s for game '%s': No earnable active campaigns.",

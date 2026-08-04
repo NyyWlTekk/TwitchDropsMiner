@@ -1,10 +1,3 @@
-"""
-Inventory service for managing campaigns, drops, and inventory fetching.
-
-This service handles fetching campaign data from Twitch's GraphQL API,
-managing the inventory state, and determining active campaigns.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -15,10 +8,10 @@ from typing import TYPE_CHECKING, Any
 from dateutil.parser import isoparse
 
 from src.api import GQLClient
-from src.config import GQL_OPERATIONS
+from src.config import GQL_OPERATIONS, State
 from src.exceptions import ExitRequest
 from src.i18n import _
-from src.models import DropsCampaign
+from src.models.campaign import DropsCampaign
 from src.utils import chunk
 
 
@@ -57,10 +50,13 @@ class InventoryService:
         campaign_ids: dict[str, JsonType] = dict(campaigns_chunk)
         auth_state = await self._twitch.get_auth()
 
+        # Use username/login if available, otherwise fallback to user_id
+        user_identifier = getattr(auth_state, "username", str(auth_state.user_id))
+
         response_list_raw = await self._twitch.gql_request(
             [
                 GQL_OPERATIONS["CampaignDetails"].with_variables(
-                    {"channelLogin": str(auth_state.user_id), "dropID": cid}
+                    {"channelLogin": str(user_identifier), "dropID": cid}
                 )
                 for cid in campaign_ids
             ]
@@ -72,9 +68,16 @@ class InventoryService:
 
         fetched_data: dict[str, JsonType] = {}
         for response_json in response_list:
-            # Safe extraction in case Twitch returns null for user/dropCampaign
-            user_data = response_json.get("data", {}).get("user", {})
-            if user_data and (campaign_data := user_data.get("dropCampaign")):
+            if not isinstance(response_json, dict):
+                continue
+
+            data = response_json.get("data") or {}
+            user_data = data.get("user") or {}
+
+            # Fallback handling: data can be directly under dropCampaign or under user.dropCampaign
+            campaign_data = user_data.get("dropCampaign") or data.get("dropCampaign")
+
+            if campaign_data and "id" in campaign_data:
                 fetched_data[campaign_data["id"]] = campaign_data
 
         return GQLClient.merge_data(campaign_ids, fetched_data)
@@ -94,29 +97,39 @@ class InventoryService:
         status_update = self._twitch.gui.status.update
         status_update(_.t["gui"]["status"]["fetching_inventory"])
 
-        # fetch in-progress campaigns (inventory)
+        # Fetch in-progress campaigns (inventory)
         response = await self._twitch.gql_request(GQL_OPERATIONS["Inventory"])
-        inventory: JsonType = response["data"]["currentUser"]["inventory"]
-        ongoing_campaigns: list[JsonType] = inventory["dropCampaignsInProgress"] or []
+        data = response.get("data", response) if isinstance(response, dict) else {}
+        user_data = data.get("currentUser", data) if isinstance(data, dict) else {}
+        inventory: dict[str, Any] = user_data.get("inventory", {}) if isinstance(user_data, dict) else {}
 
-        # this contains claimed benefit edge IDs, not drop IDs
+        ongoing_campaigns: list[JsonType] = inventory.get("dropCampaignsInProgress") or []
+
+        # This contains claimed benefit edge IDs, not drop IDs
         claimed_benefits: dict[str, datetime] = {
-            b["id"]: isoparse(b["lastAwardedAt"]) for b in inventory["gameEventDrops"]
+            b["id"]: isoparse(b["lastAwardedAt"])
+            for b in (inventory.get("gameEventDrops") or [])
+            if isinstance(b, dict) and "id" in b and "lastAwardedAt" in b
         }
 
-        inventory_data: dict[str, JsonType] = {c["id"]: c for c in ongoing_campaigns}
+        inventory_data: dict[str, JsonType] = {
+            c["id"]: c for c in ongoing_campaigns if isinstance(c, dict) and "id" in c
+        }
 
-        # fetch general available campaigns data (campaigns)
-        response = await self._twitch.gql_request(GQL_OPERATIONS["Campaigns"])
-        available_list: list[JsonType] = response["data"]["currentUser"]["dropCampaigns"] or []
+        # Fetch general available campaigns data (campaigns)
+        response_campaigns = await self._twitch.gql_request(GQL_OPERATIONS["Campaigns"])
+        c_data = response_campaigns.get("data", response_campaigns) if isinstance(response_campaigns, dict) else {}
+        c_user_data = c_data.get("currentUser", c_data) if isinstance(c_data, dict) else {}
+        available_list: list[JsonType] = c_user_data.get("dropCampaigns") or []
+
         applicable_statuses = ("ACTIVE", "UPCOMING")
         available_campaigns: dict[str, JsonType] = {
             c["id"]: c
             for c in available_list
-            if c["status"] in applicable_statuses  # that are currently not expired
+            if isinstance(c, dict) and c.get("status") in applicable_statuses  # currently active or upcoming
         }
 
-        # fetch detailed data for each campaign, in chunks
+        # Fetch detailed data for each campaign, in chunks
         status_update(_.t["gui"]["status"]["fetching_campaigns"])
         fetch_campaigns_tasks: list[asyncio.Task[Any]] = [
             asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
@@ -127,7 +140,7 @@ class InventoryService:
         try:
             for coro in asyncio.as_completed(fetch_campaigns_tasks):
                 chunk_campaigns_data = await coro
-                # merge the inventory and campaigns datas together
+                # Merge the inventory and campaigns data together
                 inventory_data = GQLClient.merge_data(inventory_data, chunk_campaigns_data)
         except Exception:
             # asyncio.as_completed doesn't cancel tasks on errors
@@ -135,12 +148,21 @@ class InventoryService:
                 task.cancel()
             raise
 
-        # filter out invalid campaigns
+        # Filter out invalid campaigns
         for campaign_id in list(inventory_data.keys()):
-            if inventory_data[campaign_id]["game"] is None:
+            if not isinstance(inventory_data[campaign_id], dict):
                 del inventory_data[campaign_id]
+                continue
+            
+            # Pokud kampaň nemá objekt 'game' (např. Special Events / EWC), vytvoříme dummy strukturu, 
+            # aby ji kód nevymazal a spadla pod obecný název eventu.
+            if inventory_data[campaign_id].get("game") is None:
+                inventory_data[campaign_id]["game"] = {
+                    "id": "special_event",
+                    "name": inventory_data[campaign_id].get("name", "Special Events")
+                }
 
-        # use the merged data to create campaign objects
+        # Use the merged data to create campaign objects
         campaigns: list[DropsCampaign] = [
             DropsCampaign(self._twitch, campaign_data, claimed_benefits)
             for campaign_data in inventory_data.values()
@@ -156,7 +178,7 @@ class InventoryService:
         switch_triggers: set[datetime] = set()
         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
 
-        # add the campaigns to the internal inventory
+        # Add the campaigns to the internal inventory
         for campaign in campaigns:
             # Force sync all drops in this campaign to API state upon inventory refresh
             for drop in campaign.drops:
@@ -168,7 +190,7 @@ class InventoryService:
             self._twitch.inventory.append(campaign)
             self._twitch._campaigns[campaign.id] = campaign
 
-        # concurrently add the campaigns into the GUI
+        # Concurrently add the campaigns into the GUI
         # NOTE: this fetches pictures from the CDN, so might be slow without a cache
         status_update(
             _.t["gui"]["status"]["adding_campaigns"].format(counter=f"(0/{len(campaigns)})")
@@ -186,9 +208,6 @@ class InventoryService:
                         counter=f"({i}/{len(campaigns)})"
                     )
                 )
-                # this is needed here explicitly, because cache reads from disk don't raise this
-                from src.config import State
-
                 if self._twitch._state == State.EXIT:
                     raise ExitRequest()
         except Exception:
@@ -199,7 +218,7 @@ class InventoryService:
 
         self._twitch._mnt_triggers.extend(sorted(switch_triggers))
 
-        # trim out all triggers that we're already past
+        # Trim out all triggers that we're already past
         now = datetime.now(timezone.utc)
         while self._twitch._mnt_triggers and self._twitch._mnt_triggers[0] <= now:
             self._twitch._mnt_triggers.popleft()

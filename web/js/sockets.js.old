@@ -504,11 +504,13 @@ function handleManualModeUpdate(data) {
         cleanupInactiveCampaigns();
     }
 
-    // Následný rebuild UI – voláme už sjednocený render ze state
-    if (typeof renderWantedItems === 'function' && typeof state !== 'undefined') {
-        renderWantedItems(state.wantedItemsTree || state.wanted_items);
+    // Následný rebuild UI už vykreslí kompletně čistý stav
+    if (typeof renderWantedQueue === 'function') {
+        renderWantedQueue();
     }
-    
+    if (typeof renderWantedItems === 'function') {
+        renderWantedItems();
+    }
     if (typeof refreshUI === 'function') {
         refreshUI();
     }

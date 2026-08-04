@@ -96,7 +96,6 @@
 
 					<div id="progress-container">
 						<div id="no-drop-message">No active drop</div>
-						
 						<div id="drop-info" style="display: none;">
 							<div id="manual-mode-controls" class="manual-mode-controls hidden">
 								<div class="manual-mode-info">
@@ -105,14 +104,8 @@
 								<button id="exit-manual-btn" class="exit-manual-btn">Return to Auto Mode</button>
 							</div>
 							
-							<!-- Flex kontejner pro Obrázek + Názvy dropu a kampaně -->
-							<div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-								<img id="drop-image" src="" alt="Drop Image" style="width: 48px; height: 48px; object-fit: contain; border-radius: 4px; display: none;" />
-								<div>
-									<div class="drop-name" id="drop-name" style="font-size: 1.05em; font-weight: bold; margin-bottom: 2px;"></div>
-									<div class="drop-game" id="drop-game" style="font-size: 0.9em; opacity: 0.8;"></div>
-								</div>
-							</div>
+							<div class="drop-name" id="drop-name" style="font-size: 1.05em; font-weight: bold; margin-bottom: 2px;"></div>
+							<div class="drop-game" id="drop-game" style="margin-bottom: 12px; font-size: 0.9em; opacity: 0.8;"></div>
 
 							<!-- 2. BAR: Campaign Progress -->
 							<div class="campaign-progress-section" style="margin-bottom: 12px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">

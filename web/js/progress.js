@@ -458,7 +458,6 @@ function clearWantedActiveState() {
  * Clears the current drop progress UI and resets related state.
  */
 function clearDropProgress() {
-
     // Reset core state
     state.currentDrop = null;
     state.current_drop = null;
@@ -503,8 +502,10 @@ function clearDropProgress() {
 
     clearWantedActiveState();
 
-    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
-        renderWantedItems(state.wantedItemsTree);
+    // ✅ OPRAVA: Použití sjednoceného stromu (wantedGamesTree s fallbackem na wantedItemsTree)
+    const activeTree = state.wantedGamesTree || state.wantedItemsTree || window.wantedGamesTree;
+    if (typeof renderWantedItems === 'function' && Array.isArray(activeTree)) {
+        renderWantedItems(activeTree);
     }
 }
 
@@ -583,8 +584,9 @@ function clearDropProgress() {
 
     clearWantedActiveState();
 
-    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
-        renderWantedItems(state.wantedItemsTree);
+    const activeTree = state.wantedGamesTree || state.wantedItemsTree || window.wantedGamesTree;
+    if (typeof renderWantedItems === 'function' && Array.isArray(activeTree)) {
+        renderWantedItems(activeTree);
     }
 }
 
@@ -1165,6 +1167,7 @@ function updateGameHeaderTimeBadge(groupTarget, remainingMinutes) {
         badge.textContent = formattedText;
     }
 }
+
 // ==========================================
 // 5. CORE LOGIC & ROTATION
 // ==========================================

@@ -10,6 +10,47 @@ let viewMode = 'tree'; // 'tree' nebo 'raw'
 let searchQuery = '';
 const logThrottleMap = new Map();
 
+// ============================================================================
+// 8. ADMIN & DIAGNOSTICS HELPERS --- HANDLERS ////////////////
+// ============================================================================
+
+function syncAdminState() {
+    if (!window.Administration || isAdminSyncScheduled) return;
+
+    isAdminSyncScheduled = true;
+    requestAnimationFrame(() => {
+        isAdminSyncScheduled = false;
+        if (!window.Administration) return;
+
+        let qCount = 0;
+        if (typeof state !== 'undefined') {
+            if (Array.isArray(state.wantedItemsTree)) {
+                qCount = state.wantedItemsTree.length;
+            } else if (Array.isArray(state.wanted_items)) {
+                qCount = state.wanted_items.length;
+            } else if (state.campaigns) {
+                for (const _ in state.campaigns) qCount++;
+            }
+        }
+
+        if (typeof window.Administration.updateConnectionStatus === 'function') {
+            window.Administration.updateConnectionStatus({
+                connected: Boolean(state?.connected),
+                queueCount: qCount,
+                rotationIndex: state?.rotation_index || state?.rotationIndex || 0
+            });
+        }
+
+        if (typeof window.Administration.setState === 'function') {
+            window.Administration.setState(state);
+        }
+    });
+}
+
+///////////////////////////////////////
+//// MAIN FUNCTIONS /////////////////////////
+/////////////////////////////////////
+
 function cacheElements() {
     elements = {
         socketStatus: document.getElementById('debug-socket-status'),
@@ -280,7 +321,6 @@ function logOnce(key, message, isWarn = false) {
 // Odkazy pro skripty, které volají volání skrze window.Administration
 window.Administration = {
     init: initAdmin,
-    updateDiagnostics: updateDiagnostics,
     setState: setState,
     renderState: renderState,
     addConsoleLine: addConsoleLine,

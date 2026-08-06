@@ -2,6 +2,10 @@
 //////////// HEADER FUNCTIONS ////////////////////
 //////////////////////////////////////////////////
 
+/////////////////////////////////////
+///////// CONNECTION STATUS ////////////
+///////////////////////////////////////////
+
 /**
  * Centrální Master Updater pro stav připojení a diagnostiku UI.
  * @param {boolean|object} input - Přijímá bud true/false nebo diagnostický objekt info
@@ -27,9 +31,12 @@ function updateConnectionStatus(input) {
         state.connected = isConnected;
     }
 
+	////////////////////////////////////////////////////////////////
     // -------------------------------------------------------------
-    // A. HORNÍ INDIKÁTOR V HLAVIČCE (#connection-indicator)
+    // A. HORNÍ INDIKÁTOR V HLAVIČCE (#connection-indicator)/////////////
     // -------------------------------------------------------------
+    ////////////////////////////////////////////////////////////////
+    
     const connIndicator = document.getElementById('connection-indicator');
     if (connIndicator) {
         // Načteme překlady z window nebo state
@@ -43,9 +50,12 @@ function updateConnectionStatus(input) {
         connIndicator.classList.toggle('disconnected', !isConnected);
     }
 
+	////////////////////////////////////////////////////////////////
     // -------------------------------------------------------------
     // B. DIAGNOSTIKA & ADMIN PANEL (socketStatus, queue, rotation)
     // -------------------------------------------------------------
+    ////////////////////////////////////////////////////////////////
+    
     const socketStatusEl = (typeof elements !== 'undefined' && elements?.socketStatus) 
         || document.getElementById('socket-status');
 
@@ -70,6 +80,38 @@ function updateConnectionStatus(input) {
     }
 }
 
-// Zpřístupníme funkci globálně pro všechny soubory (sockets.js, administration.js atd.)
+// GLOBAL ACCESS
 window.updateConnectionStatus = updateConnectionStatus;
-window.updateDiagnostics = updateConnectionStatus; // Zpětná kompatibilita
+
+///////////////////////////////////////////
+//////////////// OVERALL STATUS BAR /////////////////
+////////////////////////////////////////////
+
+function handleStatusUpdate(data) {
+    if (!data || !data.status) return;
+
+    const statusEl = document.getElementById('status-text');
+    if (statusEl) {
+        statusEl.textContent = data.status;
+    }
+
+    const lower = data.status.toLowerCase();
+    if (lower.includes('idle') || lower.includes('offline')) {
+        safeClearDrop();
+    }
+}
+
+/**
+ * Přímý zápis textu statusu do DOM elementu #status-text.
+ */
+function updateStatus(status) {
+    if (!status) return;
+    const statusEl = document.getElementById('status-text');
+    if (statusEl && statusEl.textContent !== status) {
+        statusEl.textContent = status;
+    }
+
+    if (typeof syncAdminState === 'function') {
+        syncAdminState();
+    }
+}

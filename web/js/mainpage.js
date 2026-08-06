@@ -28,21 +28,6 @@ function scheduleStatusUpdate(statusText) {
     }
 }
 
-/**
- * Přímý zápis textu statusu do DOM elementu #status-text.
- */
-function updateStatus(status) {
-    if (!status) return;
-    const statusEl = document.getElementById('status-text');
-    if (statusEl && statusEl.textContent !== status) {
-        statusEl.textContent = status;
-    }
-
-    if (typeof syncAdminState === 'function') {
-        syncAdminState();
-    }
-}
-
 // ============================================================================
 // 3. CHANNELS INITIALIZATION
 // ============================================================================
@@ -80,6 +65,34 @@ function handleInitialChannels(channelsData) {
 ////////////////////////////////////////////////
 ///// OVERALL QUEUE DATA - MULTIFUINCTIONAL ///////
 /////<<<>>>>>/////////<<<<//////////////////////
+
+/**
+ * Resolves the currently watched channel object from state or getter helper.
+ */
+ // active state heler
+function getWatchedChannelContext() {
+    if (typeof getWatchedChannelObject === 'function') {
+        const channel = getWatchedChannelObject();
+        if (channel) return channel;
+    }
+    
+    const ch = state?.watchedChannel || state?.currentChannel || state?.watching_channel;
+    
+    if (typeof ch === 'string' && state?.channels) {
+        const chList = Array.isArray(state.channels) ? state.channels : Object.values(state.channels);
+        const cleanCh = ch.trim().toLowerCase();
+        
+        const found = chList.find(c => {
+            if (!c) return false;
+            const id = String(c.id || c.username || c.name || c.displayName || '').trim().toLowerCase();
+            return id === cleanCh;
+        });
+        
+        if (found) return found;
+    }
+    
+    return ch && typeof ch === 'object' ? ch : null;
+}
 
 /**
  * Extracts and normalizes wanted items data from raw campaigns state.
@@ -237,13 +250,12 @@ function extractWantedItemsData(rawData) {
         });
 }
 
-// ----------------------------------------------------------------------------
-// 2. EVENT HANDLERS (SUB-FUNKCE)
-// ----------------------------------------------------------------------------
 
-// ============================================================================
-// HLAVNÍ ROZCESTNÍK
-// ============================================================================
+////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// 2. EVENT HANDLERS (SUB-FUNKCE)/////////////////////////////////////////
+// ----------------------------------------------------------------------------
+///////////////////////////////////////////////////////////////////////////
 
 /**
  * Hlavní rozcestník pro veškerá příchozí data.
@@ -318,8 +330,6 @@ function handleCampaignUpdate(rawData) {
     // Správný alias na addCampaign
     if (typeof addCampaign === 'function') {
         addCampaign(rawData);
-    } else if (typeof syncCampaignOverview === 'function') {
-        syncCampaignOverview(rawData);
     }
 
     // 🔥 AUTOMATICKÝ PŘEPOČET CELKOVÉHO PROGRESS BARU PŘI ZMĚNĚ KAMPAŇOVÝCH DAT
@@ -332,8 +342,16 @@ function handleCampaignUpdate(rawData) {
 //////////////// WANTED DATA //////////
 /////////////////////////////////
 
+/**
+ * Zpracování aktualizace Wanted Items stromu ze soketu.
+ * Místo určení: wanted.js
+ */
 function handleWantedItemsUpdate(rawData) {
-    const cleanTree = extractWantedItemsData(rawData);
+    if (!rawData) return;
+
+    const cleanTree = typeof extractWantedItemsData === 'function' 
+        ? extractWantedItemsData(rawData) 
+        : rawData;
 
     if (typeof state !== 'undefined') {
         state.wantedItemsTree = cleanTree;
@@ -347,19 +365,22 @@ function handleWantedItemsUpdate(rawData) {
     // 2. 🎯 NAJÍT AKTIVNĚ TĚŽENÝ DROP ZE STROMU DATA
     let activeDrop = null;
 
-    // Projdeme vyčištěný strom a najdeme kampaň, která se těží
-    for (const game of cleanTree) {
-        for (const campaign of game.campaigns) {
-            if (campaign.is_mining) {
-                // Najdeme v ní první nevyzvednutý (unclaimed) drop
-                const currentMiningDrop = campaign.drops.find(d => !d.is_claimed) || campaign.drops[0];
-                if (currentMiningDrop) {
-                    activeDrop = currentMiningDrop;
-                    break;
+    if (Array.isArray(cleanTree)) {
+        for (const game of cleanTree) {
+            if (!game || !Array.isArray(game.campaigns)) continue;
+
+            for (const campaign of game.campaigns) {
+                if (campaign.is_mining && Array.isArray(campaign.drops)) {
+                    // Najdeme v ní první nevyzvednutý (unclaimed) drop
+                    const currentMiningDrop = campaign.drops.find(d => !d.is_claimed) || campaign.drops[0];
+                    if (currentMiningDrop) {
+                        activeDrop = currentMiningDrop;
+                        break;
+                    }
                 }
             }
+            if (activeDrop) break;
         }
-        if (activeDrop) break;
     }
 
     // 3. ZÁLOŽKA: Pokud se nenašel přes is_mining, zkusíme globální state
@@ -371,24 +392,27 @@ function handleWantedItemsUpdate(rawData) {
     if (activeDrop && typeof updateSingleDropDisplay === 'function') {
         // Zavoláme existující funkci pro update banneru (false = není to z rotace)
         updateSingleDropDisplay(activeDrop, false);
-    } else if (!activeDrop && satypeof clearDropProgress === 'function') {
+    } else if (!activeDrop && typeof clearDropProgress === 'function') { // OPRAVENO: satypeof -> typeof
         // Pokud se vážně nic netěží, vynulujeme
         clearDropProgress(true); // true = resetuje jen UI, nemění state
     }
 
-    // 🔥 AUTOMATICKÝ PŘEPOČET CELKOVÉHO PROGRESS BARU ZE STROMU DATA
+    // 5. AUTOMATICKÝ PŘEPOČET CELKOVÉHO PROGRESS BARU ZE STROMU DATA
     if (typeof calculateOverallStats === 'function') {
         calculateOverallStats();
     }
 
+    // 6. Sync do Admin rozhraní
     if (typeof syncAdminState === 'function') {
         syncAdminState();
     }
 }
 
+///////////////////////////////////////////////////////////////
 // ----------------------------------------------------------------------------
-// 4. SOCKET POLLER & INITIALIZER (AUTOMATIC FETCH)
+// 4. SOCKET POLLER & INITIALIZER (AUTOMATIC FETCH)///////////////////////////////
 // ----------------------------------------------------------------------------
+////////////////////////////////////////////////////////////
 
 let wantedItemsPollerInterval = null;
 
@@ -462,24 +486,6 @@ window.addEventListener('app:socket-disconnected', () => {
         stopWantedItemsPoller();
     }
 });
-
-//////////////////////////
-/////// STATUS BAR //////////
-////////////////////////
-
-function handleStatusUpdate(data) {
-    if (!data || !data.status) return;
-
-    const statusEl = document.getElementById('status-text');
-    if (statusEl) {
-        statusEl.textContent = data.status;
-    }
-
-    const lower = data.status.toLowerCase();
-    if (lower.includes('idle') || lower.includes('offline')) {
-        safeClearDrop();
-    }
-}
 
 // ----------------------------------------------------------------------------
 // 3. UTILITY & CLEANUP

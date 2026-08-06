@@ -9,6 +9,33 @@ let inventorySaveTimeout = null;
 let gameDropdownFocusedIndex = -1;
 let gameDropdownVisible = false;
 
+//////////////////////////////////////////
+///////// HANDLERS /////////////////
+/////////////////////////////////
+
+function handleInventoryClear() {
+    console.log('[Inventory] Received clear command');
+    if (typeof state !== 'undefined') {
+        state.campaigns = {};
+    }
+    if (typeof renderInventory === 'function') renderInventory();
+    syncAdminState();
+}
+
+function handleInventoryBatchUpdate(data) {
+    console.log('[Inventory] Processing batch inventory update');
+    if (typeof state !== 'undefined') {
+        state.campaigns = {};
+        const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
+        filtered.forEach(camp => {
+            state.campaigns[camp.id] = camp;
+        });
+    }
+    if (typeof renderInventory === 'function') renderInventory();
+    if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
+    syncAdminState();
+}
+
 // ==================== Game Dropdown & Tags ====================
 
 function getAvailableGamesForDropdown() {

@@ -226,138 +226,6 @@ function handleInitialState(data) {
 }
 
 // ============================================================================
-// 4. CHANNELS TAB HANDLERS & HELPERS
-// ============================================================================
-
-function handleChannelAdd(data) {
-    console.log('[Channel] Channel added:', data?.displayName || data?.name || data?.id);
-    if (typeof updateChannel === 'function') {
-        updateChannel(data);
-    }
-}
-
-function handleChannelUpdate(data) {
-    if (typeof updateChannel === 'function') {
-        updateChannel(data);
-    }
-}
-
-function handleChannelRemove(data) {
-    console.log('[Channel] Channel removed ID:', data?.id);
-    if (typeof removeChannel === 'function') {
-        removeChannel(data?.id);
-    }
-}
-
-function handleChannelsClear() {
-    console.log('[Channel] Cleared all channels');
-    if (typeof clearChannels === 'function') {
-        clearChannels();
-    }
-}
-
-function handleChannelsBatchUpdate(data) {
-    console.log('[Channels] Processing batch channels update');
-    if (typeof state !== 'undefined') {
-        state.channels = {};
-        // FIXED: Safe conversion whether payload is Array or Object
-        const chList = Array.isArray(data?.channels) ? data.channels : Object.values(data?.channels || {});
-        chList.forEach(ch => {
-            if (ch && ch.id) {
-                state.channels[ch.id] = ch;
-            }
-        });
-    }
-
-    const watchedChannelObj = getWatchedChannelObject();
-    const currentWatchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game) : null;
-    const activeDrop = state?.currentDrop || state?.current_drop;
-
-    if (activeDrop && currentWatchedGame) {
-        const activeDropGame = typeof getDropGameName === 'function' ? getDropGameName(activeDrop) : null;
-        if (activeDropGame && currentWatchedGame !== activeDropGame) {
-            console.warn(`[SYNC CLEANUP] Mismatch after channels update: watched '${currentWatchedGame}' vs drop '${activeDropGame}'. Clearing.`);
-            if (typeof safeClearDrop === 'function') safeClearDrop();
-        }
-    }
-
-    if (typeof scheduleRenderChannels === 'function') {
-        scheduleRenderChannels();
-    } else if (typeof renderChannels === 'function') {
-        renderChannels();
-    }
-    
-    syncAdminState();
-}
-
-function handleChannelWatching(data) {
-    const channelId = (typeof data === 'object' && data !== null) ? data.id : data;
-    console.log('[Channel] Switched watching target:', channelId);
-
-    if (typeof state !== 'undefined') {
-        state.watching_channel = channelId;
-
-        const watchedChannelObj = getWatchedChannelObject();
-        const watchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game) : null;
-
-        if (state.currentDrop || state.current_drop) {
-            const activeDrop = state.currentDrop || state.current_drop;
-            const currentDropGame = typeof getDropGameName === 'function' ? getDropGameName(activeDrop) : null;
-            if (watchedGame && currentDropGame && watchedGame !== currentDropGame) {
-                console.log(`[CHANNEL SWITCH] Clearing stale drop '${currentDropGame}' (Channel plays '${watchedGame}')`);
-                if (typeof safeClearDrop === 'function') safeClearDrop();
-            }
-        }
-    }
-
-    if (typeof setWatchingChannel === 'function') {
-        setWatchingChannel(channelId);
-    }
-    syncAdminState();
-}
-
-function handleChannelWatchingClear() {
-    console.log('[Channel] Resetting active watching channel state');
-    if (typeof state !== 'undefined') {
-        state.watching_channel = null;
-    }
-    if (typeof clearWatchingChannel === 'function') {
-        clearWatchingChannel();
-    }
-    // FIXED: Use safeClearDrop to clear both memory state and UI
-    if (typeof safeClearDrop === 'function') {
-        safeClearDrop();
-    } else if (typeof clearDropProgress === 'function') {
-        clearDropProgress();
-    }
-    syncAdminState();
-}
-
-function getWatchedChannelObject() {
-    if (typeof state === 'undefined' || !state.watching_channel || !state.channels) return null;
-    const target = state.watching_channel;
-
-    if (Array.isArray(state.channels)) {
-        return state.channels.find(c => 
-            String(c.id) === String(target) || 
-            c.name === target || 
-            c.displayName === target ||
-            c.username === target
-        ) || null;
-    } else if (typeof state.channels === 'object') {
-        if (state.channels[target]) return state.channels[target];
-        if (state.channels[String(target)]) return state.channels[String(target)];
-        return Object.values(state.channels).find(c => 
-            String(c?.id) === String(target) || 
-            c?.name === target || 
-            c?.displayName === target ||
-            c?.username === target
-        ) || null;
-    }
-    return null;
-}
-
-// ============================================================================
 // 5. INVENTORY & GAMES TAB HANDLERS
 // ============================================================================
 
@@ -367,29 +235,6 @@ function handleCampaignAdd(data) {
     if (!isGameIgnored(gameName) && typeof addCampaign === 'function') {
         addCampaign(data);
     }
-    syncAdminState();
-}
-
-function handleInventoryClear() {
-    console.log('[Inventory] Received clear command');
-    if (typeof state !== 'undefined') {
-        state.campaigns = {};
-    }
-    if (typeof renderInventory === 'function') renderInventory();
-    syncAdminState();
-}
-
-function handleInventoryBatchUpdate(data) {
-    console.log('[Inventory] Processing batch inventory update');
-    if (typeof state !== 'undefined') {
-        state.campaigns = {};
-        const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
-        filtered.forEach(camp => {
-            state.campaigns[camp.id] = camp;
-        });
-    }
-    if (typeof renderInventory === 'function') renderInventory();
-    if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
     syncAdminState();
 }
 
@@ -466,15 +311,13 @@ function handleManualModeUpdate(data) {
         updateManualModeUI(data);
     }
 
-    if (isExitingManual && typeof cleanupInactiveCampaigns === 'function') {
-        cleanupInactiveCampaigns();
+    if (typeof renderWantedItems === 'function') {
+        renderWantedItems();
     }
 
-    if (typeof renderWantedItems === 'function' && typeof state !== 'undefined') {
-        renderWantedItems(state.wantedItemsTree || state.wanted_items);
+    if (typeof syncAdminState === 'function') {
+        syncAdminState();
     }
-
-    syncAdminState();
 }
 
 function handleLanguageChanged(data) {
@@ -523,39 +366,6 @@ function handleAttentionRequired(data) {
     if (typeof flashTitle === 'function') {
         flashTitle();
     }
-}
-
-// ============================================================================
-// 8. ADMIN & DIAGNOSTICS HELPERS
-// ============================================================================
-
-function syncAdminState() {
-    if (!window.Administration || isAdminSyncScheduled) return;
-
-    isAdminSyncScheduled = true;
-    requestAnimationFrame(() => {
-        isAdminSyncScheduled = false;
-        if (!window.Administration) return;
-
-        let qCount = 0;
-        if (typeof state !== 'undefined') {
-            if (Array.isArray(state.wantedItemsTree)) {
-                qCount = state.wantedItemsTree.length;
-            } else if (Array.isArray(state.wanted_items)) {
-                qCount = state.wanted_items.length;
-            } else if (state.campaigns) {
-                for (const _ in state.campaigns) qCount++;
-            }
-        }
-
-        window.Administration.updateDiagnostics({
-            connected: Boolean(state?.connected),
-            queueCount: qCount,
-            rotationIndex: state?.rotation_index || state?.rotationIndex || 0
-        });
-
-        window.Administration.setState(state);
-    });
 }
 
 // ============================================================================

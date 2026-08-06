@@ -95,35 +95,33 @@ socket.on('attention_required', (...args) => typeof handleAttentionRequired === 
 // ============================================================================
 
 function handleConnect() {
-    if (isDebugEnabled()) {
-        console.log('[Socket DEBUG] Connected with socket ID:', socket.id);
-    } else {
-        console.log('[Socket] Connected to server');
+    console.log('[Socket] Connected to server');
+    
+    if (typeof state !== 'undefined') {
+        state.connected = true;
     }
-    state.connected = true;
-    const connText = state.translations?.gui?.websocket?.connected || 'Connected';
-    const indicatorEl = document.getElementById('connection-indicator');
-    if (indicatorEl) {
-        indicatorEl.textContent = '● ' + connText;
-        indicatorEl.className = 'connected';
+
+    // 💡 Voláme přímo naši novou master funkci!
+    if (typeof updateConnectionStatus === 'function') {
+        updateConnectionStatus(true);
     }
-    syncAdminState();
+
+    window.dispatchEvent(new CustomEvent('app:socket-connected'));
 }
 
 function handleDisconnect(reason) {
-    if (isDebugEnabled()) {
-        console.warn('[Socket DEBUG] Disconnected reason:', reason);
-    } else {
-        console.log('[Socket] Disconnected from server');
+    console.warn('[Socket] Disconnected from server:', reason);
+    
+    if (typeof state !== 'undefined') {
+        state.connected = false;
     }
-    state.connected = false;
-    const disconnText = state.translations?.gui?.websocket?.disconnected || 'Disconnected';
-    const indicatorEl = document.getElementById('connection-indicator');
-    if (indicatorEl) {
-        indicatorEl.textContent = '● ' + disconnText;
-        indicatorEl.className = 'disconnected';
+
+    // 💡 Voláme přímo naši novou master funkci!
+    if (typeof updateConnectionStatus === 'function') {
+        updateConnectionStatus(false);
     }
-    syncAdminState();
+
+    window.dispatchEvent(new CustomEvent('app:socket-disconnected'));
 }
 
 function handleConnectError(error) {
@@ -132,28 +130,19 @@ function handleConnectError(error) {
     }
 }
 
-function updateQueueAndState(data) {
-    if (data.queue_count !== undefined || data.rotation_index !== undefined) {
-        if (typeof state !== 'undefined') {
-            if (data.queue_count !== undefined) state.queue_count = data.queue_count;
-            if (data.rotation_index !== undefined) state.rotation_index = data.rotation_index;
-        }
-    }
-    syncAdminState();
-}
-
 /**
  * Synchronizes initial state when socket connects to the server
  */
 function handleInitialState(data) {
     console.log('[Socket] Received initial state synchronization', data);
 
-    if (data.settings && typeof state !== 'undefined') {
-        state.settings = { ...state.settings, ...data.settings };
-    }
+    if (!data || typeof data !== 'object') return;
 
     if (typeof state !== 'undefined') {
-        // --- PROPOJENÍ MANUÁLNÍHO REŽIMU DO STATE ---
+        if (data.settings) {
+            state.settings = { ...state.settings, ...data.settings };
+        }
+
         if (data.manual_mode !== undefined) {
             state.manual_mode = data.manual_mode;
             state.is_manual = !!(data.manual_mode && data.manual_mode.active);
@@ -161,6 +150,9 @@ function handleInitialState(data) {
                 delete state.manual_game;
             }
         }
+
+        if (data.active_game) state.active_game = data.active_game;
+        if (data.active_channel) state.active_channel = data.active_channel;
 
         if (data.watching_channel) {
             state.watching_channel = data.watching_channel;
@@ -173,76 +165,62 @@ function handleInitialState(data) {
                 state.watching_channel = found.id;
             }
         }
-    }
 
-    data = filterIgnoredData(data);
-
-    try { if (data.status && typeof updateStatus === 'function') updateStatus(data.status); } catch (e) { console.error("[INIT_ERR] Status:", e); }
-    try { if (data.wanted_items && typeof handleInitialWantedItems === 'function') handleInitialWantedItems(data.wanted_items); } catch (e) { console.error("[INIT_ERR] Wanted:", e); }
-    try { if (data.channels && typeof handleInitialChannels === 'function') handleInitialChannels(data.channels); } catch (e) { console.error("[INIT_ERR] Channels:", e); }
-
-    try {
         if (data.campaigns) {
             state.campaigns = {};
             const campList = Array.isArray(data.campaigns) ? data.campaigns : Object.values(data.campaigns);
             campList.forEach(camp => {
                 if (camp && camp.id) state.campaigns[camp.id] = camp;
             });
-            if (typeof renderInventory === 'function') renderInventory();
         }
-    } catch (e) { console.error("[INIT_ERR] Campaigns:", e); }
-
-    try {
-        if (data.console && typeof document !== 'undefined') {
-            const consoleEl = document.getElementById('console-output');
-            if (consoleEl && Array.isArray(data.console)) {
-                consoleEl.innerHTML = '';
-                const linesToRender = data.console.length > 1000 ? data.console.slice(-1000) : data.console;
-                const fragment = document.createDocumentFragment();
-                linesToRender.forEach(line => {
-                    const div = document.createElement('div');
-                    div.textContent = line;
-                    fragment.appendChild(div);
-                });
-                consoleEl.appendChild(fragment);
-                consoleEl.scrollTop = consoleEl.scrollHeight;
-            }
-        }
-    } catch (e) { console.error("[INIT_ERR] Console:", e); }
-
-    try { if (data.settings && typeof updateSettingsUI === 'function') updateSettingsUI(data.settings); } catch (e) { console.error("[INIT_ERR] Settings:", e); }
-    try { if (data.login && typeof updateLoginStatus === 'function') updateLoginStatus(data.login); } catch (e) { console.error("[INIT_ERR] Login:", e); }
-    try { if (data.manual_mode && typeof updateManualModeUI === 'function') updateManualModeUI(data.manual_mode); } catch (e) { console.error("[INIT_ERR] ManualMode:", e); }
-
-    try { 
-        if (data.current_drop) {
-            if (typeof handleInitialCurrentDrop === 'function') {
-                handleInitialCurrentDrop(data.current_drop, data.status);
-            }
-        } else {
-            if (typeof clearDropProgress === 'function') {
-                clearDropProgress();
-            }
-        }
-    } catch (e) { 
-        console.error("[INIT_ERR] Drop:", e); 
     }
 
-    try {
-        const autosortEl = document.getElementById('auto-sort-by-end');
-        if (autosortEl && data.settings) {
-            autosortEl.checked = !!data.settings.auto_sort_by_end;
-            if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
-        }
+    const filteredData = filterIgnoredData(data);
 
-        if (data.settings && typeof syncAutoAddUI === 'function') {
-            syncAutoAddUI(data.settings);
-        }
+    if (filteredData.status && typeof updateStatus === 'function') {
+        updateStatus(filteredData.status);
+    }
 
-        if (typeof startCombinedRotation === 'function') {
-            startCombinedRotation(true);
+    const wantedPayload = filteredData.wanted_items || filteredData.inventory || filteredData.campaigns;
+    if (wantedPayload && typeof handleWantedItemsUpdate === 'function') {
+        handleWantedItemsUpdate(wantedPayload);
+    }
+
+    if (filteredData.channels && typeof handleChannelsBatchUpdate === 'function') {
+        handleChannelsBatchUpdate({ channels: filteredData.channels });
+    }
+
+    if (filteredData.settings && typeof updateSettingsUI === 'function') {
+        updateSettingsUI(filteredData.settings);
+    }
+
+    if (filteredData.login && typeof updateLoginStatus === 'function') {
+        updateLoginStatus(filteredData.login);
+    }
+
+    if (filteredData.manual_mode && typeof updateManualModeUI === 'function') {
+        updateManualModeUI(filteredData.manual_mode);
+    }
+
+    if (filteredData.current_drop || filteredData.currentDrop) {
+        if (typeof handleDropProgress === 'function') {
+            handleDropProgress(filteredData.current_drop || filteredData.currentDrop);
         }
-    } catch (e) { console.error("[INIT_ERR] Rotation:", e); }
+    } else if (typeof clearDropProgress === 'function') {
+        if (typeof safeClearDrop === 'function') {
+            safeClearDrop();
+        } else {
+            clearDropProgress();
+        }
+    }
+
+    if (filteredData.console && typeof renderInitialConsole === 'function') {
+        renderInitialConsole(filteredData.console);
+    }
+
+    if (typeof onInitialStateLoaded === 'function') {
+        onInitialStateLoaded(filteredData);
+    }
 
     syncAdminState();
 }
@@ -280,16 +258,20 @@ function handleChannelsClear() {
 
 function handleChannelsBatchUpdate(data) {
     console.log('[Channels] Processing batch channels update');
-    state.channels = {};
-    if (Array.isArray(data.channels)) {
-        data.channels.forEach(ch => {
-            state.channels[ch.id] = ch;
+    if (typeof state !== 'undefined') {
+        state.channels = {};
+        // FIXED: Safe conversion whether payload is Array or Object
+        const chList = Array.isArray(data?.channels) ? data.channels : Object.values(data?.channels || {});
+        chList.forEach(ch => {
+            if (ch && ch.id) {
+                state.channels[ch.id] = ch;
+            }
         });
     }
 
     const watchedChannelObj = getWatchedChannelObject();
     const currentWatchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game) : null;
-    const activeDrop = state.currentDrop || state.current_drop;
+    const activeDrop = state?.currentDrop || state?.current_drop;
 
     if (activeDrop && currentWatchedGame) {
         const activeDropGame = typeof getDropGameName === 'function' ? getDropGameName(activeDrop) : null;
@@ -342,7 +324,10 @@ function handleChannelWatchingClear() {
     if (typeof clearWatchingChannel === 'function') {
         clearWatchingChannel();
     }
-    if (typeof clearDropProgress === 'function') {
+    // FIXED: Use safeClearDrop to clear both memory state and UI
+    if (typeof safeClearDrop === 'function') {
+        safeClearDrop();
+    } else if (typeof clearDropProgress === 'function') {
         clearDropProgress();
     }
     syncAdminState();
@@ -387,11 +372,6 @@ function handleCampaignAdd(data) {
 
 function handleInventoryClear() {
     console.log('[Inventory] Received clear command');
-    clearInventory();
-}
-
-function clearInventory() {
-    console.log('[Inventory] Resetting state inventory object');
     if (typeof state !== 'undefined') {
         state.campaigns = {};
     }
@@ -401,11 +381,13 @@ function clearInventory() {
 
 function handleInventoryBatchUpdate(data) {
     console.log('[Inventory] Processing batch inventory update');
-    state.campaigns = {};
-    const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
-    filtered.forEach(camp => {
-        state.campaigns[camp.id] = camp;
-    });
+    if (typeof state !== 'undefined') {
+        state.campaigns = {};
+        const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
+        filtered.forEach(camp => {
+            state.campaigns[camp.id] = camp;
+        });
+    }
     if (typeof renderInventory === 'function') renderInventory();
     if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
     syncAdminState();
@@ -448,9 +430,9 @@ function handleLoginStatus(data) {
 
 function handleLoginClear(data) {
     console.log('[Auth] Clearing login fields');
-    if (data.login) document.getElementById('username').value = '';
-    if (data.password) document.getElementById('password').value = '';
-    if (data.token) document.getElementById('2fa-token').value = '';
+    if (typeof resetLoginForm === 'function') {
+        resetLoginForm(data);
+    }
 }
 
 function handleSettingsUpdated(data) {
@@ -461,29 +443,14 @@ function handleSettingsUpdated(data) {
     if (typeof updateSettingsUI === 'function') {
         updateSettingsUI(data);
     }
-
     if (data.auto_sort_by_end && typeof sortGamesByEnding === 'function') {
         sortGamesByEnding();
     }
     syncAdminState();
 }
 
-function syncAutoAddUI(settings) {
-    if (!settings) return;
-
-    const autoaddEl = document.getElementById('auto-add-all-games');
-    if (autoaddEl) {
-        autoaddEl.checked = Boolean(settings.auto_add_all_games);
-    }
-
-    if (typeof renderGamesToWatch === 'function') {
-        renderGamesToWatch();
-    }
-}
-
 function handleManualModeUpdate(data) {
     console.log('[ManualMode] State updated:', data);
-
     const isExitingManual = !data || !data.active;
     
     if (typeof state !== 'undefined') {
@@ -499,18 +466,12 @@ function handleManualModeUpdate(data) {
         updateManualModeUI(data);
     }
 
-    // VYČIŠTĚNÍ PAMĚTI: Při výstupu z manuálního režimu promazat dokončené kampaně
     if (isExitingManual && typeof cleanupInactiveCampaigns === 'function') {
         cleanupInactiveCampaigns();
     }
 
-    // Následný rebuild UI – voláme už sjednocený render ze state
     if (typeof renderWantedItems === 'function' && typeof state !== 'undefined') {
         renderWantedItems(state.wantedItemsTree || state.wanted_items);
-    }
-    
-    if (typeof refreshUI === 'function') {
-        refreshUI();
     }
 
     syncAdminState();
@@ -536,10 +497,10 @@ function handleConsoleOutput(data) {
 function handleThemeChange(data) {
     const themeName = data.dark_mode ? 'Dark' : 'Light';
     console.log(`[Theme] Switched UI theme to ${themeName}`);
-    if (data.dark_mode) {
-        document.body.classList.add('dark-mode');
+    if (typeof applyTheme === 'function') {
+        applyTheme(data.dark_mode);
     } else {
-        document.body.classList.remove('dark-mode');
+        document.body.classList.toggle('dark-mode', !!data.dark_mode);
     }
 }
 
@@ -568,9 +529,6 @@ function handleAttentionRequired(data) {
 // 8. ADMIN & DIAGNOSTICS HELPERS
 // ============================================================================
 
-/**
- * Throttled state synchronization with administration.js to prevent UI thrashing.
- */
 function syncAdminState() {
     if (!window.Administration || isAdminSyncScheduled) return;
 
@@ -581,7 +539,9 @@ function syncAdminState() {
 
         let qCount = 0;
         if (typeof state !== 'undefined') {
-            if (Array.isArray(state.wanted_items)) {
+            if (Array.isArray(state.wantedItemsTree)) {
+                qCount = state.wantedItemsTree.length;
+            } else if (Array.isArray(state.wanted_items)) {
                 qCount = state.wanted_items.length;
             } else if (state.campaigns) {
                 for (const _ in state.campaigns) qCount++;
@@ -609,6 +569,9 @@ function isGameIgnored(gameName) {
     return state.settings.ignored_games.includes(gameName);
 }
 
+/**
+ * FIXED: Returns a shallow filtered clone instead of mutating original input payload
+ */
 function filterIgnoredData(data) {
     if (!data || typeof state === 'undefined' || !state.settings || !Array.isArray(state.settings.ignored_games)) {
         return data;
@@ -616,26 +579,28 @@ function filterIgnoredData(data) {
     const ignored = state.settings.ignored_games;
     if (ignored.length === 0) return data;
 
-    if (data.current_drop) {
-        const dropGame = data.current_drop.game_name || data.current_drop.game || data.current_drop.game_title;
+    const cloned = { ...data };
+
+    if (cloned.current_drop) {
+        const dropGame = cloned.current_drop.game_name || cloned.current_drop.game || cloned.current_drop.game_title;
         if (ignored.includes(dropGame)) {
-            data.current_drop = null;
+            cloned.current_drop = null;
         }
     }
 
-    if (Array.isArray(data.campaigns)) {
-        data.campaigns = data.campaigns.filter(c => {
+    if (Array.isArray(cloned.campaigns)) {
+        cloned.campaigns = cloned.campaigns.filter(c => {
             const cGame = c.game_name || c.game || c.game_title;
             return !ignored.includes(cGame);
         });
     }
 
-    if (Array.isArray(data.wanted_items)) {
-        data.wanted_items = data.wanted_items.filter(item => {
+    if (Array.isArray(cloned.wanted_items)) {
+        cloned.wanted_items = cloned.wanted_items.filter(item => {
             const gName = item.game_name || item.game;
             return !ignored.includes(gName);
         });
     }
 
-    return data;
+    return cloned;
 }

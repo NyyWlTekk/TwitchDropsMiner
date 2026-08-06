@@ -215,23 +215,6 @@ function initAdmin() {
     bindEvents();
 }
 
-function updateDiagnostics(info) {
-    if (!info) return;
-
-    if (elements.socketStatus && info.connected !== undefined) {
-        elements.socketStatus.textContent = info.connected ? 'Connected' : 'Disconnected';
-        elements.socketStatus.style.color = info.connected ? '#4caf50' : '#f44336';
-    }
-
-    if (elements.queueCount && info.queueCount !== undefined) {
-        elements.queueCount.textContent = `${info.queueCount} campaigns`;
-    }
-
-    if (elements.rotationIndex && info.rotationIndex !== undefined) {
-        elements.rotationIndex.textContent = info.rotationIndex;
-    }
-}
-
 function setState(state) {
     currentState = state || {};
     renderState();

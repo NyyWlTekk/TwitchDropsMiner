@@ -53,7 +53,7 @@ class BaseDrop:
         if "self" in data and data["self"]:
             self.claim_id = data["self"].get("dropInstanceID")
             self.is_claimed = data["self"].get("isClaimed", False)
-            logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: True | isClaimed: {self.is_claimed} | dropInstanceID: {self.claim_id}")
+           # logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: True | isClaimed: {self.is_claimed} | dropInstanceID: {self.claim_id}")
         else:
             matched_benefits = [
                 bid for benefit in self.benefits 
@@ -62,9 +62,9 @@ class BaseDrop:
             
             if matched_benefits:
                 self.is_claimed = True
-                logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | Found in claimed_benefits: {matched_benefits}")
-            else:
-                logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | NOT found in claimed_benefits. benefits: {[b.id for b in self.benefits]}")
+               # logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | Found in claimed_benefits: {matched_benefits}")
+           # else:
+               # logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | NOT found in claimed_benefits. benefits: {[b.id for b in self.benefits]}")
         self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
 
     def __repr__(self) -> str:

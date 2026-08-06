@@ -423,6 +423,9 @@ async function reloadCampaigns() {
 // ==================== Translation & Localization ====================
 
 function applyTranslations(t) {
+    if (!t) return;
+
+    // 1. TABS
     const tabButtons = {
         'main': document.querySelector('[data-tab="main"]'),
         'inventory': document.querySelector('[data-tab="inventory"]'),
@@ -435,13 +438,16 @@ function applyTranslations(t) {
     if (tabButtons.settings && t.gui?.tabs) tabButtons.settings.textContent = t.gui.tabs.settings;
     if (tabButtons.help && t.gui?.tabs) tabButtons.help.textContent = t.gui.tabs.help;
 
+    // 2. MAIN TAB
     const mainTab = document.getElementById('main-tab');
     if (mainTab && t.gui?.login) {
         const loginHeader = mainTab.querySelector('.login-panel h2');
         if (loginHeader) loginHeader.textContent = t.gui.login.name;
 
         const loginStatus = document.getElementById('login-status');
-        if (loginStatus?.hasAttribute('translation-key')) loginStatus.textContent = t.login?.status?.[loginStatus.getAttribute('translation-key')];
+        if (loginStatus?.hasAttribute('translation-key')) {
+            loginStatus.textContent = t.login?.status?.[loginStatus.getAttribute('translation-key')];
+        }
 
         const usernameInput = document.getElementById('username');
         if (usernameInput) usernameInput.placeholder = t.gui.login.username;
@@ -494,11 +500,49 @@ function applyTranslations(t) {
         if (typeof renderChannels === 'function') renderChannels();
     }
 
+    if (mainTab && t.gui?.wanted) {
+        const wantedHeader = document.getElementById('wanted-header');
+        if (wantedHeader) wantedHeader.textContent = t.gui.wanted.name;
+    }
+
+    // 3. INVENTORY TAB
     const inventoryTab = document.getElementById('inventory-tab');
     if (inventoryTab && t.gui?.inventory) {
         if (typeof renderInventory === 'function') renderInventory();
+
+        if (t.gui.inventory.filters) {
+            const f = t.gui.inventory.filters;
+            const updateLabel = (id, text) => {
+                const parent = document.getElementById(id)?.parentElement;
+                const el = parent ? parent.querySelector('span') : null;
+                if (el) el.textContent = text;
+            };
+            updateLabel('filter-active', f.active);
+            updateLabel('filter-not-linked', f.not_linked);
+            updateLabel('filter-upcoming', f.upcoming);
+            updateLabel('filter-expired', f.expired);
+            updateLabel('filter-finished', f.finished);
+            updateLabel('filter-benefit-item', f.item);
+            updateLabel('filter-benefit-badge', f.badge);
+            updateLabel('filter-benefit-emote', f.emote);
+            updateLabel('filter-benefit-other', f.other);
+            updateLabel('hide-complete-events', f.hide_completed_events);
+
+            const clearBtn = document.getElementById('clear-filters-btn');
+            if (clearBtn) clearBtn.textContent = f.clear;
+
+            // Hledáme specifické ID pro inventory search, aby se nepralo se settings
+            const invSearchInput = document.getElementById('inventory-search') || document.getElementById('inventory-games-filter');
+            if (invSearchInput) invSearchInput.placeholder = f.search_placeholder;
+
+            updateLabel('mining-benefit-item', f.item);
+            updateLabel('mining-benefit-badge', f.badge);
+            updateLabel('mining-benefit-emote', f.emote);
+            updateLabel('mining-benefit-unknown', f.other);
+        }
     }
 
+    // 4. SETTINGS TAB
     const settingsTab = document.getElementById('settings-tab');
     if (settingsTab && t.gui?.settings) {
         const generalHeader = document.getElementById('settings-general-header');
@@ -560,13 +604,12 @@ function applyTranslations(t) {
         if (availableGamesHeader) availableGamesHeader.textContent = t.gui.settings.available_games;
 
         const reloadBtn = document.getElementById('reload-btn');
-        if (reloadBtn) {
-            reloadBtn.textContent = t.gui.settings.reload_campaigns;
-        }
+        if (reloadBtn) reloadBtn.textContent = t.gui.settings.reload_campaigns;
 
-        renderGamesToWatch();
+        if (typeof renderGamesToWatch === 'function') renderGamesToWatch();
     }
 
+    // 5. HELP TAB
     const helpTab = document.getElementById('help-tab');
     if (helpTab && t.gui?.help) {
         const aboutHeader = document.getElementById('help-about-header');
@@ -581,9 +624,8 @@ function applyTranslations(t) {
         const notesHeader = document.getElementById('help-notes-header');
         if (notesHeader) notesHeader.textContent = t.gui.help.important_notes || 'Important Notes';
 
-		// HELP----------------------------------------------------
         const helpContent = helpTab.querySelector('.help-content');
-        if (helpContent) {
+        if (helpContent && typeof makeElement === 'function' && typeof makeHelpList === 'function') {
             const howToItems = t.gui.help.how_to_use_items || [
                 'Login using your Twitch account (OAuth device code flow)',
                 'Link your accounts at <a href="https://www.twitch.tv/drops/campaigns" target="_blank">twitch.tv/drops/campaigns</a>',
@@ -615,12 +657,12 @@ function applyTranslations(t) {
                 makeHelpList('ul', notesItems),
                 makeElement('div', { class: 'help-links' }, '', el =>
                     el.appendChild(makeElement('a', { href: 'https://github.com/rangermix/TwitchDropsMiner', target: '_blank', rel: 'noopener noreferrer' }, t.gui.help.github_repo || 'GitHub Repository'))
-                ),
+                )
             );
-            // ! HELP----------------------------------------------------
         }
     }
 
+    // 6. FOOTER & BADGES
     if (t.gui?.footer) {
         const loadingText = t.gui.footer.loading || 'Loading...';
         const currentVersionEl = document.getElementById('current-version');
@@ -646,60 +688,6 @@ function applyTranslations(t) {
 
         const proxyBadge = document.getElementById('proxy-indicator');
         if (proxyBadge && t.gui.badges.proxy) proxyBadge.title = t.gui.badges.proxy.title;
-    }
-
-    if (mainTab && t.gui?.wanted) {
-        const wantedHeader = document.getElementById('wanted-header');
-        if (wantedHeader) wantedHeader.textContent = t.gui.wanted.name;
-    }
-
-    if (inventoryTab && t.gui?.inventory?.filters) {
-        const f = t.gui.inventory.filters;
-        const updateLabel = (id, text) => {
-            const parent = document.getElementById(id)?.parentElement;
-            const el = parent ? parent.querySelector('span') : null;
-            if (el) el.textContent = text;
-        };
-        updateLabel('filter-active', f.active);
-        updateLabel('filter-not-linked', f.not_linked);
-        updateLabel('filter-upcoming', f.upcoming);
-        updateLabel('filter-expired', f.expired);
-        updateLabel('filter-finished', f.finished);
-        updateLabel('filter-benefit-item', f.item);
-        updateLabel('filter-benefit-badge', f.badge);
-        updateLabel('filter-benefit-emote', f.emote);
-        updateLabel('filter-benefit-other', f.other);
-        updateLabel('hide-complete-events', f.hide_completed_events);
-
-        const clearBtn = document.getElementById('clear-filters-btn');
-        if (clearBtn) clearBtn.textContent = f.clear;
-
-        const searchInput = document.getElementById('games-filter');
-        if (searchInput) searchInput.placeholder = f.search_placeholder;
-
-        updateLabel('mining-benefit-item', f.item);
-        updateLabel('mining-benefit-badge', f.badge);
-        updateLabel('mining-benefit-emote', f.emote);
-        updateLabel('mining-benefit-unknown', f.other);
-    }
-
-    if (t.gui?.header) {
-        const languageLabel = document.querySelector('.language-selector span');
-        if (languageLabel) languageLabel.textContent = t.gui.header.language;
-
-        const statusText = document.getElementById('status-text');
-        if (statusText && statusText.textContent === 'Initializing...') {
-            statusText.textContent = t.gui.header.initializing;
-        }
-
-        const connIndicator = document.getElementById('connection-indicator');
-        if (connIndicator) {
-            if (state.connected) {
-                connIndicator.textContent = '● ' + (t.gui.websocket.connected || 'Connected');
-            } else {
-                connIndicator.textContent = '● ' + (t.gui.websocket.disconnected || 'Disconnected');
-            }
-        }
     }
 }
 

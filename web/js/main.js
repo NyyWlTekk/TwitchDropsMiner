@@ -1,203 +1,18 @@
 ///////////////////////////////////////////////////////////////////////////////
-// MAIN PAGE / INITIALIZERS, PROGRESS & STATE MANAGEMENT
+// MAIN PAGE FUNCTION HELPERS
 ///////////////////////////////////////////////////////////////////////////////
 
-// Shared module state variables
+/////////////////////////////////////////////////////////
+/////////////////  STATUS BAR /////////////////
+////////////////////////////////////////////////////////
+
+// Pomocné proměnné pro plánování v animačním rámci (rAF)
 let pendingStatusText = null;
 let isRafScheduled = false;
-let lastLoggedCampaignProgress = -1;
-let lastLoggedMismatch = null;
-
-// ============================================================================
-// 1. DROP PROGRESS & MEMORY MANAGEMENT
-// ============================================================================
 
 /**
- * Handles live socket progress and stores fresh metrics into live cache
+ * Plánuje aktualizaci statusu na nejbližší renderovací snímek prohlížeče.
  */
-function handleDropProgress(data) {
-    if (!data) return;
-
-    const incomingGame = getDropGameName(data);
-    const watchedChannelObj = getWatchedChannelObject();
-    let currentlyWatchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game || watchedChannelObj.game_title) : null;
-
-    if (!currentlyWatchedGame && typeof state !== 'undefined' && state.active_game) {
-        currentlyWatchedGame = state.active_game;
-    }
-
-    if (incomingGame && isGameIgnored(incomingGame)) {
-        console.log(`[Drop] Blocked drop progress for ignored game: '${incomingGame}'`);
-        return;
-    }
-
-    if (currentlyWatchedGame && incomingGame) {
-        const cleanIncoming = incomingGame.trim().toLowerCase();
-        const cleanWatched = currentlyWatchedGame.trim().toLowerCase();
-
-        if (cleanIncoming !== cleanWatched) {
-            if (typeof logOnce === 'function') {
-                logOnce('ghost_blocked', `Ignored drop for '${incomingGame}' (Channel is watching '${currentlyWatchedGame}')`, true);
-            }
-            safeClearDrop();
-            return;
-        }
-    }
-
-    console.log(`[Drop] Updating progress for '${incomingGame || 'Unknown Game'}'`);
-
-    const dropId = String(data.drop_id || data.id || '');
-
-    if (typeof state !== 'undefined') {
-        state.currentDrop = data;
-        state.current_drop = data;
-
-        // Save latest socket data into live cache indexed by drop ID
-        if (!state.liveDropsCache) state.liveDropsCache = {};
-        if (dropId) {
-            state.liveDropsCache[dropId] = {
-                ...(state.liveDropsCache[dropId] || {}),
-                ...data
-            };
-        }
-    }
-
-    if (dropId && typeof syncAnyDropProgress === 'function') {
-        syncAnyDropProgress(dropId, data);
-    }
-
-    // 1. Update main UI progress bar
-    if (typeof updateDropProgress === 'function') {
-        updateDropProgress(data);
-    }
-
-    // 2. Immediate synchronization and DOM update for Wanted section
-    if (typeof syncWantedItemsProgress === 'function') {
-        syncWantedItemsProgress(data);
-    }
-
-    syncAdminState();
-}
-
-function handleDropProgressStop() {
-    console.log('[Drop] Stopped drop progress execution');
-    if (typeof clearDropProgress === 'function') {
-        clearDropProgress();
-    }
-}
-
-function safeClearDrop() {
-    console.log('[Drop] Clearing active drop from state');
-    if (typeof state !== 'undefined') {
-        state.currentDrop = null;
-        state.current_drop = null;
-    }
-    if (typeof clearDropProgress === 'function') {
-        clearDropProgress(true);
-    }
-    syncAdminState();
-}
-
-function getDropGameName(data) {
-    if (!data) return null;
-    let game = data.game_name || data.game || data.game_title || data.campaign?.game_name || data.drop?.game_name;
-    if (game) return game;
-
-    const dropId = data.drop_id || data.id;
-    if (dropId && typeof state !== 'undefined' && state.campaigns) {
-        const campList = Array.isArray(state.campaigns) ? state.campaigns : Object.values(state.campaigns);
-        for (const camp of campList) {
-            if (camp?.time_based_drops?.some(d => String(d.id) === String(dropId))) {
-                return camp.game_name || camp.game;
-            }
-        }
-    }
-    return null;
-}
-
-/**
- * Handles current drop received from the server during initial synchronization.
- */
-function handleInitialCurrentDrop(dropData) {
-    const hasValidDrop = dropData && typeof dropData === 'object' && Object.keys(dropData).length > 0;
-
-    if (hasValidDrop) {
-        if (typeof state !== 'undefined') {
-            state.currentDrop = dropData;
-            state.current_drop = dropData;
-        }
-        
-        if (typeof updateDropProgress === 'function') {
-            updateDropProgress(dropData);
-        }
-    } else {
-        if (typeof state !== 'undefined') {
-            state.currentDrop = null;
-            state.current_drop = null;
-        }
-
-        if (typeof clearDropProgress === 'function') {
-            clearDropProgress(true); // Forced cleanup
-        }
-    }
-}
-
-// ============================================================================
-// 2. STATUS UPDATES & UI RENDERING
-// ============================================================================
-
-function handleStatusUpdate(data) {
-    if (!data || !data.status) {
-        if (data && typeof updateQueueAndState === 'function') {
-            updateQueueAndState(data);
-        }
-        return;
-    }
-
-    const statusText = data.status;
-    let shouldLog = true;
-
-    if (statusText.startsWith('Adding campaigns to inventory...')) {
-        const match = statusText.match(/\((\d+)\/(\d+)\)/);
-        if (match) {
-            const current = parseInt(match[1], 10);
-            const total = parseInt(match[2], 10);
-            const percent = Math.floor((current / total) * 100);
-
-            const isQuarterStep = percent % 25 === 0 && percent !== lastLoggedCampaignProgress;
-            shouldLog = current === 1 || current === total || isQuarterStep;
-
-            if (shouldLog) {
-                lastLoggedCampaignProgress = percent;
-            }
-        }
-    } else {
-        lastLoggedCampaignProgress = -1;
-    }
-
-    if (shouldLog) {
-        console.log('[Status] Received update:', statusText);
-    }
-
-    scheduleStatusUpdate(statusText);
-
-    const statusLower = statusText.toLowerCase();
-    if (statusLower.includes('idle') || statusLower.includes('no active campaigns') || statusLower.includes('offline')) {
-        if (typeof clearDropProgress === 'function') {
-            clearDropProgress();
-        }
-    }
-
-    if (typeof updateQueueAndState === 'function') {
-        updateQueueAndState(data);
-    }
-
-    // Direct UI refresh trigger upon status updates/channel switches
-    if (typeof renderWantedItems === 'function' && typeof state !== 'undefined' && state.wantedItemsTree) {
-        renderWantedItems(state.wantedItemsTree);
-    }
-}
-
 function scheduleStatusUpdate(statusText) {
     pendingStatusText = statusText;
 
@@ -213,16 +28,19 @@ function scheduleStatusUpdate(statusText) {
     }
 }
 
+/**
+ * Přímý zápis textu statusu do DOM elementu #status-text.
+ */
 function updateStatus(status) {
+    if (!status) return;
     const statusEl = document.getElementById('status-text');
     if (statusEl && statusEl.textContent !== status) {
         statusEl.textContent = status;
     }
 
-    // OPTIMIZATION: Removing aggressive renderWantedQueue() / refreshUI() calls from high-frequency status updates.
-    // Dynamic updates are now safely handled via syncWantedItemsProgress or explicit handleWantedItemsUpdate.
-
-    syncAdminState();
+    if (typeof syncAdminState === 'function') {
+        syncAdminState();
+    }
 }
 
 // ============================================================================
@@ -237,7 +55,7 @@ function handleInitialChannels(channelsData) {
 
     state.channels = {};
     let channelsList = [];
-    
+
     if (Array.isArray(channelsData)) {
         channelsList = channelsData;
     } else if (channelsData && typeof channelsData === 'object') {
@@ -255,101 +73,430 @@ function handleInitialChannels(channelsData) {
     }
 }
 
+// ----------------------------------------------------------------------------
+// DATA EXTRACTORS (PARSER & SANITIZER)
+// ----------------------------------------------------------------------------
+
+////////////////////////////////////////////////
+///// OVERALL QUEUE DATA - MULTIFUINCTIONAL ///////
+/////<<<>>>>>/////////<<<<//////////////////////
+
+/**
+ * Extracts and normalizes wanted items data from raw campaigns state.
+ */
+function extractWantedItemsData(rawData) {
+    console.log('🔄 Redrawing wanted panel:', new Date().toLocaleTimeString());
+    if (!rawData) return [];
+    const list = Array.isArray(rawData) ? rawData : Object.values(rawData);
+
+    const slugify = (text) => {
+        return String(text || '')
+            .toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]/g, '_')
+            .replace(/_+/g, '_');
+    };
+
+    const watchedChannel = typeof getWatchedChannelContext === 'function' ? getWatchedChannelContext() : null;
+    const currentDrop = (typeof state !== 'undefined') ? (state?.currentDrop || state?.current_drop) : null;
+
+    return list
+        .filter(g => {
+            if (!g || typeof g !== 'object') return false;
+            const name = g.game_name || g.game || g.game_title;
+            return typeof isGameIgnored === 'function' ? !isGameIgnored(name) : true;
+        })
+        .map((g, gIndex) => {
+            const gameName = g.game_name || g.game || g.game_title || 'Unknown Game';
+            const gameSlug = slugify(gameName);
+            const gameId = String(g.game_id || g.id || `game_${gameSlug}_${gIndex + 1}`);
+            const gameIcon = g.game_icon || g.icon || g.box_art_url || g.image_url || null;
+            const gameTotalRemainingMins = Number(g.total_remaining_minutes ?? g.totalRemainingMinutes ?? g.remaining_minutes ?? 0);
+
+            return {
+                id: gameId,
+                game_id: gameId,
+                game_slug: gameSlug,
+                game_name: gameName,
+                game_icon: gameIcon,
+                total_remaining_minutes: gameTotalRemainingMins,
+                campaigns: (g.campaigns || g.campaign_list || []).map((c, cIndex) => {
+                    const campaignName = c.name || c.title || 'Campaign';
+                    const campaignSlug = slugify(campaignName);
+                    const campaignId = String(c.id || c.campaign_id || `${gameSlug}_camp_${cIndex + 1}`);
+                    const campaignTotalRemainingMins = Number(c.total_remaining_minutes ?? c.totalRemainingMinutes ?? c.remaining_minutes ?? 0);
+
+                    const rawDropsList = c.drops || c.time_based_drops || [];
+
+                    const mappedDrops = rawDropsList.map((d, dIndex) => {
+                        const currentMins = Number(d.current_minutes ?? d.currMins ?? 0);
+                        const requiredMins = Number(d.required_minutes ?? 0);
+                        const isClaimed = Boolean(d.is_claimed || d.claimed || d.status === 'CLAIMED');
+                        const dropName = d.name || d.title || `Drop ${dIndex + 1}`;
+                        const dropSlug = slugify(dropName);
+                        const safeDropId = String(d.id || d.drop_id || d.uuid || `${campaignId}_drop_${dropSlug}_${dIndex + 1}`);
+
+                        let progressPct = 0;
+                        if (requiredMins > 0) {
+                            progressPct = Math.min(100, Math.max(0, Math.round((currentMins / requiredMins) * 100)));
+                        }
+                        if (typeof d.progress === 'number' && d.progress > 0) {
+                            progressPct = d.progress <= 1 
+                                ? Math.min(100, Math.max(0, Math.round(d.progress * 100)))
+                                : Math.min(100, Math.max(0, Math.round(d.progress)));
+                        }
+
+                        let imageUrl = d.image_url || d.preview_url || d.badge_url || d.box_art_url || null;
+                        if (!imageUrl && Array.isArray(d.benefits) && d.benefits.length > 0) {
+                            const firstBenefit = d.benefits[0];
+                            if (typeof firstBenefit === 'object' && firstBenefit !== null) {
+                                imageUrl = firstBenefit.image_url || firstBenefit.icon_url || firstBenefit.preview_url || null;
+                            }
+                        }
+
+                        return {
+                            id: safeDropId,
+                            drop_id: safeDropId,
+                            drop_slug: dropSlug,
+                            campaign_id: campaignId,
+                            campaign_name: campaignName,
+                            game_name: gameName,
+                            game_icon: gameIcon,
+                            name: dropName,
+                            current_minutes: currentMins,
+                            required_minutes: requiredMins,
+                            progress: progressPct,
+                            is_claimed: isClaimed,
+                            can_claim: Boolean(d.can_claim ?? (!isClaimed && requiredMins > 0 && currentMins >= requiredMins)),
+                            benefits: d.benefits || d.rewards || [],
+                            image_url: imageUrl
+                        };
+                    });
+
+                    let isActivelyMining = false;
+                    if (currentDrop) {
+                        const curCampId = String(currentDrop.campaign_id || currentDrop.raw?.campaign_id || '').trim();
+                        const curDropId = String(currentDrop.drop_id || currentDrop.id || currentDrop.dropId || currentDrop.raw?.drop_id || '').trim();
+                        const curCampName = (currentDrop.campaign_name || currentDrop.raw?.campaign_name || '').trim().toLowerCase();
+
+                        if (campaignId && curCampId && curCampId === campaignId) {
+                            isActivelyMining = true;
+                        } else if (curCampName && campaignName.trim().toLowerCase() === curCampName) {
+                            isActivelyMining = true;
+                        } else if (curDropId && mappedDrops.some(d => String(d.id) === curDropId || String(d.drop_id) === curDropId)) {
+                            isActivelyMining = true;
+                        }
+                    }
+
+                    if (!isActivelyMining && watchedChannel) {
+                        const channelCampId = String(watchedChannel.campaign_id || watchedChannel.campaignId || '').trim();
+                        if (campaignId && channelCampId && channelCampId === campaignId) {
+                            isActivelyMining = true;
+                        }
+                    }
+
+                    const hasProgress = !isActivelyMining && mappedDrops.some(d => !d.is_claimed && (d.progress > 0 || d.current_minutes > 0));
+                    const isReadyToClaim = mappedDrops.some(d => d.can_claim);
+                    const totalDrops = mappedDrops.length;
+                    const claimedDrops = mappedDrops.filter(d => d.is_claimed).length;
+                    const isClaimed = totalDrops > 0 && claimedDrops === totalDrops;
+                    const isExpired = c.status === 'EXPIRED' || (c.ends_at && new Date(c.ends_at) < new Date());
+
+                    let classList = ['wanted-card'];
+                    if (isActivelyMining) classList.push('is-mining', 'active-mining');
+                    else if (isReadyToClaim) classList.push('is-ready', 'ready', 'ready-to-claim');
+                    else if (isClaimed) classList.push('is-claimed', 'completed');
+                    else if (hasProgress) classList.push('in-progress');
+                    else if (isExpired) classList.push('expired');
+
+                    if (c.status) classList.push(String(c.status).toLowerCase());
+
+                    return {
+                        id: campaignId,
+                        campaign_id: campaignId,
+                        campaign_slug: campaignSlug,
+                        name: campaignName,
+                        game_name: gameName,
+                        game_icon: gameIcon,
+                        total_remaining_minutes: campaignTotalRemainingMins,
+                        status: c.status || null,
+                        url: c.url || c.campaign_url || '#',
+                        starts_at: c.starts_at || c.start_at || c.start_time || '',
+                        ends_at: c.ends_at || c.end_at || c.end_time || '',
+                        claimed_drops_count: Number(c.claimed_drops_count ?? c.claimedDropsCount ?? 0),
+                        total_drops_count: Number(c.total_drops_count ?? c.totalDropsCount ?? mappedDrops.length),
+                        is_mining: isActivelyMining,
+                        has_progress: hasProgress,
+                        is_ready: isReadyToClaim,
+                        is_claimed: isClaimed,
+                        card_classes: classList.join(' '),
+                        drops: mappedDrops
+                    };
+                })
+            };
+        });
+}
+
+// ----------------------------------------------------------------------------
+// 2. EVENT HANDLERS (SUB-FUNKCE)
+// ----------------------------------------------------------------------------
+
 // ============================================================================
-// 4. WANTED ITEMS HANDLERS
+// HLAVNÍ ROZCESTNÍK
 // ============================================================================
 
-function handleWantedItemsUpdate(data) {
-    console.log('[WantedItems] Received list update');
-    let filteredData = data;
-    
-    if (Array.isArray(data)) {
-        filteredData = data.filter(item => typeof isGameIgnored === 'function' ? !isGameIgnored(item.game_name || item.game) : true);
+/**
+ * Hlavní rozcestník pro veškerá příchozí data.
+ */
+function handleAllData(type, rawData) {
+    if (!rawData) return;
+
+    switch (type) {
+        case 'drop_progress':
+            handleDropProgress(rawData);
+            break;
+        case 'wanted_items':
+        case 'campaigns':
+            handleWantedItemsUpdate(rawData);
+            break;
+        case 'campaign_update':
+            handleCampaignUpdate(rawData);
+            break;
+        case 'status':
+            handleStatusUpdate(rawData);
+            break;
+        default:
+            console.warn('[handleAllData] Neznámý typ události:', type);
     }
+}
+
+//////////////////
+// DROP DATA//////
+/////////////////
+
+function handleDropProgress(rawData) {
+    if (!rawData) return;
 
     if (typeof state !== 'undefined') {
-        state.wantedItemsTree = filteredData;
+        state.currentDrop = rawData;
+        state.current_drop = rawData;
+
+        // 🔥 Uložení aktuálních minut do liveDropsCache pro calculateOverallStats
+        const dropId = String(rawData.id || rawData.drop_id || rawData.dropId || '');
+        if (dropId) {
+            if (!state.liveDropsCache) state.liveDropsCache = {};
+            state.liveDropsCache[dropId] = {
+                current_minutes: Number(rawData.current_minutes ?? rawData.currentMinutes ?? rawData.currMins ?? 0),
+                is_claimed: Boolean(rawData.is_claimed || rawData.claimed || rawData.can_claim || rawData.status === 'CLAIMED')
+            };
+        }
     }
 
+    // Okamžité překreslení, aby se zelený rámeček rozsvítil hned při změně
+    if (typeof renderWantedItems === 'function' && typeof state !== 'undefined' && state.wantedItemsTree) {
+        renderWantedItems(state.wantedItemsTree);
+    }
+
+    // Updatujeme samotný banner pro aktivní drop
+    if (typeof updateDropProgress === 'function') {
+        updateDropProgress(rawData);
+    }
+
+    // 🔥 AUTOMATICKÝ PŘEPOČET A PŘEKRESLENÍ CELKOVÉHO PROGRESS BARU
+    if (typeof calculateOverallStats === 'function') {
+        calculateOverallStats();
+    }
+}
+
+///////////////////////////////////
+/////   CAMPAIGN DATA ///////////
+////////////////////////////////////
+
+function handleCampaignUpdate(rawData) {
+    if (!rawData) return;
+
+    // Správný alias na addCampaign
+    if (typeof addCampaign === 'function') {
+        addCampaign(rawData);
+    } else if (typeof syncCampaignOverview === 'function') {
+        syncCampaignOverview(rawData);
+    }
+
+    // 🔥 AUTOMATICKÝ PŘEPOČET CELKOVÉHO PROGRESS BARU PŘI ZMĚNĚ KAMPAŇOVÝCH DAT
+    if (typeof calculateOverallStats === 'function') {
+        calculateOverallStats();
+    }
+}
+
+////////////////////////////////////////////
+//////////////// WANTED DATA //////////
+/////////////////////////////////
+
+function handleWantedItemsUpdate(rawData) {
+    const cleanTree = extractWantedItemsData(rawData);
+
+    if (typeof state !== 'undefined') {
+        state.wantedItemsTree = cleanTree;
+    }
+
+    // 1. Vykreslení kartiček do panelu
     if (typeof renderWantedItems === 'function') {
-        renderWantedItems(filteredData);
+        renderWantedItems(cleanTree);
     }
-    
-    syncAdminState();
+
+    // 2. 🎯 NAJÍT AKTIVNĚ TĚŽENÝ DROP ZE STROMU DATA
+    let activeDrop = null;
+
+    // Projdeme vyčištěný strom a najdeme kampaň, která se těží
+    for (const game of cleanTree) {
+        for (const campaign of game.campaigns) {
+            if (campaign.is_mining) {
+                // Najdeme v ní první nevyzvednutý (unclaimed) drop
+                const currentMiningDrop = campaign.drops.find(d => !d.is_claimed) || campaign.drops[0];
+                if (currentMiningDrop) {
+                    activeDrop = currentMiningDrop;
+                    break;
+                }
+            }
+        }
+        if (activeDrop) break;
+    }
+
+    // 3. ZÁLOŽKA: Pokud se nenašel přes is_mining, zkusíme globální state
+    if (!activeDrop && typeof state !== 'undefined') {
+        activeDrop = state.currentDrop || state.current_drop;
+    }
+
+    // 4. PROPOJENÍ S HORNÍM BANNEREM (Progress Barem)
+    if (activeDrop && typeof updateSingleDropDisplay === 'function') {
+        // Zavoláme existující funkci pro update banneru (false = není to z rotace)
+        updateSingleDropDisplay(activeDrop, false);
+    } else if (!activeDrop && satypeof clearDropProgress === 'function') {
+        // Pokud se vážně nic netěží, vynulujeme
+        clearDropProgress(true); // true = resetuje jen UI, nemění state
+    }
+
+    // 🔥 AUTOMATICKÝ PŘEPOČET CELKOVÉHO PROGRESS BARU ZE STROMU DATA
+    if (typeof calculateOverallStats === 'function') {
+        calculateOverallStats();
+    }
+
+    if (typeof syncAdminState === 'function') {
+        syncAdminState();
+    }
 }
 
-/**
- * Handles wanted items received from the server.
- */
-function handleInitialWantedItems(wantedData) {
-    if (typeof state === 'undefined') return;
+// ----------------------------------------------------------------------------
+// 4. SOCKET POLLER & INITIALIZER (AUTOMATIC FETCH)
+// ----------------------------------------------------------------------------
 
-    let treeToRender = wantedData;
-
-    if (treeToRender && !Array.isArray(treeToRender) && typeof treeToRender === 'object') {
-        treeToRender = Object.values(treeToRender);
-    }
-
-    if (Array.isArray(treeToRender)) {
-        handleWantedItemsUpdate(treeToRender);
-    }
-}
-
-// ============================================================================
-// 5. DIAGNOSTIC STATE INSPECTOR
-// ============================================================================
+let wantedItemsPollerInterval = null;
 
 /**
- * Inspects state object directly for channel and drop mismatches.
+ * Initializes wanted items and drop progress socket listeners and starts periodic polling.
  */
-function checkSyncConsistency(evt = null, data = null) {
-    if (typeof state === 'undefined') return;
-
-    const currentDrop = state.currentDrop || state.current_drop;
-    if (!currentDrop) {
-        lastLoggedMismatch = null;
+function initWantedItemsPoller(socketInstance, intervalMs = 30000) {
+    if (!socketInstance) {
+        console.error('[WantedPoller] Cannot initialize: Socket instance is missing.');
         return;
     }
 
-    const watchedChannelObj = typeof getWatchedChannelObject === 'function' ? getWatchedChannelObject() : null;
-    const watchedGame = watchedChannelObj ? (watchedChannelObj.game_name || watchedChannelObj.game || watchedChannelObj.game_title) : null;
-    const activeDropGame = typeof getDropGameName === 'function' ? getDropGameName(currentDrop) : null;
+    // 1. Attach listeners
+    socketInstance.off('campaign_update', handleCampaignUpdate);
+    socketInstance.on('campaign_update', handleCampaignUpdate);
 
-    if (watchedGame && activeDropGame) {
-        const cleanWatched = watchedGame.trim().toLowerCase();
-        const cleanDrop = activeDropGame.trim().toLowerCase();
+    socketInstance.off('drop_progress', handleDropProgress);
+    socketInstance.on('drop_progress', handleDropProgress);
 
-        if (cleanWatched !== cleanDrop) {
-            const mismatchKey = `${cleanWatched}_vs_${cleanDrop}`;
+    // 2. Fetch data immediately if already connected
+    if (socketInstance.connected) {
+        console.log('[WantedPoller] Emitting initial payload requests...');
+        socketInstance.emit('get_wanted_items');
+        socketInstance.emit('get_drop_progress');
+    }
 
-            // Log warning only once per unique mismatch
-            if (lastLoggedMismatch !== mismatchKey) {
-                console.warn(`[SYNC AUTOCLEAN] Ghost drop detected '${activeDropGame}' while watching '${watchedGame}'. Clearing from memory.`);
-                lastLoggedMismatch = mismatchKey;
-            }
+    // 3. Clear any existing interval before setting a new one
+    if (wantedItemsPollerInterval) {
+        clearInterval(wantedItemsPollerInterval);
+    }
 
-            // Immediate memory & UI cleanup
-            if (typeof safeClearDrop === 'function') {
-                safeClearDrop();
-            }
-        } else {
-            lastLoggedMismatch = null;
+    // 4. Periodically request fresh data
+    wantedItemsPollerInterval = setInterval(() => {
+        if (socketInstance.connected) {
+            console.log('[WantedPoller] Fetching fresh wanted items and drop progress payload...');
+            socketInstance.emit('get_wanted_items');
+            socketInstance.emit('get_drop_progress');
         }
+    }, intervalMs);
+}
+
+/**
+ * Clears the polling interval timer.
+ */
+function stopWantedItemsPoller() {
+    if (wantedItemsPollerInterval) {
+        clearInterval(wantedItemsPollerInterval);
+        wantedItemsPollerInterval = null;
+        console.log('[WantedPoller] Polling stopped.');
     }
 }
 
-// Auto-attach inspector & UI refresher to socket events
-if (typeof socket !== 'undefined') {
-    ['drop_progress', 'channel_watching', 'channel_switch', 'initial_state', 'channels_batch_update', 'status_update'].forEach(evt => {
-        socket.on(evt, (data) => {
-            setTimeout(() => {
-                checkSyncConsistency(evt, data);
+/////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// AUTO-START ON SOCKET CONNECTION - EVENT LISENERS//////////////////////////
+// ----------------------------------------------------------------------------
+/////////////////////////////////////////////////////////////////////////////
 
-                // Re-render Wanted Items when switching channels or status changes (ignoring high-frequency drop_progress)
-                if (evt !== 'drop_progress' && typeof renderWantedItems === 'function' && typeof state !== 'undefined' && state.wantedItemsTree) {
-                    renderWantedItems(state.wantedItemsTree);
-                }
-            }, 20);
-        });
-    });
+// main.js – Reaguje na události soketu pro Wanted logiku
+
+window.addEventListener('app:socket-connected', () => {
+    console.log('[Main] Socket connected -> starting wanted items poller...');
+    if (typeof initWantedItemsPoller === 'function' && typeof socket !== 'undefined') {
+        initWantedItemsPoller(socket, 30000);
+    }
+});
+
+window.addEventListener('app:socket-disconnected', () => {
+    console.warn('[Main] Socket disconnected -> pausing wanted items poller...');
+    if (typeof stopWantedItemsPoller === 'function') {
+        stopWantedItemsPoller();
+    }
+});
+
+//////////////////////////
+/////// STATUS BAR //////////
+////////////////////////
+
+function handleStatusUpdate(data) {
+    if (!data || !data.status) return;
+
+    const statusEl = document.getElementById('status-text');
+    if (statusEl) {
+        statusEl.textContent = data.status;
+    }
+
+    const lower = data.status.toLowerCase();
+    if (lower.includes('idle') || lower.includes('offline')) {
+        safeClearDrop();
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 3. UTILITY & CLEANUP
+// ----------------------------------------------------------------------------
+
+function safeClearDrop() {
+    if (typeof state !== 'undefined') {
+        state.currentDrop = null;
+        state.current_drop = null;
+
+        // Vypnutí rotace při idle/offline stavu
+        if (state.rotationTimer) {
+            clearInterval(state.rotationTimer);
+            state.rotationTimer = null;
+        }
+    }
+    if (typeof clearDropProgress === 'function') {
+        clearDropProgress();
+    }
 }

@@ -1222,7 +1222,7 @@ header h1 {
     position: relative;
 }
 
-/* === HEADERY HER (Hlavní skupina) === */
+/* === GAME HEADERS (Main group) === */
 .wanted-game-header {
     padding: 10px 15px;
     background: rgba(145, 70, 255, 0.1);
@@ -1258,11 +1258,12 @@ header h1 {
     height: 40px;
     object-fit: cover;
     border-radius: 3px;
-    background: rgba(255, 255, 255, 0.05); 
+    background: rgba(255, 255, 255, 0.05);
     position: relative;
 }
 
-.wanted-game-icon:not([src]), .wanted-game-icon[src=""] {
+.wanted-game-icon:not([src]),
+.wanted-game-icon[src=""] {
     animation: pulse-placeholder 1.5s ease-in-out infinite;
 }
 
@@ -1285,7 +1286,7 @@ header h1 {
     gap: 10px;
 }
 
-/* === BASE KARTA KAMPANĚ === */
+/* === BASE CAMPAIGN CARD === */
 .wanted-card {
     background: var(--bg-panel);
     border: 1px solid rgba(145, 70, 255, 0.25);
@@ -1295,7 +1296,7 @@ header h1 {
     transition: all 0.2s ease;
 }
 
-/* Base header (výchozí stav) */
+/* Base header (default state) */
 .wanted-card-header {
     padding: 8px 12px;
     background: rgba(145, 70, 255, 0.08);
@@ -1303,7 +1304,7 @@ header h1 {
     transition: all 0.2s ease;
 }
 
-/* === ANIMACE PRO MINING === */
+/* === MINING ANIMATION === */
 @keyframes mining-glow {
     0%, 100% {
         box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
@@ -1315,15 +1316,16 @@ header h1 {
     }
 }
 
-/* === STAVY KARET & JEJICH HEADERŮ === */
+/* === CARD & HEADER STATES === */
 
-/* 1. MINING (Aktivní těžení - Zelená s pulzováním) */
+/* 1. MINING (Active mining - Green with pulsing) */
 .wanted-card.is-mining {
     border: 1px solid rgba(16, 185, 129, 0.6) !important;
     animation: mining-glow 2s ease-in-out infinite !important;
 }
 
-.wanted-card.is-mining .wanted-card-header {
+.wanted-card.is-mining .wanted-card-header,
+.wanted-card-header.mining {
     background: rgba(16, 185, 129, 0.15) !important;
     border-bottom: 1px solid rgba(16, 185, 129, 0.3) !important;
 }
@@ -1333,13 +1335,14 @@ header h1 {
     color: #10b981 !important;
 }
 
-/* 2. IN PROGRESS (Rozpracováno - Žlutá/Oranžová) */
+/* 2. IN PROGRESS (In progress - Yellow/Orange) */
 .wanted-card.in-progress {
     border: 1px solid rgba(245, 158, 11, 0.6) !important;
     box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
 }
 
-.wanted-card.in-progress .wanted-card-header {
+.wanted-card.in-progress .wanted-card-header,
+.wanted-card-header.in-progress {
     background: rgba(245, 158, 11, 0.15) !important;
     border-bottom: 1px solid rgba(245, 158, 11, 0.3) !important;
 }
@@ -1349,7 +1352,7 @@ header h1 {
     color: #f59e0b !important;
 }
 
-/* 3. DROP READY (Pripraveno k vyzvednuti - Modrá/Tyrkysová) */
+/* 3. DROP READY (Ready to claim - Blue) */
 .wanted-card.is-ready {
     border: 1px solid rgba(59, 130, 246, 0.6) !important;
     box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
@@ -1365,7 +1368,7 @@ header h1 {
     color: #3b82f6 !important;
 }
 
-/* 4. CLAIMED (Dokončeno / Vyzvednuto - Vyšedivělé) */
+/* 4. CLAIMED (Completed / Claimed - Faded) */
 .wanted-card.is-claimed {
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
     opacity: 0.6;
@@ -1376,7 +1379,61 @@ header h1 {
     border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
 
-/* === OBSAH KARTY === */
+/* 5. QUEUED (In queue - Neutral purple-gray) */
+.wanted-card.is-queued,
+.wanted-card.queued {
+    border: 1px solid rgba(145, 70, 255, 0.3) !important;
+}
+
+.wanted-card.is-queued .wanted-card-header,
+.wanted-card.queued .wanted-card-header,
+.wanted-card-header.queued {
+    background: rgba(145, 70, 255, 0.08) !important;
+    border-bottom: 1px solid rgba(145, 70, 255, 0.2) !important;
+}
+
+.wanted-card.is-queued .wanted-card-campaign-link,
+.wanted-card.queued .wanted-card-campaign-link {
+    color: var(--accent-color, #9146ff) !important;
+}
+
+/* === STATUS BADGES === */
+.wanted-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    line-height: 1;
+}
+
+.wanted-status-badge.tag-queued {
+    background: rgba(70, 30, 125, 0.4);
+    color: var(--text-secondary, #adadb8);
+    border: 1px solid rgba(145, 70, 255, 0.3);
+}
+
+.wanted-status-badge.tag-in-progress {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.wanted-status-badge.tag-mining {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.wanted-status-badge.tag-ready {
+    background: rgba(59, 130, 246, 0.15);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+/* === CARD CONTENT === */
 .wanted-card-header-main {
     display: flex;
     align-items: center;
@@ -1420,9 +1477,9 @@ header h1 {
 
 .wanted-drop-item {
     font-size: 0.6875rem;
-    margin-bottom: 0; 
-    padding: 8px 10px; 
-    background: transparent; 
+    margin-bottom: 0;
+    padding: 8px 10px;
+    background: transparent;
     border-bottom: 1px solid rgba(145, 70, 255, 0.2);
     display: flex;
     flex-wrap: wrap;
@@ -1464,98 +1521,6 @@ header h1 {
 .wanted-drop-status {
     margin-left: auto;
     flex-shrink: 0;
-}
-
-/* ===================================================================
-   ANIMATIONS & CARD MINING STATES
-   =================================================================== */
-
-/* 1. Active Mining State (Green Pulsing Glow) */
-@keyframes slowPulseGreen {
-    0% {
-        border-color: rgba(46, 204, 113, 0.4);
-        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
-    }
-    50% {
-        border-color: rgba(46, 204, 113, 1);
-        box-shadow: 0 0 18px rgba(46, 204, 113, 0.6);
-    }
-    100% {
-        border-color: rgba(46, 204, 113, 0.4);
-        box-shadow: 0 0 5px rgba(46, 204, 113, 0.2);
-    }
-}
-
-.wanted-card.active-mining {
-    animation: slowPulseGreen 3s infinite ease-in-out;
-}
-
-.wanted-card.active-mining .wanted-card-header {
-    background-color: rgba(46, 204, 113, 0.08);
-}
-
-/* 2. Ready to Claim State (Orange Pulsing Glow) */
-@keyframes slowPulseOrange {
-    0% {
-        border-color: rgba(255, 128, 0, 0.4);
-        box-shadow: 0 0 5px rgba(255, 128, 0, 0.2);
-    }
-    50% {
-        border-color: rgba(255, 128, 0, 1);
-        box-shadow: 0 0 18px rgba(255, 128, 0, 0.6);
-    }
-    100% {
-        border-color: rgba(255, 128, 0, 0.4);
-        box-shadow: 0 0 5px rgba(255, 128, 0, 0.2);
-    }
-}
-
-.wanted-card.ready,
-.wanted-card.ready-to-claim {
-    animation: slowPulseOrange 3s infinite ease-in-out;
-}
-
-.wanted-card.ready .wanted-card-header,
-.wanted-card.ready-to-claim .wanted-card-header {
-    background-color: rgba(255, 128, 0, 0.08);
-}
-
-/* 3. In Progress State (Yellow Border) */
-.wanted-card.in-progress {
-    border-color: #f1c40f; 
-    box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
-}
-
-.wanted-card.in-progress .wanted-card-header {
-    background-color: rgba(241, 196, 15, 0.08);
-}
-
-/* 4. Completed State */
-.wanted-card.completed {
-    border-color: rgba(255, 255, 255, 0.1);
-    opacity: 0.75;
-}
-
-/* 5. Expired State */
-.wanted-card.expired {
-    border-color: rgba(255, 255, 255, 0.05);
-    opacity: 0.5;
-}
-
-/* Tenký progress bar pro Wanted Drop */
-.wanted-drop-progress {
-    height: 3px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 2px;
-    overflow: hidden;
-    margin-top: 4px;
-    width: 100%;
-}
-
-.wanted-drop-progress-bar {
-    height: 100%;
-    background: var(--accent-color);
-    transition: width 0.4s ease-in-out;
 }
 
 /* ===================================================================

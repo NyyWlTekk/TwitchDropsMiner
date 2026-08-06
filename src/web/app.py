@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# debug
+import pprint
+
 import asyncio
 import logging
 from pathlib import Path
@@ -392,12 +395,13 @@ async def request_reload(sid):
 
         twitch_client.change_state(State.INVENTORY_FETCH)
 
-
 @sio.event
 async def get_wanted_items(sid):
     """Client requested wanted items list"""
     if gui_manager:
-        await sio.emit("wanted_items_update", gui_manager.get_wanted_game_tree(), to=sid)
+        data = gui_manager.get_wanted_game_tree()
+        logger.info("Emitting wanted_items_update to %s:\n%s", sid, pprint.pformat(data))
+        await sio.emit("wanted_items_update", data, to=sid)
 
 
 # Mount static directories (CSS, JS, icons)

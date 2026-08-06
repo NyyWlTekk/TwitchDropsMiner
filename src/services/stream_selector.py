@@ -1,4 +1,5 @@
 import logging
+
 from datetime import datetime, timezone
 
 from src.config.settings import Settings
@@ -182,9 +183,11 @@ class StreamSelector:
     def get_wanted_game_tree(
         self, settings: Settings, campaigns: list[DropsCampaign]
     ) -> list[dict]:
-        return [
+        tree = [
             {**game, "game_obj": None} for game in self._get_wanted_game_tree(settings, campaigns)
         ]
+        
+        return tree
 
     def get_wanted_games(self, settings: Settings, campaigns: list[DropsCampaign]) -> list[Game]:
         return [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]

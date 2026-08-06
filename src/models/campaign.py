@@ -37,7 +37,7 @@ class DropsCampaign:
         self.link_url: str = data.get("accountLinkURL", "")
         
         self_data = data.get("self") or {}
-        logger.warning(f"[DEBUG CAMPAIGN] Name: {self.name} | ID: {self.id} | raw_self: {data.get('self')} | raw_linkURL: {self.link_url}")
+       # logger.warning(f"[DEBUG CAMPAIGN] Name: {self.name} | ID: {self.id} | raw_self: {data.get('self')} | raw_linkURL: {self.link_url}")
         
         is_connected = self_data.get("isAccountConnected", False)
         

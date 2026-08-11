@@ -77,9 +77,12 @@ class CampaignProgressManager:
 
         drop = self._current_drop
 
-        pct = int(drop.progress * 100) if drop.progress <= 1.0 else int(drop.progress)
-        is_in_progress = drop.current_minutes > 0 and not drop.is_claimed and not drop.can_claim
-        total_rem = getattr(drop.campaign, "remaining_minutes", 0)
+        # Načtení unifikovaného stavu
+        drop_status = drop.status
+
+        # Výpočet procenta
+        raw_progress = getattr(drop, "progress", 0)
+        pct = int(raw_progress * 100) if raw_progress <= 1.0 else int(raw_progress)
 
         return {
             "id": drop.id,
@@ -87,15 +90,18 @@ class CampaignProgressManager:
             "campaign_name": drop.campaign.name,
             "campaign_id": drop.campaign.id,
             "game_name": drop.campaign.game.name,
-            "image_url": getattr(drop, "image_url", ""),
+            "image_url": drop.image_url,
+            "status": drop_status,  # ✨ NOVINKA: Unifikovaný stav dropu ("mining", "ready_to_claim", atd.)
             "current_minutes": drop.current_minutes,
-            "required_minutes": drop.required_minutes,
-            "progress": drop.progress,
+            "required_minutes": getattr(drop, "required_minutes", 0),
+            "progress": raw_progress,
             "pct": pct,
             "remaining_seconds": getattr(self, "_remaining_seconds", 0),
-            "total_remaining_minutes": total_rem,
+            "total_remaining_minutes": getattr(drop.campaign, "remaining_minutes", 0),
+            # Zpětná kompatibilita pro starší UI
             "is_mining": drop.is_mining,
-            "is_in_progress": is_in_progress,
+            "is_in_progress": drop_status == "in_progress",  # Vyhodnoceno přímo z nového statusu
             "is_claimed": drop.is_claimed,
             "can_claim": drop.can_claim,
+            "is_stuck": getattr(drop, "is_stuck", False),
         }

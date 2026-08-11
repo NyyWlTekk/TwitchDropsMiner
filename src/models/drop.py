@@ -31,6 +31,24 @@ def remove_dimensions(url: str) -> str:
     """Remove dimension suffix from Twitch image URLs (e.g., -285x380.jpg)."""
     return DIMS_PATTERN.sub("", url)
 
+def resolve_drop_status(
+    is_claimed: bool,
+    can_claim: bool,
+    is_mining: bool,
+    is_stuck: bool = False,
+    current_minutes: int = 0,
+) -> str:
+    """Čistá funkce pro unifikované vyhodnocení stavu dropu."""
+    if is_claimed:
+        return "claimed"
+    if can_claim:
+        return "ready_to_claim"
+    if is_mining:
+        return "stuck" if is_stuck else "mining"
+    if current_minutes > 0:
+        return "in_progress"
+    return "queued"
+
 
 class BaseDrop:
     _failed_claims: dict[str, datetime] = {}
@@ -75,7 +93,9 @@ class BaseDrop:
         self._is_processing_claim = False
         self.failed_claim = False
         self.claimed_count = 0
+        self.is_stuck: bool = False
 
+        # 1. Základní vyhodnocení stavu přímo z odpovedi kampaně
         if "self" in data and data["self"]:
             self.claim_id = data["self"].get("dropInstanceID")
             self.is_claimed = data["self"].get("isClaimed", False)
@@ -88,24 +108,116 @@ class BaseDrop:
             if matched_benefits:
                 self.is_claimed = True
 
+        # 2. 🔍 Křížová kontrola vůči vlastněným odznakům (788) i emotům (1226)
+        if not self.is_claimed:
+            # Načteme uložené množiny z _twitch nebo z inventory_service
+            user_badges: set[str] = (
+                getattr(self._twitch, "user_badges", None)
+                or getattr(getattr(self._twitch, "inventory_service", None), "user_badges", None)
+                or set()
+            )
+            user_emotes: set[str] = (
+                getattr(self._twitch, "user_emotes", None)
+                or getattr(getattr(self._twitch, "inventory_service", None), "user_emotes", None)
+                or set()
+            )
+
+            # Spojení do jedné kolekce pro bleskové vyhledávání
+            owned_items = user_badges | user_emotes
+
+            if owned_items:
+                candidates: set[str] = set()
+
+                if self.id:
+                    candidates.add(str(self.id).lower().strip())
+                if self.name:
+                    candidates.add(str(self.name).lower().strip())
+
+                for benefit in self.benefits:
+                    b_id = getattr(benefit, "id", None)
+                    b_name = getattr(benefit, "name", None)
+                    b_code = getattr(benefit, "code", None)
+
+                    if b_id:
+                        candidates.add(str(b_id).lower().strip())
+                    if b_name:
+                        candidates.add(str(b_name).lower().strip())
+                    if b_code:
+                        candidates.add(str(b_code).lower().strip())
+
+                # Pokud cokoliv z identifikátorů dropu/benefitu už vlastníš, označíme jako vyzvednuté
+                if any(cand in owned_items for cand in candidates if cand):
+                    self.is_claimed = True
+
         self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
+
+    @property
+    def can_claim(self) -> bool:
+        """Výchozí stav pro obecný drop."""
+        return False
+
+    @property
+    def current_minutes(self) -> int:
+        """Výchozí stav pro obecný drop."""
+        return 0
+
+    @property
+    def status(self) -> str:
+        """Vrací unifikovaný stav dropu pro UI a WebSocket payload."""
+        return resolve_drop_status(
+            is_claimed=self.is_claimed,
+            can_claim=self.can_claim,
+            is_mining=self.is_mining,
+            is_stuck=self.is_stuck,
+            current_minutes=self.current_minutes,
+        )
 
     @property
     def is_mining(self) -> bool:
         """
-        ⛏️ Vrací True, pokud je tento drop právě aktivně těžen botem.
+        ⛏️ Vrací True, pokud aktuálně sledovaný streamer pokrývá kampaň tohoto dropu.
         """
-        # Vytáhneme aktulně těžený drop přímo z bota nebo GUI
-        active_drop = getattr(self._twitch, "_current_drop", None) or getattr(
-            getattr(self._twitch, "gui", None), "_current_drop", None
-        )
+        try:
+            tw = self._twitch
+            if not tw or self.is_claimed or self.can_claim:
+                return False
 
-        if not active_drop:
+            campaign = getattr(self, "campaign", None)
+            if not campaign or not getattr(campaign, "active", False):
+                return False
+
+            # Zjištění aktuálně sledovaného kanálu
+            progress = getattr(getattr(tw, "gui", None), "progress", None) or getattr(tw, "progress", None)
+            raw_channel = (
+                getattr(progress, "_current_channel", None)
+                or getattr(tw, "_current_channel", None)
+                or getattr(tw, "watching_channel", None)
+            )
+
+            current_channel = None
+            if raw_channel:
+                if hasattr(raw_channel, "_value"):
+                    current_channel = raw_channel._value
+                elif hasattr(raw_channel, "get_with_default"):
+                    current_channel = raw_channel.get_with_default(None)
+                else:
+                    current_channel = raw_channel
+
+            if not current_channel:
+                return False
+
+            # Ověření, zda streamer dává progress do kampaně
+            is_eligible = bool(campaign.can_earn(current_channel))
+            
+            if is_eligible:
+                ch_name = getattr(current_channel, "name", None) or getattr(current_channel, "login", None) or str(current_channel)
+                logger.info("[MINING] Drop '%s' (ID: %s) is eligible via channel '%s'", self.name, self.id, ch_name)
+
+            return is_eligible
+
+        except Exception as e:
+            logger.error("[MINING] Error evaluating drop %s: %s", getattr(self, 'id', 'UNKNOWN'), e)
             return False
-
-        # Porovnáme ID
-        active_drop_id = getattr(active_drop, "id", active_drop)
-        return active_drop_id == self.id
         
     @property
     def preconditions_met(self) -> bool:

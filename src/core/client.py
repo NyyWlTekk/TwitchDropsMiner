@@ -799,35 +799,46 @@ def get_wanted_games(
     if client._inventory_dirty or force_rebuild or not client._wanted_games_cache:
         logger.info("Building wanted games list")
         
-        # --- PODROBNÝ DEBUG KAMPANÍ ---
+        # --- PODROBNÝ DEBUG KAMPANÍ A DŮVODŮ VYŘAZENÍ ---
         logger.info("[DEBUG-WANTED] Analýza %d filtrovaných kampaní:", len(filtered_inventory))
+        
         for c in filtered_inventory:
-            if not c.has_watchable_drops:
-                continue
             g_name = c.game.name if hasattr(c.game, "name") else str(c.game)
-            drops_info = []
-            has_watchable = False
-            for d in getattr(c, "drops", []):
-                req_min = getattr(d, "required_minutes", 0)
-                drops_info.append(f"{d.name} ({req_min}m)")
-                if req_min > 0:
-                    has_watchable = True
-            
-            can_earn = c.can_earn_within(next_hour) if hasattr(c, "can_earn_within") else "N/A"
-#            logger.info(
- #               "[DEBUG-WANTED] Hra: '%s' | Kampani: '%s' | can_earn: %s | má dropy >0m: %s | Dropy: %s",
-  #              g_name,
-   #             getattr(c, "name", "Unknown"),
-    #            can_earn,
-     #           has_watchable,
-      #          ", ".join(drops_info)
-       #     )
-        # -----------------------------
+            c_name = getattr(c, "name", "Neznámá kampaň")
+
+            # 1. Kontrola, zda je kampaň kompletně vybraná / sanitovaná
+            if getattr(c, "is_claimed", False):
+                logger.info("  [SKIP] Kampaň '%s' (%s) | Důvod: Všechny odměny/odznaky v kampani už vlastníš.", c_name, g_name)
+                continue
+
+            # 2. Kontrola, zda kampaň obsahuje sledovatelné dropy
+            if not getattr(c, "has_watchable_drops", True):
+                logger.info("  [SKIP] Kampaň '%s' (%s) | Důvod: Kampaň nemá žádné aktivní dropy k sledování.", c_name, g_name)
+                continue
+
+            # 3. Kontrola časového okna plnění
+            if hasattr(c, "can_earn_within") and not c.can_earn_within(next_hour):
+                logger.info("  [SKIP] Kampaň '%s' (%s) | Důvod: Kampaň nelze plnit v nadcházejícím časovém okně (vypršela nebo ještě nezačala).", c_name, g_name)
+                continue
+
+            # Pokud kampaň prošla, zalogujeme její aktivní dropy
+            drops_info = [
+                f"{d.name} ({getattr(d, 'required_minutes', 0)}m)" 
+                for d in getattr(c, "drops", [])
+            ]
+            logger.info(
+                "  [OK] Kampaň '%s' (%s) připravena ke sledování | Dropy: %s",
+                c_name,
+                g_name,
+                ", ".join(drops_info) if drops_info else "Žádné"
+            )
+        # --------------------------------------------------
 
         raw_wanted = client._stream_selector.get_wanted_games(
             client.settings, filtered_inventory
         )
-        # OPRAVA: Extrakce čistých objektů Game ze slovníků
+        
+        # Extrakce čistých objektů Game ze slovníků
         client._wanted_games_cache = [
             item["game"] if isinstance(item, dict) and "game" in item else item 
             for item in raw_wanted
@@ -837,12 +848,21 @@ def get_wanted_games(
         client._inventory_dirty = False
 
         if client._wanted_games_cache:
-            logger.info("Wanted games (%d): %s", len(client._wanted_games_cache), ", ".join(game.name for game in client._wanted_games_cache))
+            logger.info(
+                "Wanted games (%d): %s", 
+                len(client._wanted_games_cache), 
+                ", ".join(game.name for game in client._wanted_games_cache)
+            )
         else:
             logger.warning(
                 "No wanted games found! games_to_watch=%s, eligible_campaigns=%d",
                 client.settings.games_to_watch,
-                sum(1 for c in filtered_inventory if c.has_watchable_drops and getattr(c, 'eligible', True) and c.can_earn_within(next_hour)),
+                sum(
+                    1 for c in filtered_inventory 
+                    if c.has_watchable_drops 
+                    and getattr(c, "eligible", True) 
+                    and c.can_earn_within(next_hour)
+                ),
             )
             
     return client._wanted_games_cache

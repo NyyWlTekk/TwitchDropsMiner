@@ -90,3 +90,8 @@ module = [
 ]
 warn_return_any = false
 disable_error_code = ["call-overload", "assignment"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

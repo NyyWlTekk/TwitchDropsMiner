@@ -61,7 +61,7 @@ class StreamSelector:
                 wanted_drops = []
                 for drop in campaign.drops:
                     # Přeskočit pouze pokud už je odměna vybraná (claimed)
-                    if getattr(drop, "is_claimed", False):
+                    if drop.is_claimed:
                         continue
 
                     # Vrácena filtrace podle chtěných/nevybraných benefitů
@@ -69,18 +69,18 @@ class StreamSelector:
                     if len(filtered_benefits) <= 0:
                         continue
 
-                    current_mins = getattr(drop, "current_minutes", 0)
+                    current_mins = drop.current_minutes
                     req_mins = getattr(drop, "required_minutes", 0)
 
                     # Přeskočit dropy, které nevyžadují žádný čas (sub-dropy, badge s 0m atd.)
                     if req_mins <= 0:
                         continue
 
-                    is_mining = getattr(drop, "is_mining", False)
-                    is_claimed = getattr(drop, "is_claimed", False)
-                    can_claim = getattr(drop, "can_claim", False)
+                    is_mining = drop.is_mining
+                    is_claimed = drop.is_claimed
+                    can_claim = drop.can_claim
 
-                    # Bezpečný výpočet progressu (podpora pro desetiná čísla 0.0–1.0 i přímá %)
+                    # Bezpečný výpočet progressu
                     raw_progress = getattr(drop, "progress", None)
                     if raw_progress is not None:
                         progress_val = round(raw_progress * 100) if raw_progress <= 1.0 else round(raw_progress)
@@ -89,19 +89,18 @@ class StreamSelector:
                     else:
                         progress_val = 0
 
-                    # Určení, zda je drop rozpracovaný (má načtené minuty, ale zrovna se netěží ani není hotový)
-                    is_in_progress = current_mins > 0 and not is_claimed and not can_claim and not is_mining
-
                     wanted_drops.append(
                         {
-                            "id": getattr(drop, "id", None),
+                            "id": drop.id,
                             "name": drop.name,
-                            "image_url": getattr(drop, "image_url", ""),
+                            "image_url": drop.image_url,
+                            "status": drop.status,  # ✨ Unifikovaný stav dropu
                             "benefits": filtered_benefits,
                             "is_mining": is_mining,
                             "is_claimed": is_claimed,
                             "can_claim": can_claim,
-                            "is_in_progress": is_in_progress,
+                            "is_stuck": getattr(drop, "is_stuck", False),
+                            "is_in_progress": drop.status == "in_progress",
                             "current_minutes": current_mins,
                             "required_minutes": req_mins,
                             "progress": progress_val,

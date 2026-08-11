@@ -125,8 +125,8 @@
 								<div class="progress-time" id="campaign-progress-time" style="text-align: right; font-size: 0.85em; opacity: 0.8; margin-top: 6px;"></div>
 							</div>
 
-							<!-- 3. BAR: Current Drop Progress -->
-							<div class="drop-progress-section" style="margin-bottom: 8px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+							<!-- 3. BAR: Current Drop Progress (přidána třída drop-card-container) -->
+							<div class="drop-progress-section drop-card-container" style="margin-bottom: 8px; background: rgba(255,255,255,0.02); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
 								<div style="display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 4px;">
 									<span id="current-drop-label" style="font-weight: 600; color: #e0e0e0;">Current Drop</span>
 									<span id="progress-text">0 / 0 min</span>
@@ -456,25 +456,26 @@
         </footer>
     </div>
 
-	<!-- Socket.on -->
+	<!-- 1. External / Vendor libraries -->
 	<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-	
-    <!-- UI modules -->
-    <script src="/js/mainpage.js"></script>
-    <script src="/js/header.js"></script>
-    <script src="/js/channels.js"></script>
-    <script src="/js/wanted.js"></script>
-    <script src="/js/inventory.js"></script>
-    <script src="/js/progress.js"></script>
-    <script src="/js/administration.js"></script>
+	<script src="/js/morphdom.js"></script>
+
+	<!-- 2. Socket initialization (creates window.socket) -->
+	<script src="/js/sockets.js"></script>
+
+	<!-- 3. UI modules & event listeners (využívají morphdom) -->
+	<script src="/js/mainpage.js"></script>
+	<script src="/js/header.js"></script>
+	<script src="/js/channels.js"></script>
+	<script src="/js/wanted.js"></script>
+	<script src="/js/inventory.js"></script>
+	<script src="/js/progress.js"></script>
+	<script src="/js/administration.js"></script>
 	<script src="/js/gameslist.js"></script>
 	<script src="/js/settings.js"></script>
-	
-    <!-- Socket initialization -->
-    <script src="/js/sockets.js"></script>
 
-    <!-- Main app logic -->
-    <script src="/js/index.js"></script>
+	<!-- 4. Main app entry point -->
+	<script src="/js/index.js"></script>
     
 </body>
 

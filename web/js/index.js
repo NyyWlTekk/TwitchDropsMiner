@@ -189,7 +189,7 @@ function sortGamesByEnding() {
     const newOrder = JSON.stringify(state.settings.games_to_watch);
 
     if (originalOrder !== newOrder) {
-        console.log('[Game List] Sorted watched games by ending campaign dates.');
+//        console.log('[Game List] Sorted watched games by ending campaign dates.');
         renderGamesToWatch();
         if (typeof renderChannels === 'function') renderChannels();
         saveSettings();
@@ -258,7 +258,7 @@ function applyAutoAddIfNeeded() {
                 renderAvailableGames(Array.from(availableGames), filterInput ? filterInput.value.toLowerCase() : '');
             }
             saveSettings();
-            console.log('[Game List] Auto-added new games to watch list:', state.settings.games_to_watch);
+//            console.log('[Game List] Auto-added new games to watch list:', state.settings.games_to_watch);
             updateUIState();
         }
     }

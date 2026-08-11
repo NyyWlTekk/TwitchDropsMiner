@@ -14,6 +14,8 @@ const logThrottleMap = new Map();
 // 8. ADMIN & DIAGNOSTICS HELPERS --- HANDLERS ////////////////
 // ============================================================================
 
+let isAdminSyncScheduled = null;
+
 function syncAdminState() {
     if (!window.Administration || isAdminSyncScheduled) return;
 
@@ -352,3 +354,36 @@ function benchmark(name, fn) {
         return result;
     };
 }
+
+
+/**
+ * Rekurzivně proleze stavový objekt a vypíše cesty ke všem obrázkům / polím s daty.
+ */
+function crawlState(targetObj, searchTerm = '') {
+    const found = [];
+    const visited = new WeakSet();
+
+    function search(obj, path = 'state') {
+        if (!obj || typeof obj !== 'object' || visited.has(obj)) return;
+        visited.add(obj);
+
+        for (const [key, val] of Object.entries(obj)) {
+            const currentPath = `${path}.${key}`;
+
+            // Pokud je to hledaná URL nebo klíč
+            if (typeof val === 'string' && val.startsWith('http')) {
+                if (!searchTerm || key.toLowerCase().includes(searchTerm) || val.toLowerCase().includes(searchTerm)) {
+                    found.push({ path: currentPath, key, url: val });
+                }
+            } else if (val && typeof val === 'object') {
+                search(val, currentPath);
+            }
+        }
+    }
+
+    const root = targetObj || window.state || state;
+    search(root);
+    console.table(found);
+}
+
+// Použití v konzoli:

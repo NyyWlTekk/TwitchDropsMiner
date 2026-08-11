@@ -1,0 +1,144 @@
+///////////////////////////////////////////////////////////////////////////////
+// SETTINGS & MANUAL MODE MODULE (settings.js) ////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+// 1. EVENT LISTENER NA ZAČÁTKU SOUBORU
+// Odchytává událost okamžitě od první milisekundy načtení
+window.addEventListener('stateUpdated', () => {
+    const settings = window.state?.settings;
+    const manualMode = window.state?.manual_mode;
+
+    if (settings) {
+        updateSettingsUI(settings);
+    }
+
+    updateManualModeUI(manualMode);
+});
+
+/**
+ * Aktualizuje nastavení formulářů a vizuální prvky UI podle window.state.settings
+ */
+function updateSettingsUI(settings) {
+    // Bezpečnostní pojistka
+    if (!settings || typeof settings !== 'object') return;
+
+    // Synchronizace do globálního stavu
+    window.state.settings = settings;
+
+    // Pomocné funkce pro bezpečný zápis do DOMu
+    const setChecked = (id, val) => { 
+        const el = document.getElementById(id); 
+        if (el) el.checked = Boolean(val); 
+    };
+    const setValue = (id, val) => { 
+        const el = document.getElementById(id); 
+        if (el) el.value = val ?? ''; 
+    };
+
+    // Základní přepínače a vstupy
+    setChecked('dark-mode', settings.dark_mode);
+    setChecked('auto-sort-by-end', settings.auto_sort_by_end);
+    setChecked('mine-badges-first', settings.mine_badges_first);
+    setChecked('auto-add-all-games', settings.auto_add_all_games);
+    setValue('connection-quality', settings.connection_quality || 1);
+    setValue('minimum-refresh-interval', settings.minimum_refresh_interval_minutes || 30);
+
+    // Proxy nastavení
+    const proxyUrl = settings.proxy || '';
+    const proxyInput = document.getElementById('proxy-url');
+    if (proxyInput) proxyInput.value = proxyUrl;
+
+    const proxyIndicator = document.getElementById('proxy-indicator');
+    if (proxyIndicator) {
+        proxyIndicator.style.display = proxyUrl ? 'inline-flex' : 'none';
+        proxyIndicator.title = proxyUrl ? `Proxy active: ${proxyUrl}` : 'Proxy disabled';
+    }
+
+    // Jazyk
+    if (settings.language) {
+        const languageSelect = document.getElementById('language');
+        if (languageSelect) languageSelect.value = settings.language;
+    }
+
+    // Dark Mode class na body
+    if (settings.dark_mode) {
+        document.body.classList.add('dark-mode');
+    } else {
+        document.body.classList.remove('dark-mode');
+    }
+
+    // Dostupné a sledované hry
+    if (settings.games_available) {
+        window.availableGames = new Set(settings.games_available);
+        if (settings.games_to_watch) {
+            settings.games_to_watch.forEach(game => window.availableGames.add(game));
+        }
+    }
+
+    // Filtry inventáře
+    if (settings.inventory_filters) {
+        setChecked('filter-active', settings.inventory_filters.show_active);
+        setChecked('filter-not-linked', settings.inventory_filters.show_not_linked);
+        setChecked('filter-upcoming', settings.inventory_filters.show_upcoming);
+        setChecked('filter-expired', settings.inventory_filters.show_expired);
+        setChecked('filter-finished', settings.inventory_filters.show_finished);
+
+        window.selectedInventoryGames = Array.isArray(settings.inventory_filters.game_name_search)
+            ? [...settings.inventory_filters.game_name_search]
+            : [];
+            
+        if (typeof updateGameTagsDisplay === 'function') updateGameTagsDisplay();
+
+        setChecked('filter-benefit-item', settings.inventory_filters.show_benefit_item !== false);
+        setChecked('filter-benefit-badge', settings.inventory_filters.show_benefit_badge !== false);
+        setChecked('filter-benefit-emote', settings.inventory_filters.show_benefit_emote !== false);
+        setChecked('filter-benefit-other', settings.inventory_filters.show_benefit_other !== false);
+    }
+
+    // Těžební benefity
+    if (settings.mining_benefits) {
+        setChecked('mining-benefit-item', settings.mining_benefits.DIRECT_ENTITLEMENT);
+        setChecked('mining-benefit-badge', settings.mining_benefits.BADGE);
+        setChecked('mining-benefit-emote', settings.mining_benefits.EMOTE);
+        setChecked('mining-benefit-unknown', settings.mining_benefits.UNKNOWN);
+    }
+
+    // Volání externích vykreslovacích funkcí (pokud existují)
+    if (typeof renderGamesToWatch === 'function') renderGamesToWatch();
+    if (typeof renderChannels === 'function') renderChannels();
+    if (typeof renderInventory === 'function') renderInventory();
+    if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
+
+    console.log('[Settings] UI elements updated from settings state.');
+}
+
+/**
+ * Aktualizuje indikátory Manuálního / Automatického režimu v UI
+ */
+function updateManualModeUI(manualModeInfo) {
+    const manualBadge = document.getElementById('manual-mode-badge');
+    const autoBadge = document.getElementById('auto-mode-badge');
+    const manualGameName = document.getElementById('manual-game-name');
+    const manualControls = document.getElementById('manual-mode-controls');
+    const manualModeGame = document.getElementById('manual-mode-game');
+
+    if (!manualBadge || !autoBadge) return;
+
+    if (manualModeInfo && manualModeInfo.active) {
+        manualBadge.classList.remove('hidden');
+        autoBadge.classList.add('hidden');
+        if (manualGameName) manualGameName.textContent = manualModeInfo.game_name || '';
+
+        if (manualControls) {
+            manualControls.classList.remove('hidden');
+            if (manualModeGame) manualModeGame.textContent = manualModeInfo.game_name || '';
+        }
+    } else {
+        manualBadge.classList.add('hidden');
+        autoBadge.classList.remove('hidden');
+
+        if (manualControls) {
+            manualControls.classList.add('hidden');
+        }
+    }
+}

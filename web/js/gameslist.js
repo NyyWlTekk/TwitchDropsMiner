@@ -73,7 +73,7 @@ function _performRenderGamesToWatch() {
     }
 
     updateUIState();
-    console.log('[Game List] Games rendered (debounced). Ignore mode:', isIgnoreMode);
+//    console.log('[Game List] Games rendered (debounced). Ignore mode:', isIgnoreMode);
 }
 
 function renderSelectedGames(games) {
@@ -282,7 +282,7 @@ function handleDragEnd(e) {
     renderSelectedGames(newOrder);
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
-    console.log('[Game List] Priority order updated via drag-and-drop.');
+//    console.log('[Game List] Priority order updated via drag-and-drop.');
 }
 
 let watchSaveTimeout = null;
@@ -304,7 +304,7 @@ function toggleGameWatch(gameName, checked) {
     }
 
     state.settings.games_to_watch = games;
-    console.log('[Game List] Toggled watch status:', gameName, 'Checked:', checked);
+//    console.log('[Game List] Toggled watch status:', gameName, 'Checked:', checked);
 
     // 1. Okamžitá lokální aktualizace rozhraní (Optimistic UI)
     renderGamesToWatch();
@@ -316,7 +316,7 @@ function toggleGameWatch(gameName, checked) {
     }
 
     watchSaveTimeout = setTimeout(() => {
-        console.log('[Game List] Flushing watch settings to server...');
+//        console.log('[Game List] Flushing watch settings to server...');
         saveSettings();
     }, 1000);
 }
@@ -339,7 +339,7 @@ function removeGameFromWatch(gameName) {
         }
     }
 
-    console.log('[Game List] Removed game from watch/ignore list:', gameName);
+//    console.log('[Game List] Removed game from watch/ignore list:', gameName);
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
@@ -355,7 +355,7 @@ function selectAllGames() {
         state.settings.games_to_watch = Array.from(availableGames).sort();
     }
 
-    console.log('[Game List] Selected all games.');
+//    console.log('[Game List] Selected all games.');
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
@@ -371,7 +371,7 @@ function deselectAllGames() {
         state.settings.games_to_watch = [];
     }
 
-    console.log('[Game List] Deselected all games.');
+//    console.log('[Game List] Deselected all games.');
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
@@ -403,7 +403,7 @@ function addGameFromSearch() {
 
     availableGames.add(gameName);
     searchInput.value = '';
-    console.log('[Game List] Added game manually:', gameName);
+//    console.log('[Game List] Added game manually:', gameName);
     renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     saveSettings();
@@ -421,68 +421,19 @@ async function toggleGameIgnore(game, isIgnored) {
         if (!state.settings.ignored_games.includes(game)) {
             state.settings.ignored_games.push(game);
         }
-
-        if (state.currentDrop) {
-            const dropGame = state.currentDrop.game_name || state.currentDrop.game || state.currentDrop.game_title;
-            if (dropGame === game) {
-                state.watching_channel = null;
-
-                if (typeof clearDropProgress === 'function') {
-                    clearDropProgress();
-                } else {
-                    state.currentDrop = null;
-                }
-            }
-        }
-
-        if (Array.isArray(state.activeCampaignsQueue)) {
-            state.activeCampaignsQueue = state.activeCampaignsQueue.filter(c => (c.game_name || c.game) !== game);
-        }
-        if (Array.isArray(state.activeDropsQueue)) {
-            state.activeDropsQueue = state.activeDropsQueue.filter(ad => (ad.game_name || ad.game) !== game);
-        }
-        if (Array.isArray(state.liveMiningQueue)) {
-            state.liveMiningQueue = state.liveMiningQueue.filter(cid => {
-                const camp = state.campaigns ? state.campaigns[cid] : null;
-                return camp ? (camp.game_name || camp.game) !== game : true;
-            });
-        }
-
-        if (Array.isArray(state.wantedItemsTree)) {
-            state.wantedItemsTree = state.wantedItemsTree.filter(group => group.game_name !== game);
-        }
-
-        if (typeof clearWantedActiveState === 'function') {
-            clearWantedActiveState();
-        }
-
     } else {
         state.settings.ignored_games = state.settings.ignored_games.filter(g => g !== game);
     }
 
-    // 1. Okamžitá lokální aktualizace rozhraní (Optimistic UI)
-    if (typeof renderGamesToWatch === 'function') {
-        renderGamesToWatch();
-    }
-    if (typeof renderWantedItems === 'function' && Array.isArray(state.wantedItemsTree)) {
-        renderWantedItems(state.wantedItemsTree);
-    }
-    if (typeof renderWantedQueue === 'function') {
-        renderWantedQueue();
-    }
-    if (typeof refreshUI === 'function') {
-        refreshUI();
-    }
+//    console.log('[Game List] Updated game ignore status locally:', game, 'IsIgnored:', isIgnored);
 
-    console.log('[Game List] Updated game ignore status locally:', game, 'IsIgnored:', isIgnored);
-
-    // 2. Buffer / Debounce pro uložení na server (zkráceno na 1000ms pro svižnější odezvu)
+    // 2. Buffer / Debounce pro uložení na server
     if (settingsSaveTimeout) {
         clearTimeout(settingsSaveTimeout);
     }
 
     settingsSaveTimeout = setTimeout(async () => {
-        console.log('[Game List] Flushing batched ignore settings to server...');
+//        console.log('[Game List] Flushing batched ignore settings to server...');
         await saveSettings();
 
         if (typeof startCombinedRotation === 'function') {

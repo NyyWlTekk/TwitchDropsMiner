@@ -14,26 +14,61 @@ let gameDropdownVisible = false;
 /////////////////////////////////
 
 function handleInventoryClear() {
-    console.log('[Inventory] Received clear command');
+    console.log('[Inventory] Received clear command (ignored to keep existing state until new data arrives)');
+    
+    // Zbytek kódu je zakomentovaný, aby se state.campaigns nemazalo předčasně
+    /*
     if (typeof state !== 'undefined') {
         state.campaigns = {};
     }
     if (typeof renderInventory === 'function') renderInventory();
     syncAdminState();
+    */
 }
 
-function handleInventoryBatchUpdate(data) {
+/**
+ * Zpracování hromadné aktualizace inventáře ze serveru
+ */
+function handleInventoryBatchUpdate(rawData) {
     console.log('[Inventory] Processing batch inventory update');
-    if (typeof state !== 'undefined') {
-        state.campaigns = {};
-        const filtered = (data.campaigns || []).filter(c => !isGameIgnored(c.game_name || c.game));
-        filtered.forEach(camp => {
-            state.campaigns[camp.id] = camp;
+    if (!rawData) return;
+
+    // 1. Bezpečná extrakce dat z příchozího payloadu
+    const extracted = typeof extractWantedItemsData === 'function' ? extractWantedItemsData(rawData) : null;
+    const sourceData = extracted?.inventory || rawData.campaigns || rawData.inventory || rawData;
+
+    // 2. Normalizace dat (vytvoříme pole i mapu podle ID)
+    let inventoryList = [];
+    let campaignsMap = {};
+
+    if (Array.isArray(sourceData)) {
+        inventoryList = sourceData;
+        sourceData.forEach(camp => {
+            if (camp && camp.id) {
+                campaignsMap[camp.id] = camp;
+            }
         });
+    } else if (typeof sourceData === 'object' && sourceData !== null) {
+        campaignsMap = { ...sourceData };
+        inventoryList = Object.values(sourceData);
     }
+
+    // 3. Zápis do Single Source of Truth (window.state)
+    window.state = {
+        ...window.state,
+        inventory: inventoryList,
+        campaigns: campaignsMap
+    };
+
+    console.log("[Inventory] Updated window.state.campaigns count:", Object.keys(window.state.campaigns || {}).length);
+
+    // 4. Odpálení události pro systém
+    window.dispatchEvent(new CustomEvent('stateUpdated'));
+
+    // 5. Přímé překreslení UI (zpětná kompatibilita pro starší renderery)
     if (typeof renderInventory === 'function') renderInventory();
     if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
-    syncAdminState();
+    if (typeof syncAdminState === 'function') syncAdminState();
 }
 
 // ==================== Game Dropdown & Tags ====================
@@ -265,7 +300,7 @@ function updateGameTagsDisplay() {
 
 function sortCampaigns(campaigns) {
     const now = Date.now();
-    console.log('[Inventory Sort] Sorting campaigns array of count:', campaigns.length);
+//    console.log('[Inventory Sort] Sorting campaigns array of count:', campaigns.length);
     return [...campaigns].sort((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1;
         
@@ -831,31 +866,31 @@ let lastInventoryRenderHash = null;
 
 // Main grid rendering procedure
 function renderInventory(force = false) {
-    console.log('[Inventory Debug] === Executing renderInventory ===');
+//    console.log('[Inventory Debug] === Executing renderInventory ===');
     try {
         const container = document.getElementById('inventory-grid');
         if (!container) {
-            console.error('[Inventory Debug] ERROR: Element #inventory-grid NOT FOUND in DOM!');
+//            console.error('[Inventory Debug] ERROR: Element #inventory-grid NOT FOUND in DOM!');
             return;
         }
 
         if (typeof updateOverallProgress === 'function') {
             updateOverallProgress();
         } else {
-            console.log('[Inventory Debug] WARNING: Function updateOverallProgress does not exist.');
+//            console.log('[Inventory Debug] WARNING: Function updateOverallProgress does not exist.');
         }
 
         const t = state?.translations || {};
         const allCampaigns = state?.campaigns ? Object.values(state.campaigns) : [];
 
-        console.log(`[Inventory Debug] Total campaigns in state object: ${allCampaigns.length}`, state?.campaigns);
+//        console.log(`[Inventory Debug] Total campaigns in state object: ${allCampaigns.length}`, state?.campaigns);
 
         const filters = getInventoryFilters();
-        console.log('[Inventory Debug] Loaded filters from UI:', filters);
+//        console.log('[Inventory Debug] Loaded filters from UI:', filters);
 
         // Filter & Sort
         const filteredCampaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
-        console.log(`[Inventory Debug] Campaigns passing filter: ${filteredCampaigns.length} of ${allCampaigns.length}`);
+//        console.log(`[Inventory Debug] Campaigns passing filter: ${filteredCampaigns.length} of ${allCampaigns.length}`);
 
         const sortedCampaigns = sortCampaigns(filteredCampaigns);
 
@@ -876,20 +911,20 @@ function renderInventory(force = false) {
         const currentHash = `${sortedCampaigns.length}_${campaignStateFingerprint}_${JSON.stringify(filters)}`;
 
         if (!force && lastInventoryRenderHash === currentHash) {
-            console.log('[Inventory Debug] Render skipped (identical data, live status, and filters - fingerprint match).');
+//            console.log('[Inventory Debug] Render skipped (identical data, live status, and filters - fingerprint match).');
             return;
         }
         lastInventoryRenderHash = currentHash;
 
         if (allCampaigns.length === 0) {
-            console.log('[Inventory Debug] WARNING: No data in state.campaigns!');
+//            console.log('[Inventory Debug] WARNING: No data in state.campaigns!');
             const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
             return;
         }
 
         if (sortedCampaigns.length === 0) {
-            console.log('[Inventory Debug] WARNING: Filters rejected ALL campaigns!');
+//            console.log('[Inventory Debug] WARNING: Filters rejected ALL campaigns!');
             const noMatchMsg = t.gui?.inventory?.no_matching_campaigns || 'No campaigns match the current filters.';
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, noMatchMsg));
             return;
@@ -900,14 +935,14 @@ function renderInventory(force = false) {
             try {
                 fragment.appendChild(renderCampaignCard(campaign, t));
             } catch (err) {
-                console.error(`[Inventory Debug] ERROR creating card for campaign #${idx} (${campaign.game_name}):`, err);
+//                console.error(`[Inventory Debug] ERROR creating card for campaign #${idx} (${campaign.game_name}):`, err);
             }
         });
 
         container.replaceChildren(fragment);
-        console.log('[Inventory Debug] SUCCESS: Grid successfully rendered into DOM!');
+//        console.log('[Inventory Debug] SUCCESS: Grid successfully rendered into DOM!');
 
     } catch (globalErr) {
-        console.error('[Inventory Debug] CRITICAL ERROR inside renderInventory:', globalErr);
+//        console.error('[Inventory Debug] CRITICAL ERROR inside renderInventory:', globalErr);
     }
 }

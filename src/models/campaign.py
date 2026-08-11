@@ -63,6 +63,8 @@ class DropsCampaign:
             drop_data["id"]: TimedDrop(self, drop_data, claimed_benefits)
             for drop_data in data.get("timeBasedDrops", [])
         }
+        
+        
     def __repr__(self) -> str:
         return f"Campaign({self.game!s}, {self.name}, {self.claimed_drops}/{self.total_drops})"
 
@@ -128,7 +130,7 @@ class DropsCampaign:
 
     @property
     def remaining_minutes(self) -> int:
-        return max(d.total_remaining_minutes for d in self.drops)
+        return max((d.remaining_minutes for d in self.drops), default=0)
 
     @property
     def progress(self) -> float:

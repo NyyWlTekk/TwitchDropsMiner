@@ -40,7 +40,7 @@ function handleChannelsClear() {
 }
 
 function handleChannelsBatchUpdate(data) {
-    console.log('[Channels] Processing batch channels update');
+//    console.log('[Channels] Processing batch channels update');
     if (typeof state !== 'undefined') {
         state.channels = {};
         // FIXED: Safe conversion whether payload is Array or Object
@@ -101,19 +101,15 @@ function handleChannelWatching(data) {
 
 function handleChannelWatchingClear() {
     console.log('[Channel] Resetting active watching channel state');
+
     if (typeof state !== 'undefined') {
         state.watching_channel = null;
+        state.currentDrop = null;
     }
-    if (typeof clearWatchingChannel === 'function') {
-        clearWatchingChannel();
+
+    if (typeof syncAdminState === 'function') {
+        syncAdminState();
     }
-    // FIXED: Use safeClearDrop to clear both memory state and UI
-    if (typeof safeClearDrop === 'function') {
-        safeClearDrop();
-    } else if (typeof clearDropProgress === 'function') {
-        clearDropProgress();
-    }
-    syncAdminState();
 }
 
 function getWatchedChannelObject() {
@@ -229,7 +225,7 @@ function updateChannel(channelData) {
 }
 
 function removeChannel(channelId) {
-    console.log(`[Channels] Removing channel ID: '${channelId}'`);
+//    console.log(`[Channels] Removing channel ID: '${channelId}'`);
     delete state.channels[channelId];
     
     // Direct DOM removal if element exists to avoid full re-render
@@ -242,13 +238,13 @@ function removeChannel(channelId) {
 }
 
 function clearChannels() {
-    console.log('[Channels] Clearing all channels from state');
+//    console.log('[Channels] Clearing all channels from state');
     state.channels = {};
     scheduleRenderChannels();
 }
 
 function setWatchingChannel(channelId) {
-    console.log(`[Channels] Setting active watching channel ID: '${channelId}'`);
+//    console.log(`[Channels] Setting active watching channel ID: '${channelId}'`);
     
     // Update watching state and perform targeted DOM class toggles
     Object.values(state.channels).forEach(ch => {
@@ -277,7 +273,7 @@ function setWatchingChannel(channelId) {
 }
 
 function clearWatchingChannel() {
-    console.log('[Channels] Clearing watching state for all channels');
+//    console.log('[Channels] Clearing watching state for all channels');
     Object.values(state.channels).forEach(ch => {
         if (ch.watching) {
             ch.watching = false;
@@ -350,14 +346,14 @@ function resolveGameIconUrl(channel) {
 function renderChannels() {
     const container = document.getElementById('channels-list');
     if (!container) {
-        console.warn('[Channels] Element #channels-list not found in DOM');
+//        console.warn('[Channels] Element #channels-list not found in DOM');
         return;
     }
 
     const t = state.translations || {};
     const channels = Object.values(state.channels);
     if (channels.length === 0) {
-        console.log('[Channels] No channels available to render');
+//        console.log('[Channels] No channels available to render');
         const emptyMsg = t.gui?.channels?.no_channels || 'No channels tracked yet...';
         container.replaceChildren(
             makeElement('p', { class: 'empty-message' }, emptyMsg)
@@ -374,7 +370,7 @@ function renderChannels() {
     });
 
     if (filteredChannels.length === 0) {
-        console.log('[Channels] No channels found matching selected games filter');
+//        console.log('[Channels] No channels found matching selected games filter');
         const emptyMsg = t.gui?.channels?.no_channels_for_games || 'No channels found for selected games...';
         container.replaceChildren(
             makeElement('p', { class: 'empty-message' }, emptyMsg)
@@ -416,7 +412,7 @@ function renderChannels() {
         return totalViewersB - totalViewersA;
     });
 
-    console.log(`[Channels] Rendering ${filteredChannels.length} channel(s) across ${sortedGames.length} game group(s)`);
+//    console.log(`[Channels] Rendering ${filteredChannels.length} channel(s) across ${sortedGames.length} game group(s)`);
 
     container.innerHTML = '';
     sortedGames.forEach(([gameId, group]) => {

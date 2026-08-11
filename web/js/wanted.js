@@ -1,486 +1,382 @@
 ///////////////////////////////////////////////////////////////////////////////
-// WANTED QUEUE MODULE (CLEAN & DIRECT RENDERING)
+// WANTED QUEUE MODULE ////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-/**
- * Main entry point for rendering the Wanted Queue.
- * Updates state and performs DOM node reconciliation for Game Groups.
- */
-function renderWantedItems(tree) {
-    // 1. Aktualizace globálního stavu, pokud byla předána nová data
-    if (tree) {
-        state.wantedItemsTree = tree;
+// Listener na event ze state manageru
+window.addEventListener('stateUpdated', (e) => {
+    const data = e.detail?.wanted_items || window.state?.wanted_items; 
+    if (data !== undefined && data !== null) {
+        renderWantedItems(data);
     }
+});
 
-    const currentTree = state?.wantedItemsTree || [];
+/**
+ * Pomocná funkce pro formátování ISO datumu do čitelného formátu
+ */
+function formatDateTime(isoString) {
+    if (!isoString) return '';
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+
+    return d.toLocaleString([], {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+/**
+ * Převede minuty na nejvyšší časové jednotky (dny, hodiny, minuty)
+ */
+function formatRemainingTime(totalMinutes) {
+    if (!totalMinutes || totalMinutes <= 0) return '0m';
+
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const mins = totalMinutes % 60;
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (mins > 0 || parts.length === 0) parts.push(`${mins}m`);
+
+    return parts.join(' ');
+}
+
+/**
+ * Hlavní renderovací funkce
+ * @param {Array} gamesData - Pole her z backendu
+ */
+function renderWantedItems(gamesData) {
     const container = document.getElementById('wanted-items-list');
     if (!container) return;
 
-    // 2. Zobrazení prázdného stavu
-    if (!currentTree.length) {
-        console.log('[WantedUI] No items to render.');
-        const emptyMsg = state?.translations?.gui?.wanted?.none || 'No wanted drops queued...';
-        container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
-        if (typeof updateOverallProgress === 'function') updateOverallProgress();
+    container.innerHTML = '';
+
+    if (!Array.isArray(gamesData) || gamesData.length === 0) {
+        container.innerHTML = '<p class="empty-message-small">No wanted drops queued...</p>';
         return;
     }
 
-    // 3. Namapování stávajících DOM elementů podle názvu hry
-    const existingGroups = new Map();
-    container.querySelectorAll('.wanted-game-group').forEach(el => {
-        if (el.dataset.gameName) {
-            existingGroups.set(el.dataset.gameName, el);
-        }
-    });
+    gamesData.forEach((game, index) => {
+        const gameGroup = document.createElement('div');
+        gameGroup.className = 'wanted-game-group';
+        if (game.name) gameGroup.setAttribute('data-game-name', game.name);
 
-    const fragment = document.createDocumentFragment();
+        // --- 1. HLAVIČKA HRY ---
+        const gameHeader = document.createElement('div');
+        gameHeader.className = 'wanted-game-header';
 
-    // 4. Aktualizace nebo vytvoření nových herních skupin
-    currentTree.forEach((gameGroup, index) => {
-        const gameName = gameGroup.game_name || gameGroup.name || 'Unknown Game';
-        let groupEl = existingGroups.get(gameName);
+        const gameIndex = document.createElement('span');
+        gameIndex.className = 'wanted-game-index';
+        gameIndex.textContent = `#${index + 1}`;
 
-        if (groupEl) {
-            existingGroups.delete(gameName); // Zachováme v DOMu
-            if (typeof updateGameGroupElement === 'function') {
-                updateGameGroupElement(groupEl, gameGroup, index);
+        const gameIcon = document.createElement('img');
+        gameIcon.className = 'wanted-game-icon';
+        gameIcon.src = game.icon_url || '';
+        gameIcon.alt = game.name || 'Game Icon';
+
+        const gameTitle = document.createElement('span');
+        gameTitle.className = 'wanted-game-title';
+        gameTitle.textContent = game.name || 'Neznámá hra';
+
+        gameHeader.appendChild(gameIndex);
+        gameHeader.appendChild(gameIcon);
+        gameHeader.appendChild(gameTitle);
+
+		// --- VÝPOČET CELKOVÉHO ČASU A POKROKU HRY ---
+		let totalCurrentMin = 0;
+		let totalRequiredMin = 0;
+		let totalRemainingMin = 0;
+		let earliestEndsAt = null;
+
+		const campaigns = game.campaigns || [];
+		campaigns.forEach(campaign => {
+			totalRemainingMin += (campaign.remaining_minutes || 0);
+
+			if (campaign.ends_at) {
+				if (!earliestEndsAt || new Date(campaign.ends_at) < new Date(earliestEndsAt)) {
+					earliestEndsAt = campaign.ends_at;
+				}
+			}
+
+			(campaign.drops || []).forEach(drop => {
+				totalCurrentMin += (drop.current_minutes || 0);
+				totalRequiredMin += (drop.required_minutes || 0);
+			});
+		});
+
+		if (totalRequiredMin > 0) {
+			const gameProgressVal = Math.min(100, Math.round((totalCurrentMin / totalRequiredMin) * 100));
+
+			const badgeContainer = document.createElement('div');
+			badgeContainer.className = 'wanted-game-badge-container';
+
+			const timeBadge = document.createElement('span');
+			timeBadge.className = 'wanted-game-time-badge';
+			
+			// Převod minut na dny/hodiny/minuty
+			const formattedRemaining = formatRemainingTime(totalRemainingMin);
+			const formattedEndDate = formatDateTime(earliestEndsAt);
+			const endsText = formattedEndDate ? ` (do ${formattedEndDate})` : '';
+
+			timeBadge.innerHTML = `${getStatusIconSVG('active')} zbývá ${formattedRemaining}`;
+
+			const gameProgressBar = document.createElement('div');
+			gameProgressBar.className = 'wanted-game-progress-bar';
+
+			const gameProgressFill = document.createElement('div');
+			gameProgressFill.className = 'wanted-game-progress-fill';
+			gameProgressFill.style.width = `${gameProgressVal}%`;
+
+			gameProgressBar.appendChild(gameProgressFill);
+			badgeContainer.appendChild(timeBadge);
+			badgeContainer.appendChild(gameProgressBar);
+
+			gameHeader.appendChild(badgeContainer);
+		}
+
+		gameGroup.appendChild(gameHeader);
+	
+        // --- 2. KAMPANĚ ---
+        const campaignList = document.createElement('div');
+        campaignList.className = 'wanted-campaign-list';
+
+        campaigns.forEach(campaign => {
+            const card = document.createElement('div');
+            if (campaign.id) card.setAttribute('data-campaign-id', campaign.id);
+
+            const drops = campaign.drops || [];
+            const claimedCount = drops.filter(d => d.is_claimed).length;
+
+            // Určení stavu karty a tagu
+            let cardStateClass = 'is-queued';
+            let headerStateClass = 'queued';
+            let statusBadgeClass = 'tag-queued';
+            let statusText = 'Queued';
+
+            const hasMining = drops.some(d => d.is_mining);
+            const hasReady = drops.some(d => d.can_claim);
+            const hasInProgress = drops.some(d => d.is_in_progress);
+            const allClaimed = drops.length > 0 && drops.every(d => d.is_claimed);
+
+            if (allClaimed) {
+                cardStateClass = 'is-claimed';
+                headerStateClass = 'claimed';
+                statusBadgeClass = 'tag-claimed';
+                statusText = 'Claimed';
+            } else if (hasMining) {
+                cardStateClass = 'is-mining';
+                headerStateClass = 'mining';
+                statusBadgeClass = 'tag-mining';
+                statusText = 'Mining';
+            } else if (hasReady) {
+                cardStateClass = 'is-ready';
+                headerStateClass = 'ready';
+                statusBadgeClass = 'tag-ready';
+                statusText = 'Ready';
+            } else if (hasInProgress) {
+                cardStateClass = 'in-progress';
+                headerStateClass = 'in-progress';
+                statusBadgeClass = 'tag-in-progress';
+                statusText = 'In Progress';
             }
-        } else if (typeof renderGameGroupElement === 'function') {
-            groupEl = renderGameGroupElement(gameGroup, index);
-        }
 
-        if (groupEl) {
-            fragment.appendChild(groupEl);
-        }
-    });
+            card.className = `wanted-card ${cardStateClass}`;
 
-    // 5. Odstranění herních skupin, které už ve stromu nejsou
-    existingGroups.forEach(el => el.remove());
+            // --- HLAVIČKA KAMPANĚ (DVOUŘÁDKOVÁ MŘÍŽKA) ---
+            const cardHeader = document.createElement('div');
+            cardHeader.className = `wanted-card-header ${headerStateClass}`;
 
-    // 6. Atomické vložení do DOMu bez problikávání
-    container.replaceChildren(fragment);
+            // 1. ŘÁDEK: Název vlevo, Status badge vpravo
+            const headerTop = document.createElement('div');
+            headerTop.className = 'wanted-card-header-top';
 
-    // 7. Aktualizace celkového progresu
-    if (typeof updateOverallProgress === 'function') {
-        updateOverallProgress();
-    }
-}
+            const campaignLink = document.createElement('a');
+            campaignLink.className = 'wanted-card-campaign-link';
+            campaignLink.href = campaign.url || '#';
+            campaignLink.target = '_blank';
+            campaignLink.rel = 'noopener noreferrer';
+            campaignLink.title = campaign.name || 'Neznámá kampaň';
+            campaignLink.textContent = campaign.name || 'Neznámá kampaň';
 
-/////////////////////////////////////////////////////////////////////////
-// ==================== 2. DOM Builders & Components ====================
-/////////////////////////////////////////////////////////////////////////
+            const statusBadge = document.createElement('span');
+            statusBadge.className = `wanted-status-badge ${statusBadgeClass}`;
+            statusBadge.innerHTML = `${getStatusIconSVG(statusText)} ${statusText}`;
 
+            headerTop.appendChild(campaignLink);
+            headerTop.appendChild(statusBadge);
+            cardHeader.appendChild(headerTop);
 
-////////////////////////////////////////////////////////
-/////////// BARVY KAMPANÍ - AKTIVNÍ PRVKY/////////////
-////////////////////////////////////////////////////
+            // 2. ŘÁDEK: Datum vlevo, Počet dropů vpravo
+            const headerBottom = document.createElement('div');
+            headerBottom.className = 'wanted-card-header-bottom';
 
-/**
- * Generates status badge element for active mining, in-progress, or queued status.
- * Directly consumes pre-extracted campaign state.
- */
-function renderCampaignStatusIndicatorElement(campaign) {
-    const t = state?.translations?.gui?.wanted;
-    const iconGetter = typeof getStatusIconSVG === 'function' ? getStatusIconSVG : () => '';
-
-    let statusClass = 'tag-queued';
-    let label = t?.queued ?? 'Queued';
-    let iconName = 'upcoming';
-
-    if (campaign?.is_mining) {
-        statusClass = 'tag-mining';
-        label = t?.mining ?? 'Mining';
-        iconName = 'active';
-    } else if (campaign?.has_progress) {
-        statusClass = 'tag-in-progress';
-        label = t?.in_progress ?? 'In Progress';
-        iconName = 'in-progress';
-    }
-
-    const badgeEl = makeElement('span', { class: `wanted-status-badge status-tag ${statusClass}` });
-    const iconSvg = iconGetter(iconName);
-
-    badgeEl.innerHTML = `${iconSvg} ${label}`.trim();
-    return badgeEl;
-}
-
-/**
- * Renders a single Game Group container with index, header badge, and campaign cards.
- */
-function renderGameGroupElement(gameGroup, index = 0) {
-    if (!gameGroup || typeof gameGroup !== 'object') {
-        return makeElement('div', { class: 'wanted-game-group' });
-    }
-
-    const gameName = gameGroup.game_name || 'Unknown Game';
-    const campaigns = gameGroup.campaigns || [];
-    const iconUrl = gameGroup.game_icon || '';
-
-    // Čas v minutách už spočítala extractWantedItemsData
-    const safeMins = Math.max(0, Number(gameGroup.total_remaining_minutes || 0));
-    const hours = Math.floor(safeMins / 60);
-    const remainderMins = safeMins % 60;
-    const timeText = hours > 0 ? `${hours}h ${remainderMins}m` : `${remainderMins}m`;
-    const iconGetter = typeof getStatusIconSVG === 'function' ? getStatusIconSVG : () => '';
-
-    const groupEl = makeElement('div', { class: 'wanted-game-group', 'data-game-name': gameName });
-
-    const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', h => {
-        h.appendChild(makeElement('span', { class: 'wanted-game-index' }, `#${index + 1}`));
-        
-        if (iconUrl) {
-            if (typeof makeImageElement === 'function') {
-                h.appendChild(makeImageElement(iconUrl, gameName, 'wanted-game-icon'));
+            if (campaign.starts_at && campaign.ends_at) {
+                const datesDiv = document.createElement('div');
+                datesDiv.className = 'wanted-campaign-dates';
+                const startFmt = formatDateTime(campaign.starts_at);
+                const endFmt = formatDateTime(campaign.ends_at);
+                datesDiv.innerHTML = `${getStatusIconSVG('upcoming')} ${startFmt} – ${endFmt}`;
+                headerBottom.appendChild(datesDiv);
             } else {
-                h.appendChild(makeElement('img', { src: iconUrl, alt: gameName, class: 'wanted-game-icon' }));
+                // Prázdný prvek pro zachování flexbox layoutu vpravo, pokud chybí datum
+                headerBottom.appendChild(document.createElement('div'));
             }
-        }
 
-        h.appendChild(makeElement('span', { class: 'wanted-game-title' }, gameName));
-
-        // Časový badge
-        const badgeEl = makeElement('span', { class: 'wanted-game-time-badge', 'data-game-badge': gameName });
-        badgeEl.innerHTML = `${iconGetter('active')} ${timeText}`.trim();
-        h.appendChild(badgeEl);
-    });
-
-    groupEl.appendChild(headerEl);
-
-    // Generování jednotlivých karet kampaní
-    const campaignListEl = makeElement('div', { class: 'wanted-campaign-list' });
-    campaigns.forEach(campaign => {
-        if (typeof renderCampaignCardElement === 'function') {
-            campaignListEl.appendChild(renderCampaignCardElement(campaign));
-        }
-    });
-
-    groupEl.appendChild(campaignListEl);
-
-    return groupEl;
-}
-
-/**
- * Updates the remaining time badge text and icon in DOM.
- */
- // helper for badges icons nad time --- need to do parallel/serial minig !!!
-function updateGameGroupBadge(badgeElOrGameName, totalRemainingMins = 0) {
-    let badgeEl = badgeElOrGameName;
-
-    if (typeof badgeElOrGameName === 'string') {
-        badgeEl = document.querySelector(`.wanted-game-group[data-game-name="${CSS.escape(badgeElOrGameName)}"] .wanted-game-time-badge`);
-    }
-
-    if (!badgeEl) return;
-
-    const mins = Math.max(0, isNaN(totalRemainingMins) ? 0 : Number(totalRemainingMins));
-    const hours = Math.floor(mins / 60);
-    const remainderMins = mins % 60;
-    const timeText = hours > 0 ? `${hours}h ${remainderMins}m` : `${remainderMins}m`;
-    const icon = typeof getStatusIconSVG === 'function' ? getStatusIconSVG('active') : '';
-    
-    const newHTML = `${icon} ${timeText}`.trim();
-
-    if (badgeEl.innerHTML !== newHTML) {
-        badgeEl.innerHTML = newHTML;
-    }
-} ///// helpep ^^^^^ for bottom function
-
-/**
- * Updates index, campaigns, and time badges for an existing game group DOM node.
- */
-function updateGameGroupElement(groupEl, gameGroup, index = 0) {
-    if (!groupEl || !gameGroup) return;
-
-    const idxEl = groupEl.querySelector('.wanted-game-index');
-    if (idxEl) {
-        idxEl.textContent = `#${index + 1}`;
-    }
-
-    const campaignListEl = groupEl.querySelector('.wanted-campaign-list');
-    if (campaignListEl) {
-        const campaigns = Array.isArray(gameGroup.campaigns) ? gameGroup.campaigns : [];
-        if (typeof renderCampaignCardElement === 'function') {
-            campaignListEl.replaceChildren(
-                ...campaigns.map(c => renderCampaignCardElement(c))
-            );
-        }
-    }
-
-    const badgeEl = groupEl.querySelector('.wanted-game-time-badge');
-    if (badgeEl && typeof updateGameGroupBadge === 'function') {
-        updateGameGroupBadge(badgeEl, gameGroup.total_remaining_minutes);
-    }
-}
-
-/**
- * Creates a campaign card container element using pre-extracted data.
- */
-function renderCampaignCardElement(campaign) {
-    if (!campaign || typeof campaign !== 'object') {
-        return makeElement('div', { class: 'wanted-campaign-card' });
-    }
-
-    // CSS třídy i ID kampaně jsou přímo v objektu z extractWantedItemsData
-    return makeElement('div', {
-        class: campaign.card_classes || 'wanted-campaign-card',
-        'data-campaign-id': String(campaign.id || campaign.campaign_id || '')
-    }, '', cardEl => {
-        if (typeof renderCampaignHeaderElement === 'function') {
-            const headerEl = renderCampaignHeaderElement(campaign);
-            if (headerEl) cardEl.appendChild(headerEl);
-        }
-
-        if (typeof renderCampaignBodyElement === 'function') {
-            const bodyEl = renderCampaignBodyElement(campaign);
-            if (bodyEl) cardEl.appendChild(bodyEl);
-        }
-    });
-}
-
-/**
- * Formats campaign start and end ISO dates into a localized human-readable range.
- */
- // time helper
-function formatCampaignDates(startIso, endIso) {
-    if (!startIso || !endIso) return '';
-    try {
-        const start = new Date(startIso);
-        const end = new Date(endIso);
-
-        // Guard against "Invalid Date"
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) return '';
-
-        const formatOpts = { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' };
-        return `${start.toLocaleDateString(undefined, formatOpts)} – ${end.toLocaleDateString(undefined, formatOpts)}`;
-    } catch (e) {
-        return '';
-    }
-} // heleper ^^^ for bottom function
-
-/**
- * Renders header for a campaign card with name, badges, and active dates.
- */
-function renderCampaignHeaderElement(campaign) {
-    if (!campaign || typeof campaign !== 'object') return null;
-
-    const claimedCount = campaign.claimed_drops_count ?? 0;
-    const totalCount = campaign.total_drops_count ?? 0;
-    const campaignName = campaign.name || 'Campaign';
-    const campaignUrl = campaign.url || '#';
-    const iconGetter = typeof getStatusIconSVG === 'function' ? getStatusIconSVG : () => '';
-
-    // Stav pro třídu záhlaví (mining / in-progress / queued)
-    const statusClass = campaign.is_mining 
-        ? 'mining' 
-        : (campaign.has_progress ? 'in-progress' : 'queued');
-
-    return makeElement('div', { class: `wanted-card-header ${statusClass}` }, '', h => {
-        // 1. ŘÁDEK: Název kampaně + (X/Y) odznak vpravo
-        const titleRow = makeElement('div', { class: 'wanted-card-header-main' }, '', row => {
-            row.appendChild(makeElement('a', {
-                href: campaignUrl,
-                target: '_blank',
-                rel: 'noopener noreferrer',
-                class: 'wanted-card-campaign-link',
-                title: campaignName
-            }, campaignName));
-
-            row.appendChild(makeElement('span', { class: 'wanted-campaign-badge' }, `(${claimedCount}/${totalCount})`));
-        });
-        h.appendChild(titleRow);
-
-        // 2. ŘÁDEK: Datum trvání kampaně
-        if (typeof formatCampaignDates === 'function') {
-            const dateText = formatCampaignDates(campaign.starts_at, campaign.ends_at);
-            if (dateText) {
-                const datesEl = makeElement('div', { class: 'wanted-campaign-dates' });
-                datesEl.innerHTML = `${iconGetter('upcoming')} ${dateText}`.trim();
-                h.appendChild(datesEl);
+            if (drops.length > 0) {
+                const campaignBadge = document.createElement('span');
+                campaignBadge.className = 'wanted-campaign-badge';
+                campaignBadge.textContent = `${claimedCount}/${drops.length} Drops`;
+                headerBottom.appendChild(campaignBadge);
             }
-        }
 
-        // 3. ŘÁDEK: Status badge samostatně dole
-        const statusBadge = typeof renderCampaignStatusIndicatorElement === 'function'
-            ? renderCampaignStatusIndicatorElement(campaign)
-            : makeElement('span', { class: `wanted-status-badge status-tag tag-${statusClass}` }, statusClass);
+            cardHeader.appendChild(headerBottom);
+            card.appendChild(cardHeader);
 
-        if (statusBadge) {
-            const statusRow = makeElement('div', { class: 'wanted-card-header-status-row' });
-            statusRow.appendChild(statusBadge);
-            h.appendChild(statusRow);
-        }
-    });
-}
+            // --- 3. JEDNOTLIVÉ DROPY ---
+            if (drops.length > 0) {
+                const cardBody = document.createElement('div');
+                cardBody.className = 'wanted-card-body';
 
-/**
- * Renders campaign body container containing drop items.
- */
-function renderCampaignBodyElement(campaign) {
-    if (!campaign || typeof campaign !== 'object') return null;
+                drops.forEach(drop => {
+                    const dropItem = document.createElement('div');
+                    dropItem.className = `wanted-drop-item ${drop.is_claimed ? 'is-claimed' : ''} ${drop.can_claim ? 'can-claim' : ''}`.trim();
+                    if (drop.id) dropItem.setAttribute('data-drop-id', drop.id);
 
-    const dropContainer = makeElement('div', { class: 'wanted-drops-container' });
-    const drops = campaign.drops || [];
+                    // --- IKONA DROPU (Kompaktní 28x28) ---
+                    const imgUrl = drop.image_url || drop.icon_url;
+                    if (imgUrl) {
+                        const dropImg = document.createElement('img');
+                        dropImg.className = 'wanted-drop-icon';
+                        dropImg.src = imgUrl;
+                        dropImg.alt = drop.name || 'Drop';
+                        dropImg.loading = 'lazy';
+                        dropImg.style.width = '28px';
+                        dropImg.style.height = '28px';
+                        dropImg.style.objectFit = 'contain';
+                        dropImg.style.flexShrink = '0';
+                        dropImg.style.borderRadius = '4px';
+                        dropImg.onerror = function() { this.style.display = 'none'; };
+                        dropItem.appendChild(dropImg);
+                    } else {
+                        const dropIconWrapper = document.createElement('div');
+                        dropIconWrapper.className = 'wanted-drop-icon-fallback';
+                        dropIconWrapper.style.width = '28px';
+                        dropIconWrapper.style.height = '28px';
+                        dropIconWrapper.style.flexShrink = '0';
+                        dropIconWrapper.style.display = 'flex';
+                        dropIconWrapper.style.alignItems = 'center';
+                        dropIconWrapper.style.justifyContent = 'center';
+                        dropIconWrapper.innerHTML = getStatusIconSVG('box');
+                        dropItem.appendChild(dropIconWrapper);
+                    }
 
-    // Dropy už jsou z extractWantedItemsData seřazené
-    drops.forEach((drop, index) => {
-        if (typeof renderDropItemElement === 'function') {
-            dropContainer.appendChild(renderDropItemElement(drop, index + 1, campaign.id));
-        }
-    });
+                    // Název dropu a Benefity (pills)
+                    const dropInfo = document.createElement('div');
+                    dropInfo.className = 'wanted-drop-info';
 
-    return makeElement('div', { class: 'wanted-card-body' }, '', b => b.appendChild(dropContainer));
-}
+                    const dropName = document.createElement('span');
+                    dropName.className = 'wanted-drop-name';
+                    dropName.textContent = drop.name || 'Drop';
+                    dropInfo.appendChild(dropName);
 
-/**
- * Renders an individual drop item row with progress status, thumbnail images, and benefits.
- */
-function renderDropItemElement(drop, index = 1, campaignId = '') {
-    if (!drop) return makeElement('div', { class: 'wanted-drop-item' });
+                    const rawName = String(drop.name || '').toLowerCase();
+                    if (Array.isArray(drop.benefits)) {
+                        drop.benefits.forEach(benefit => {
+                            const benefitText = typeof benefit === 'string' ? benefit : benefit?.name;
+                            if (!benefitText) return;
+                            const cleanBenefit = benefitText.trim().toLowerCase();
+                            
+                            // Vyfiltrování duplicitního textu v benefitech
+                            if (cleanBenefit && cleanBenefit !== rawName && !rawName.includes(cleanBenefit)) {
+                                const pill = document.createElement('span');
+                                pill.className = 'wanted-benefit-pill';
+                                pill.textContent = benefitText;
+                                dropInfo.appendChild(pill);
+                            }
+                        });
+                    }
 
-    const dropId = String(drop.id || drop.drop_id || `drop-${index}`).trim();
-    const dropName = drop.name || 'Drop';
-    const isClaimed = Boolean(drop.is_claimed);
-    const canClaim = Boolean(drop.can_claim);
-    const required = Number(drop.required_minutes || 0);
+                    dropItem.appendChild(dropInfo);
 
-    let current = isClaimed 
-        ? required 
-        : Math.round(Number(drop.current_minutes || drop.progress || 0));
+                    // Pravá část: Stav a progress bar dropu
+                    const dropStatus = document.createElement('div');
+                    dropStatus.className = 'wanted-drop-status';
 
-    // Synchronizace s živým dropem v globálním stavu (pokud existuje)
-    const activeDrop = state?.currentDrop || state?.current_drop;
-    if (activeDrop && !isClaimed) {
-        const activeDropId = String(activeDrop.drop_id || activeDrop.id || '').trim();
-        if (activeDropId && activeDropId === dropId) {
-            current = Math.round(Number(activeDrop.current_minutes ?? activeDrop.progress ?? 0));
-        }
-    }
+                    const cur = formatRemainingTime(drop.current_minutes) ?? 0;
+					const req = formatRemainingTime(drop.required_minutes) ?? 0;
+                    let pct = drop.progress ?? 0;
 
-    const imageUrl = drop.image_url || null;
+                    const statusTextSpan = document.createElement('span');
+                    
+                    if (drop.is_claimed) {
+                        statusTextSpan.className = 'status-tag tag-claimed';
+                        statusTextSpan.innerHTML = `${getStatusIconSVG('claimed')} Claimed (100%)`;
+                    } else if (drop.can_claim || (req > 0 && pct >= 100)) {
+                        statusTextSpan.className = 'status-tag tag-ready';
+                        statusTextSpan.innerHTML = `${getStatusIconSVG('ready')} Ready (100%)`;
+                    } else {
+                        statusTextSpan.className = 'status-tag tag-progress wanted-drop-text';
+                        statusTextSpan.innerHTML = `${getStatusIconSVG('active')} ${cur} / ${req} (${pct}%)`;
+                    }
+                    
+                    dropStatus.appendChild(statusTextSpan);
 
-    return makeElement('div', {
-        class: `wanted-drop-item ${isClaimed ? 'is-claimed' : ''} ${canClaim ? 'can-claim' : ''}`.trim(),
-        'data-wanted-drop-id': dropId,
-        'data-drop-id': dropId,
-        'data-drop-name': String(dropName).trim(),
-        'data-campaign-id': String(campaignId),
-        'data-required-minutes': String(required)
-    }, '', el => {
-        
-        // 1. Náhledový obrázek
-        if (imageUrl) {
-            const imgEl = makeElement('img', { 
-                class: 'wanted-drop-image', 
-                src: imageUrl, 
-                alt: dropName,
-                loading: 'lazy'
-            });
-            imgEl.onerror = () => { imgEl.style.display = 'none'; };
-            el.appendChild(imgEl);
-        }
+                    const progressBar = document.createElement('div');
+                    progressBar.className = 'wanted-drop-progress-bar';
 
-        // 2. Informační blok (Název + Benefit pilulky)
-        const infoEl = makeElement('div', { class: 'wanted-drop-info' }, '', info => {
-            const displayName = index ? `Drop ${index}: ${dropName}` : dropName;
-            info.appendChild(makeElement('span', { class: 'wanted-drop-name' }, displayName));
+                    const progressFill = document.createElement('div');
+                    progressFill.className = 'wanted-drop-progress-fill';
+                    progressFill.style.width = `${drop.is_claimed || drop.can_claim ? 100 : pct}%`;
 
-            const rawName = (dropName || '').toLowerCase().replace(/^\d+[\.\)]?\s*/, '').trim();
-            const benefits = drop.benefits || [];
+                    progressBar.appendChild(progressFill);
+                    dropStatus.appendChild(progressBar);
+                    dropItem.appendChild(dropStatus);
 
-            benefits.forEach(benefit => {
-                if (!benefit) return;
-                const benefitText = typeof benefit === 'string' ? benefit : (benefit.name || benefit.title || '');
-                const cleanBenefit = benefitText.trim().toLowerCase();
-                
-                if (cleanBenefit && !rawName.includes(cleanBenefit) && cleanBenefit !== rawName) {
-                    info.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefitText));
-                }
-            });
+                    cardBody.appendChild(dropItem);
+                });
+
+                card.appendChild(cardBody);
+            }
+
+            campaignList.appendChild(card);
         });
-        el.appendChild(infoEl);
 
-        // 3. Stavový indikátor dropu
-        const statusEl = makeElement('div', { class: 'wanted-drop-status' });
-        if (typeof renderDropStatusHTML === 'function') {
-            renderDropStatusHTML(statusEl, { isClaimed, canClaim, required, current });
-        }
-        el.appendChild(statusEl);
+        gameGroup.appendChild(campaignList);
+        container.appendChild(gameGroup);
     });
 }
 
 /**
- * Renders status tags and progress bar HTML inside a given status container.
- * Consumes clean drop data originating from wantedTree / extractWantedItemsData.
+ * Pomocná funkce pro vložení SVG ikon přesně podle názvů z CSS předlohy
  */
- // IKONY
-function renderDropStatusHTML(statusEl, { isClaimed = false, canClaim = false, required = 0, current = 0 } = {}) {
-    if (!statusEl) return;
-
-    const t = state?.translations?.gui?.wanted;
-    const iconGetter = typeof getStatusIconSVG === 'function' ? getStatusIconSVG : () => '';
-
-    // Bezpečné ošetření čísel proti NaN a záporným hodnotám
-    const safeRequired = Math.max(0, Number(required) || 0);
-    const safeCurrent = Math.max(0, Number(current) || 0);
-
-    if (isClaimed) {
-        const label = t?.claimed || 'Claimed';
-        statusEl.innerHTML = `
-            <span class="status-tag tag-claimed">${iconGetter('completed')} ${label} (100%)</span>
-            ${safeRequired > 0 ? '<div class="wanted-drop-progress"><div class="wanted-drop-progress-bar bar-fill" style="width: 100%;"></div></div>' : ''}
-        `;
-    } else if (canClaim || (safeRequired > 0 && safeCurrent >= safeRequired)) {
-        const label = t?.ready || 'Ready to claim!';
-        statusEl.innerHTML = `
-            <span class="status-tag tag-ready">${iconGetter('ready')} ${label} (100%)</span>
-            <div class="wanted-drop-progress"><div class="wanted-drop-progress-bar bar-fill" style="width: 100%;"></div></div>
-        `;
-    } else if (safeRequired > 0) {
-        const rawPct = Math.round((safeCurrent / safeRequired) * 100);
-        const pct = Math.min(100, Math.max(0, isNaN(rawPct) ? 0 : rawPct));
-
-        statusEl.innerHTML = `
-            <span class="status-tag tag-progress wanted-drop-text">${iconGetter('active')} ${safeCurrent} / ${safeRequired} min</span>
-            <div class="wanted-drop-progress">
-                <div class="wanted-drop-progress-bar bar-fill" style="width: ${pct}%;"></div>
-            </div>
-        `;
-    } else {
-        statusEl.innerHTML = '';
-    }
-}
-
-/**
- * Generates a consistent unique identifier string for a drop item.
- */
-function getDropUniqueId(drop, index = 1) {
-    if (!drop || typeof drop !== 'object') return `drop-${index}`;
-    return String(drop.id || drop.drop_id || drop.uuid || `drop-${index}`).trim();
-}
-
-////////////////////////////////////////////////////////
-// ==================== ICON HELPER ====================
-////////////////////////////////////////////////////////
-
-/**
- * Returns inline SVG string corresponding to a status class or state.
- */
-function getStatusIconSVG(statusClass) {
-    if (!statusClass) return '';
-
-    const key = String(statusClass).trim().toLowerCase();
+function getStatusIconSVG(statusName) {
+    const status = String(statusName || '').toLowerCase().trim();
 
     const svgCheck = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`;
     const svgBox = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`;
-    const svgCross = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
     const svgClock = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`;
+    const svgMining = `<svg class="status-icon icon-mining" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
 
-    const icons = {
-        claimed: svgCheck, completed: svgCheck, 'drop-claimed': svgCheck,
-        'can-claim': svgBox, ready: svgBox, 'drop-ready': svgBox,
-        expired: svgCross, 'drop-expired': svgCross,
-        active: svgClock, 'drop-active': svgClock, upcoming: svgClock, 'in-progress': svgClock
-    };
-
-    return icons[key] || '';
+    switch (status) {
+        case 'mining':
+            return svgMining;
+        case 'ready':
+        case 'ready to claim':
+        case 'box':
+            return svgBox;
+        case 'claimed':
+        case 'completed':
+            return svgCheck;
+        case 'in progress':
+        case 'in-progress':
+        case 'progress':
+        case 'active':
+        case 'upcoming':
+        case 'queued':
+        default:
+            return svgClock;
+    }
 }

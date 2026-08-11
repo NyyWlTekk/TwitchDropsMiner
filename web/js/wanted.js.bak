@@ -1,0 +1,307 @@
+///////////////////////////////////////////////////////////////////////////////
+// WANTED QUEUE MODULE (10s THROTTLED RENDERING) //////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+// Event listener s 10s throttlingem
+window.addEventListener('stateUpdated', (event) => {
+	
+	let lastRenderTime = 0;
+	let renderTimeout = null;
+	let latestWantedTree = null;
+	const RENDER_INTERVAL_MS = 1000;
+	
+    // 1. Vždy si uložíme nejnovější příchozí data
+    latestWantedTree = event.detail?.wantedTree 
+        || window.state?.wanted_items 
+        || [];
+
+    const now = Date.now();
+    const timeSinceLast = now - lastRenderTime;
+
+    // 2. Pokud už uplynulo 10 vteřin (nebo jde o první render), vykreslíme HNED
+    if (timeSinceLast >= RENDER_INTERVAL_MS) {
+        if (renderTimeout) {
+            clearTimeout(renderTimeout);
+            renderTimeout = null;
+        }
+        lastRenderTime = now;
+        renderWantedItems(latestWantedTree);
+        if (typeof updateOverallProgress === 'function') updateOverallProgress();
+    } 
+    // 3. Pokud data chodí dál uvnitř 10s okna, naplánujeme dojezd s nejnovějšími daty
+    else if (!renderTimeout) {
+        renderTimeout = setTimeout(() => {
+            lastRenderTime = Date.now();
+            renderWantedItems(latestWantedTree);
+            if (typeof updateOverallProgress === 'function') updateOverallProgress();
+            renderTimeout = null;
+        }, RENDER_INTERVAL_MS - timeSinceLast);
+    }
+});
+
+/**
+ * Jediná hlavní renderovací funkce.
+ * Kompletně sestaví HTML strom a provede bleskový DOM morphing šetrný k GIF animacím.
+ */
+function renderWantedItems(tree) {
+    const currentTree = tree || window.state?.wanted_items || [];
+    const container = document.getElementById('wanted-items-list');
+    if (!container) return;
+
+    // 1. Prázdný stav
+    if (!currentTree.length) {
+        console.log('[WantedUI] No items to render.');
+        const emptyMsg = window.state?.translations?.gui?.wanted?.none || 'No wanted drops queued...';
+        container.innerHTML = `<p class="empty-message-small">${emptyMsg}</p>`;
+        return;
+    }
+
+    // Načtení globálního stavu a překladů
+    const t = window.state?.translations?.gui?.wanted;
+    const activeDrop = window.state?.currentDrop || window.state?.current_drop;
+    const activeDropId = String(activeDrop?.drop_id || activeDrop?.id || '').trim();
+
+    // 2. Kompletní generování HTML v jedné funkci
+    const innerHTML = currentTree.map((gameGroup, gameIdx) => {
+        if (!gameGroup || typeof gameGroup !== 'object') return '';
+
+        const gameName = gameGroup.game_name || gameGroup.name || 'Unknown Game';
+        const campaigns = gameGroup.campaigns || [];
+        const iconUrl = gameGroup.game_icon || '';
+
+        // Výpočet času hry
+        const safeMins = Math.max(0, Number(gameGroup.total_remaining_minutes || 0));
+        const hours = Math.floor(safeMins / 60);
+        const remainderMins = safeMins % 60;
+        const timeText = hours > 0 ? `${hours}h ${remainderMins}m` : `${remainderMins}m`;
+
+        const iconHTML = iconUrl 
+            ? `<img src="${iconUrl}" alt="${gameName}" class="wanted-game-icon" />` 
+            : '';
+
+        // --- MAPOVÁNÍ KAMPANÍ ---
+        const campaignsHTML = campaigns.map((campaign) => {
+            if (!campaign || typeof campaign !== 'object') return '';
+
+            const campaignId = String(campaign.id || campaign.campaign_id || '');
+            const cardClasses = campaign.card_classes || 'wanted-campaign-card';
+            const claimedCount = campaign.claimed_drops_count ?? 0;
+            const totalCount = campaign.total_drops_count ?? 0;
+            const campaignName = campaign.name || 'Campaign';
+            const campaignUrl = campaign.url || '#';
+
+            // Třídy a status tag kampaně
+            const statusClass = campaign.is_mining 
+                ? 'mining' 
+                : (campaign.has_progress ? 'in-progress' : 'queued');
+
+            let tagClass = 'tag-queued';
+            let tagLabel = t?.queued ?? 'Queued';
+            let tagIcon = 'upcoming';
+
+            if (campaign.is_mining) {
+                tagClass = 'tag-mining';
+                tagLabel = t?.mining ?? 'Mining';
+                tagIcon = 'active';
+            } else if (campaign.has_progress) {
+                tagClass = 'tag-in-progress';
+                tagLabel = t?.in_progress ?? 'In Progress';
+                tagIcon = 'in-progress';
+            }
+
+            const dateText = formatCampaignDates(campaign.starts_at, campaign.ends_at);
+            const datesHTML = dateText 
+                ? `<div class="wanted-campaign-dates">${getStatusIconSVG('upcoming')} ${dateText}</div>` 
+                : '';
+
+            // --- MAPOVÁNÍ DROPŮ ---
+            const drops = campaign.drops || [];
+            const dropsHTML = drops.map((drop, dropIdx) => {
+                if (!drop) return '<div class="wanted-drop-item"></div>';
+
+                const dropId = String(drop.id || drop.drop_id || `drop-${dropIdx + 1}`).trim();
+                const dropName = drop.name || 'Drop';
+                const isClaimed = Boolean(drop.is_claimed);
+                const canClaim = Boolean(drop.can_claim);
+                const required = Number(drop.required_minutes || 0);
+
+                // Synchronizace s živým aktivním dropem
+                const isCurrentlyActive = activeDrop && !isClaimed && activeDropId === dropId;
+                const minutes = isCurrentlyActive
+                    ? (activeDrop.current_minutes ?? activeDrop.progress ?? 0)
+                    : (drop.current_minutes ?? drop.progress ?? 0);
+
+                const current = isClaimed ? required : Math.round(Number(minutes));
+                const imageUrl = drop.image_url || null;
+
+                const imgHTML = imageUrl 
+                    ? `<img class="wanted-drop-image" src="${imageUrl}" alt="${dropName}" loading="lazy" style="width: 32px; height: 32px; object-fit: contain; flex-shrink: 0;" onerror="this.style.display='none'" />` 
+                    : '';
+
+                const displayName = (dropIdx + 1) ? `Drop ${dropIdx + 1}: ${dropName}` : dropName;
+                const rawName = dropName.toLowerCase().replace(/^\d+[\.\)]?\s*/, '').trim();
+
+                // Benefity
+                const benefitsHTML = (drop.benefits || []).map(benefit => {
+                    if (!benefit) return '';
+                    const benefitText = typeof benefit === 'string' ? benefit : (benefit.name || benefit.title || '');
+                    const cleanBenefit = benefitText.trim().toLowerCase();
+                    if (cleanBenefit && cleanBenefit !== rawName && !rawName.includes(cleanBenefit)) {
+                        return `<span class="wanted-benefit-pill">${benefitText}</span>`;
+                    }
+                    return '';
+                }).join('');
+
+                // Status dropu & Progress bar
+                let dropStatusHTML = '';
+                if (isClaimed) {
+                    const label = t?.claimed || 'Claimed';
+                    dropStatusHTML = `
+                        <span class="status-tag tag-claimed">${getStatusIconSVG('completed')} ${label} (100%)</span>
+                        ${required > 0 ? '<div class="wanted-drop-progress-bar"><div class="wanted-drop-progress-fill" style="width: 100%;"></div></div>' : ''}
+                    `;
+                } else if (canClaim || (required > 0 && current >= required)) {
+                    const label = t?.ready || 'Ready to claim!';
+                    dropStatusHTML = `
+                        <span class="status-tag tag-ready">${getStatusIconSVG('ready')} ${label} (100%)</span>
+                        <div class="wanted-drop-progress-bar"><div class="wanted-drop-progress-fill" style="width: 100%;"></div></div>
+                    `;
+                } else if (required > 0) {
+                    const pct = Math.min(100, Math.max(0, Math.round((current / required) * 100)));
+                    dropStatusHTML = `
+                        <span class="status-tag tag-progress wanted-drop-text">${getStatusIconSVG('active')} ${current} / ${required} min</span>
+                        <div class="wanted-drop-progress-bar">
+                            <div class="wanted-drop-progress-fill" style="width: ${pct}%;"></div>
+                        </div>
+                    `;
+                }
+
+                const dropClasses = `wanted-drop-item ${isClaimed ? 'is-claimed' : ''} ${canClaim ? 'can-claim' : ''}`.trim();
+
+                return `
+                    <div class="${dropClasses}"
+                         data-wanted-drop-id="${dropId}"
+                         data-drop-id="${dropId}"
+                         data-drop-name="${String(dropName).trim()}"
+                         data-campaign-id="${String(campaignId)}"
+                         data-required-minutes="${String(required)}">
+                        ${imgHTML}
+                        <div class="wanted-drop-info">
+                            <span class="wanted-drop-name">${displayName}</span>
+                            ${benefitsHTML}
+                        </div>
+                        <div class="wanted-drop-status">
+                            ${dropStatusHTML}
+                        </div>
+                    </div>
+                `.trim();
+            }).join('');
+
+            return `
+                <div class="${cardClasses}" data-campaign-id="${campaignId}">
+                    <div class="wanted-card-header ${statusClass}">
+                        <div class="wanted-card-header-main">
+                            <a href="${campaignUrl}" target="_blank" rel="noopener noreferrer" class="wanted-card-campaign-link" title="${campaignName}">${campaignName}</a>
+                            <span class="wanted-campaign-badge">(${claimedCount}/${totalCount})</span>
+                        </div>
+                        ${datesHTML}
+                        <div class="wanted-card-header-status-row">
+                            <span class="wanted-status-badge status-tag ${tagClass}">${getStatusIconSVG(tagIcon)} ${tagLabel}</span>
+                        </div>
+                    </div>
+                    <div class="wanted-card-body">
+                        <div class="wanted-drops-container">
+                            ${dropsHTML}
+                        </div>
+                    </div>
+                </div>
+            `.trim();
+        }).join('');
+
+        return `
+            <div class="wanted-game-group" data-game-name="${gameName}">
+                <div class="wanted-game-header">
+                    <span class="wanted-game-index">#${gameIdx + 1}</span>
+                    ${iconHTML}
+                    <span class="wanted-game-title">${gameName}</span>
+                    <span class="wanted-game-time-badge" data-game-badge="${gameName}">
+                        ${getStatusIconSVG('active')} ${timeText}
+                    </span>
+                </div>
+                <div class="wanted-campaign-list">
+                    ${campaignsHTML}
+                </div>
+            </div>
+        `.trim();
+    }).join('');
+
+    const newContainerHTML = `<div id="wanted-items-list">${innerHTML}</div>`;
+
+    // 3. Atomický update přes Morphdom
+    const morph = typeof morphdom === 'function' ? morphdom : window.morphdom;
+	console.log(morph)
+    if (morph) {
+        morph(container, newContainerHTML, {
+            getNodeKey: (node) => {
+                if (node.dataset) {
+                    if (node.dataset.gameName) return `game-${node.dataset.gameName}`;
+                    if (node.dataset.campaignId) return `campaign-${node.dataset.campaignId}`;
+                    if (node.dataset.dropId) return `drop-${node.dataset.dropId}`;
+                }
+                return node.id;
+            },
+            // ZABRÁNI RESTARTU GIFŮ:
+            onBeforeElUpdated: (fromEl, toEl) => {
+                if (fromEl.tagName === 'IMG' && toEl.tagName === 'IMG') {
+                    const fromSrc = fromEl.getAttribute('src') || fromEl.src;
+                    const toSrc = toEl.getAttribute('src') || toEl.src;
+                    
+                    // Pokud je URL stejná, morphdom na tento prvek vůbec nesáhne
+                    if (fromSrc && fromSrc === toSrc) {
+                        return false; 
+                    }
+                }
+                return true;
+            }
+        });
+    } else {
+        container.innerHTML = innerHTML;
+    }
+}
+
+////////////////////////////////////////////////////////
+// ==================== POMOCNÉ FUNKCE =================
+////////////////////////////////////////////////////////
+
+function formatCampaignDates(startIso, endIso) {
+    if (!startIso || !endIso) return '';
+    try {
+        const start = new Date(startIso);
+        const end = new Date(endIso);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return '';
+
+        const formatOpts = { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' };
+        return `${start.toLocaleDateString(undefined, formatOpts)} – ${end.toLocaleDateString(undefined, formatOpts)}`;
+    } catch (e) {
+        return '';
+    }
+}
+
+function getStatusIconSVG(statusClass) {
+    if (!statusClass) return '';
+    const key = String(statusClass).trim().toLowerCase();
+
+    const svgCheck = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`;
+    const svgBox = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-4c0-2.21-1.79-4-4-4S8 3.79 8 6H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM12 4c1.1 0 2 .89 2 2h-4c0-1.11.9-2 2-2zM4 20V8h4v2h2V8h4v2h2V8h4v12H4z"/></svg>`;
+    const svgCross = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
+    const svgClock = `<svg class="status-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`;
+
+    const icons = {
+        claimed: svgCheck, completed: svgCheck, 'drop-claimed': svgCheck,
+        'can-claim': svgBox, ready: svgBox, 'drop-ready': svgBox,
+        expired: svgCross, 'drop-expired': svgCross,
+        active: svgClock, 'drop-active': svgClock, upcoming: svgClock, 'in-progress': svgClock
+    };
+
+    return icons[key] || '';
+}

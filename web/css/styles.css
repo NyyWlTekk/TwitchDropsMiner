@@ -2,6 +2,8 @@
    01. GLOBAL, BASE STYLES & VARIABLES
    =================================================================== */
 
+@import "wanted.css";
+
 * {
     margin: 0;
     padding: 0;
@@ -969,6 +971,68 @@ header h1 {
    09. DROP PROGRESS & BENEFIT ITEMS
    =================================================================== */
 
+/* Hlavička hry/kampaně */
+.drop-game-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 10px 0;
+}
+
+.game-icon-container {
+    width: 54px;
+    height: 72px;
+    min-width: 54px;
+    min-height: 72px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.drop-header-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.drop-game-text-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+}
+
+.drop-header-title {
+    font-weight: 700;
+    font-size: 1.15em;
+    color: #fff;
+    letter-spacing: 0.2px;
+}
+
+.drop-header-subtitle {
+    font-size: 0.9em;
+    font-weight: 500;
+    color: #a970ff;
+    text-decoration: none;
+    transition: color 0.2s, text-decoration 0.2s;
+}
+
+.drop-header-subtitle:hover {
+    color: #bf94ff;
+    text-decoration: underline;
+}
+
+.drop-header-subtitle.disabled {
+    pointer-events: none;
+}
+
 .drop-name {
     font-weight: bold;
     font-size: 1rem;
@@ -1100,30 +1164,6 @@ header h1 {
     min-width: 0;
 }
 
-/* Samotná položka odměny uvnitř */
-.benefit-item {
-    background-color: var(--bg-secondary);
-    border: 1px solid rgba(255, 255, 255, 0.04);
-    padding: 6px 8px;
-    border-radius: 4px;
-    margin-bottom: 6px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-/* 2. stupeň vnoření: Samotná odměna (nejhlubší vrstva pomocí --bg-primary) */
-.benefit-item {
-    background-color: var(--bg-primary);
-    border: 1px solid var(--bg-tertiary);
-    padding: 6px 8px;
-    border-radius: 4px;
-    margin-bottom: 6px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
 .benefits-list {
     margin-top: 8px;
     margin-bottom: 8px;
@@ -1132,14 +1172,16 @@ header h1 {
     gap: 8px;
 }
 
+/* Samotná položka odměny uvnitř */
 .benefit-item {
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 8px;
-    background: var(--bg-panel);
-    border-radius: 4px;
+    background-color: var(--bg-panel);
     border: 1px solid var(--border-color);
+    border-radius: 4px;
+    margin-bottom: 6px;
 }
 
 .benefit-icon {
@@ -1197,331 +1239,6 @@ header h1 {
 .drop-content-box.drop-claimed .benefit-item { border-left-color: var(--success-color); background-color: rgba(46, 204, 113, 0.05); }
 .drop-content-box.drop-expired .benefit-item { border-left-color: var(--error-color); background-color: rgba(231, 76, 60, 0.05); }
 
-
-/* ===================================================================
-   10. WANTED ITEMS & MINING STATES
-   =================================================================== */
-
-#wanted-items-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 20px;
-    justify-content: flex-start;
-}
-
-.wanted-game-group {
-    flex: unset;
-    width: 100%;
-    max-width: none;
-    background: var(--bg-secondary);
-    border: 1px solid rgba(145, 70, 255, 0.3);
-    border-radius: 8px;
-    margin-bottom: 0;
-    break-inside: avoid;
-    overflow: hidden;
-    position: relative;
-}
-
-/* === GAME HEADERS (Main group) === */
-.wanted-game-header {
-    padding: 10px 15px;
-    background: rgba(145, 70, 255, 0.1);
-    border-bottom: 1px solid rgba(145, 70, 255, 0.25);
-    font-weight: 700;
-    font-size: 0.9375rem;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.wanted-game-index {
-    background: var(--accent-color, #9146ff);
-    color: #ffffff;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    padding: 2px 6px;
-    border-radius: 4px;
-    min-width: 20px;
-    text-align: center;
-}
-
-.wanted-game-title {
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--text-primary, #ffffff);
-}
-
-.wanted-game-icon {
-    width: 30px;
-    height: 40px;
-    object-fit: cover;
-    border-radius: 3px;
-    background: rgba(255, 255, 255, 0.05);
-    position: relative;
-}
-
-.wanted-game-icon:not([src]),
-.wanted-game-icon[src=""] {
-    animation: pulse-placeholder 1.5s ease-in-out infinite;
-}
-
-.wanted-game-time-badge {
-    font-size: 0.75rem;
-    color: var(--accent-color, #9146ff);
-    font-weight: 600;
-    margin-left: auto;
-}
-
-@keyframes pulse-placeholder {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.8; }
-}
-
-.wanted-campaign-list {
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-/* === BASE CAMPAIGN CARD === */
-.wanted-card {
-    background: var(--bg-panel);
-    border: 1px solid rgba(145, 70, 255, 0.25);
-    border-radius: 6px;
-    overflow: hidden;
-    position: relative;
-    transition: all 0.2s ease;
-}
-
-/* Base header (default state) */
-.wanted-card-header {
-    padding: 8px 12px;
-    background: rgba(145, 70, 255, 0.08);
-    border-bottom: 1px solid rgba(145, 70, 255, 0.2);
-    transition: all 0.2s ease;
-}
-
-/* === MINING ANIMATION === */
-@keyframes mining-glow {
-    0%, 100% {
-        box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
-        border-color: rgba(16, 185, 129, 0.6);
-    }
-    50% {
-        box-shadow: 0 0 18px rgba(16, 185, 129, 0.7);
-        border-color: rgba(16, 185, 129, 0.95);
-    }
-}
-
-/* === CARD & HEADER STATES === */
-
-/* 1. MINING (Active mining - Green with pulsing) */
-.wanted-card.is-mining {
-    border: 1px solid rgba(16, 185, 129, 0.6) !important;
-    animation: mining-glow 2s ease-in-out infinite !important;
-}
-
-.wanted-card.is-mining .wanted-card-header,
-.wanted-card-header.mining {
-    background: rgba(16, 185, 129, 0.15) !important;
-    border-bottom: 1px solid rgba(16, 185, 129, 0.3) !important;
-}
-
-.wanted-card.is-mining .wanted-card-campaign-link,
-.wanted-card.is-mining .wanted-card-header-main a {
-    color: #10b981 !important;
-}
-
-/* 2. IN PROGRESS (In progress - Yellow/Orange) */
-.wanted-card.in-progress {
-    border: 1px solid rgba(245, 158, 11, 0.6) !important;
-    box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
-}
-
-.wanted-card.in-progress .wanted-card-header,
-.wanted-card-header.in-progress {
-    background: rgba(245, 158, 11, 0.15) !important;
-    border-bottom: 1px solid rgba(245, 158, 11, 0.3) !important;
-}
-
-.wanted-card.in-progress .wanted-card-campaign-link,
-.wanted-card.in-progress .wanted-card-header-main a {
-    color: #f59e0b !important;
-}
-
-/* 3. DROP READY (Ready to claim - Blue) */
-.wanted-card.is-ready {
-    border: 1px solid rgba(59, 130, 246, 0.6) !important;
-    box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
-}
-
-.wanted-card.is-ready .wanted-card-header {
-    background: rgba(59, 130, 246, 0.15) !important;
-    border-bottom: 1px solid rgba(59, 130, 246, 0.3) !important;
-}
-
-.wanted-card.is-ready .wanted-card-campaign-link,
-.wanted-card.is-ready .wanted-card-header-main a {
-    color: #3b82f6 !important;
-}
-
-/* 4. CLAIMED (Completed / Claimed - Faded) */
-.wanted-card.is-claimed {
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    opacity: 0.6;
-}
-
-.wanted-card.is-claimed .wanted-card-header {
-    background: rgba(0, 0, 0, 0.2) !important;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
-}
-
-/* 5. QUEUED (In queue - Neutral purple-gray) */
-.wanted-card.is-queued,
-.wanted-card.queued {
-    border: 1px solid rgba(145, 70, 255, 0.3) !important;
-}
-
-.wanted-card.is-queued .wanted-card-header,
-.wanted-card.queued .wanted-card-header,
-.wanted-card-header.queued {
-    background: rgba(145, 70, 255, 0.08) !important;
-    border-bottom: 1px solid rgba(145, 70, 255, 0.2) !important;
-}
-
-.wanted-card.is-queued .wanted-card-campaign-link,
-.wanted-card.queued .wanted-card-campaign-link {
-    color: var(--accent-color, #9146ff) !important;
-}
-
-/* === STATUS BADGES === */
-.wanted-status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    padding: 3px 8px;
-    border-radius: 4px;
-    line-height: 1;
-}
-
-.wanted-status-badge.tag-queued {
-    background: rgba(70, 30, 125, 0.4);
-    color: var(--text-secondary, #adadb8);
-    border: 1px solid rgba(145, 70, 255, 0.3);
-}
-
-.wanted-status-badge.tag-in-progress {
-    background: rgba(245, 158, 11, 0.15);
-    color: #f59e0b;
-    border: 1px solid rgba(245, 158, 11, 0.4);
-}
-
-.wanted-status-badge.tag-mining {
-    background: rgba(16, 185, 129, 0.15);
-    color: #10b981;
-    border: 1px solid rgba(16, 185, 129, 0.4);
-}
-
-.wanted-status-badge.tag-ready {
-    background: rgba(59, 130, 246, 0.15);
-    color: #3b82f6;
-    border: 1px solid rgba(59, 130, 246, 0.4);
-}
-
-/* === CARD CONTENT === */
-.wanted-card-header-main {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.wanted-card-campaign-link {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--accent-color, #9146ff);
-    text-decoration: none;
-    display: block;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 180px;
-    transition: color 0.2s ease;
-}
-
-.wanted-card-campaign-link:hover {
-    text-decoration: underline;
-}
-
-.wanted-campaign-badge {
-    font-size: 0.75rem;
-    color: var(--text-secondary, #adadb8);
-    font-weight: 500;
-}
-
-.wanted-campaign-dates {
-    font-size: 0.6875rem;
-    color: var(--text-secondary, #adadb8);
-    margin-top: 4px;
-}
-
-.wanted-card-body {
-    padding: 6px 10px;
-}
-
-.wanted-drop-item {
-    font-size: 0.6875rem;
-    margin-bottom: 0;
-    padding: 8px 10px;
-    background: transparent;
-    border-bottom: 1px solid rgba(145, 70, 255, 0.2);
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 12px;
-    justify-content: space-between;
-}
-
-.wanted-drop-item:last-child {
-    border-bottom: none;
-}
-
-.wanted-drop-item.is-claimed {
-    opacity: 0.5;
-}
-
-.wanted-drop-info {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    flex: 1;
-}
-
-.wanted-drop-name {
-    font-weight: 600;
-    color: var(--text-secondary, #adadb8);
-}
-
-.wanted-benefit-pill {
-    background: rgba(145, 70, 255, 0.2);
-    color: var(--accent-color, #9146ff);
-    padding: 1px 5px;
-    border-radius: 8px;
-    font-size: 0.625rem;
-    font-weight: 500;
-}
-
-.wanted-drop-status {
-    margin-left: auto;
-    flex-shrink: 0;
-}
 
 /* ===================================================================
    11. SETTINGS & MANUAL MODE CONTROLS
@@ -2125,74 +1842,6 @@ header h1 {
     cursor: not-allowed !important;
     filter: grayscale(1);
     opacity: 0.5;
-}
-
-/* SVG Alignments & Status Badges */
-.status-tag, .wanted-game-time-badge, .wanted-campaign-dates {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-
-/* Base style for status badges */
-.status-tag {
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-/* 6. Warning / Account Unlinked (Red/Orange Accent) */
-.status-tag.tag-warning,
-.status-tag.tag-unlinked {
-    background-color: rgba(255, 77, 77, 0.15);
-    color: #ff4d4d;
-    border: 1px solid rgba(255, 77, 77, 0.3);
-}
-
-/* 1. Mining / Active Mining State (Green/Cyan) */
-.status-tag.tag-mining {
-    background-color: rgba(0, 230, 153, 0.15);
-    color: #00e699;
-    border: 1px solid rgba(0, 230, 153, 0.3);
-}
-
-/* 2. In Progress State (Blue) */
-.status-tag.tag-in-progress {
-    background-color: rgba(51, 153, 255, 0.15);
-    color: #3399ff;
-    border: 1px solid rgba(51, 153, 255, 0.3);
-}
-
-/* 3. Ready to Claim State (Orange) */
-.status-tag.tag-ready {
-    background-color: rgba(255, 128, 0, 0.2);
-    color: #ff8000;
-    border: 1px solid rgba(255, 128, 0, 0.4);
-}
-
-/* 4. Mining Progress Counter (Purple / Neutral) */
-.status-tag.tag-progress {
-    background-color: rgba(145, 71, 255, 0.15);
-    color: #adadb8;
-}
-
-/* 5. Claimed State (Muted Gray) */
-.status-tag.tag-claimed {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #848494;
-}
-
-.status-icon {
-    width: 14px;
-    height: 14px;
-    fill: currentColor;
-    flex-shrink: 0;
-}
-
-.wanted-campaign-dates .status-icon {
-    width: 12px;
-    height: 12px;
 }
 
 .campaign-header-icon svg, 

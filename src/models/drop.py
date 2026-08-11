@@ -26,6 +26,7 @@ logger = logging.getLogger("TwitchDrops")
 DIMS_PATTERN = re.compile(r"-\d+x\d+(?=\.(?:jpg|png|gif)$)", re.I)
 FAILED_DROP_IDS = set()
 
+
 def remove_dimensions(url: str) -> str:
     """Remove dimension suffix from Twitch image URLs (e.g., -285x380.jpg)."""
     return DIMS_PATTERN.sub("", url)
@@ -42,6 +43,31 @@ class BaseDrop:
         self.name: str = data["name"]
         self.campaign: DropsCampaign = campaign
         self.benefits: list[Benefit] = [Benefit(b) for b in (data["benefitEdges"] or [])]
+
+        # 🖼️ Extrakce URL obrázku přímo do atributu dropu
+        self.image_url: str = ""
+        edges = data.get("benefitEdges") or []
+        if edges and isinstance(edges, list):
+            first_edge = edges[0] or {}
+            # Twitch GraphQL posílá URL obrázku v různých klíčích podle verze API
+            self.image_url = (
+                first_edge.get("imageAssetURL")
+                or first_edge.get("imageURL")
+                or (first_edge.get("benefit") and first_edge["benefit"].get("imageAssetURL"))
+                or (first_edge.get("benefit") and first_edge["benefit"].get("imageURL"))
+                or ""
+            )
+
+        # Záloha: Pokud by adresa nebyla v raw JSONu, zkusíme ji vytáhnout z prvního vytvořeného Benefit objektu
+        if not self.image_url and self.benefits:
+            first_benefit = self.benefits[0]
+            self.image_url = (
+                getattr(first_benefit, "image_url", "")
+                or getattr(first_benefit, "image_asset_url", "")
+                or getattr(first_benefit, "icon_url", "")
+                or ""
+            )
+
         self.starts_at: datetime = isoparse(data["startAt"])
         self.ends_at: datetime = isoparse(data["endAt"])
         self.claim_id: str | None = None
@@ -49,33 +75,38 @@ class BaseDrop:
         self._is_processing_claim = False
         self.failed_claim = False
         self.claimed_count = 0
-        
+
         if "self" in data and data["self"]:
             self.claim_id = data["self"].get("dropInstanceID")
             self.is_claimed = data["self"].get("isClaimed", False)
-           # logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: True | isClaimed: {self.is_claimed} | dropInstanceID: {self.claim_id}")
         else:
             matched_benefits = [
                 bid for benefit in self.benefits 
                 if (bid := benefit.id) in claimed_benefits
             ]
-            
+
             if matched_benefits:
                 self.is_claimed = True
-               # logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | Found in claimed_benefits: {matched_benefits}")
-           # else:
-               # logger.warning(f"[DEBUG DROP] Name: {self.name} | ID: {self.id} | raw_self exists: False | NOT found in claimed_benefits. benefits: {[b.id for b in self.benefits]}")
+
         self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
 
-    def __repr__(self) -> str:
-        if self.is_claimed:
-            additional = ", claimed=True"
-        elif self.can_earn():
-            additional = ", can_earn=True"
-        else:
-            additional = ""
-        return f"Drop({self.rewards_text()}{additional})"
+    @property
+    def is_mining(self) -> bool:
+        """
+        ⛏️ Vrací True, pokud je tento drop právě aktivně těžen botem.
+        """
+        # Vytáhneme aktulně těžený drop přímo z bota nebo GUI
+        active_drop = getattr(self._twitch, "_current_drop", None) or getattr(
+            getattr(self._twitch, "gui", None), "_current_drop", None
+        )
 
+        if not active_drop:
+            return False
+
+        # Porovnáme ID
+        active_drop_id = getattr(active_drop, "id", active_drop)
+        return active_drop_id == self.id
+        
     @property
     def preconditions_met(self) -> bool:
         campaign = self.campaign
@@ -292,26 +323,6 @@ class TimedDrop(BaseDrop):
         return self.required_minutes - self.current_minutes
 
     @property
-    def total_required_minutes(self) -> int:
-        return self.required_minutes + max(
-            (
-                self.campaign.timed_drops[pid].total_required_minutes
-                for pid in self.precondition_drops
-            ),
-            default=0,
-        )
-
-    @property
-    def total_remaining_minutes(self) -> int:
-        return self.remaining_minutes + max(
-            (
-                self.campaign.timed_drops[pid].total_remaining_minutes
-                for pid in self.precondition_drops
-            ),
-            default=0,
-        )
-
-    @property
     def progress(self) -> float:
         if self.current_minutes <= 0 or self.required_minutes <= 0:
             return 0.0
@@ -365,11 +376,11 @@ class TimedDrop(BaseDrop):
             if self.extra_current_minutes >= MAX_EXTRA_MINUTES:
                 return True
         return False
-        
+
     @property
     def can_claim(self) -> bool:
         return super().can_claim and self.current_minutes >= self.required_minutes
-        
+
     def display(self, *, countdown: bool = True, subone: bool = False) -> None:
         self._twitch.gui.display_drop(self, countdown=countdown, subone=subone)
 
@@ -382,14 +393,14 @@ class TimedDrop(BaseDrop):
         elif self.real_current_minutes + delta > self.required_minutes:
             delta = self.required_minutes - self.real_current_minutes
         self.campaign._update_real_minutes(delta)
-        
+
     def sync_minutes(self, new_minutes: int) -> None:
         if self.real_current_minutes != new_minutes:
             logger.debug(f"Syncing {self.name}: {self.real_current_minutes} -> {new_minutes}")
             self.real_current_minutes = new_minutes
             self.extra_current_minutes = 0
             self._on_state_changed()
-            
+
     def sync_state_with_history(self, claimed_benefits: dict[str, datetime]) -> None:
         for benefit in self.benefits:
             if benefit.id in claimed_benefits:

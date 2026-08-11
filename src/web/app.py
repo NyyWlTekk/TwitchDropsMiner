@@ -350,14 +350,11 @@ async def exit_manual_mode():
 
 
 @sio.event
-async def connect(sid, environ):
-    """Client connected"""
-    logger.info(f"Web client connected: {sid}")
-
-    # Send initial state to new client
+async def state(sid, data=None):
+    """Posilá / obnovuje kompletní stav pro klienta"""
     if gui_manager and twitch_client:
         await sio.emit(
-            "initial_state",
+            "state",
             {
                 "status": gui_manager.status.get(),
                 "channels": gui_manager.channels.get_channels(),
@@ -371,6 +368,13 @@ async def connect(sid, environ):
             },
             room=sid,
         )
+
+
+@sio.event
+async def connect(sid, environ):
+    """Klient se připojil"""
+    logger.info(f"Web client connected: {sid}")
+    await state(sid)
 
 
 @sio.event

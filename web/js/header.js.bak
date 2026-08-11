@@ -2,93 +2,74 @@
 //////////// HEADER FUNCTIONS & SOCKETS //////////
 //////////////////////////////////////////////////
 
-// --- REGISTRACE SOKETOVÝCH LISTENERY ---
-if (typeof socket !== 'undefined' && socket) {
-    socket.on('connect', handleConnect);
-    socket.on('disconnect', handleDisconnect);
-    socket.on('status', handleStatusUpdate);
-}
+// --- SOCKET EVENT LISTENERS ---
+socket.on('connect', handleConnect);
+socket.on('disconnect', handleDisconnect);
 
-/**
- * Handler při úspěšném připojení WebSocketu
- */
 function handleConnect() {
     console.log('[Socket] Connected to server');
 
     // 1. Zápis do globálního Single Source of Truth
-    if (!window.state) window.state = {};
-    window.state.connected = true;
+    window.state = {
+        ...window.state,
+        connected: true
+    };
 
-    // 2. Aktualizace UI
-    updateConnectionStatus(true);
-
-    // 3. Vystřelení událostí s detailním stavem pro ostatní moduly
+    // 2. Aktualizace UI a vystřelení událostí
+    updateConnectionStatus();
     window.dispatchEvent(new CustomEvent('app:socket-connected'));
-    window.dispatchEvent(new CustomEvent('stateUpdated', { detail: window.state }));
+    window.dispatchEvent(new CustomEvent('stateUpdated'));
 }
 
-/**
- * Handler při odpojení WebSocketu
- */
 function handleDisconnect(reason) {
     console.warn('[Socket] Disconnected from server:', reason);
 
     // 1. Zápis do globálního Single Source of Truth
-    if (!window.state) window.state = {};
-    window.state.connected = false;
+    window.state = {
+        ...window.state,
+        connected: false
+    };
 
-    // 2. Aktualizace UI
-    updateConnectionStatus(false);
-
-    // 3. Vystřelení událostí s detailním stavem pro ostatní moduly
+    // 2. Aktualizace UI a vystřelení událostí
+    updateConnectionStatus();
     window.dispatchEvent(new CustomEvent('app:socket-disconnected'));
-    window.dispatchEvent(new CustomEvent('stateUpdated', { detail: window.state }));
+    window.dispatchEvent(new CustomEvent('stateUpdated'));
 }
 
 //////////////////////////////////////////////////
-/////////// STATE UPDATED LISTENER ///////////////
+///////////LISTENER///////////////////////////////
 /////////////////////////////////////////////////
 
-/**
- * 🎯 AUTOMATICKÁ REAKCE NA ZMĚNU GLOBÁLNÍHO STAVU
- */
-window.addEventListener('stateUpdated', (e) => {
-    const state = e.detail || window.state || {};
-
-    // Synchronizace textu statusu (např. "Těží se...", "Idle")
-    if (state.status) {
+// 🎯 AUTOMATICKÁ REAKCE NA ZMĚNU GLOBÁLNÍHO STAVU
+window.addEventListener('stateUpdated', () => {
+    // Když dorazí nová data přes socket (handle_state), synchronizujeme UI statusu
+    if (window.state?.status) {
         const statusEl = document.getElementById('status-text');
-        if (statusEl && statusEl.textContent !== state.status) {
-            statusEl.textContent = state.status;
+        if (statusEl && statusEl.textContent !== window.state.status) {
+            statusEl.textContent = window.state.status;
         }
     }
-
-    // Aktualizace indikátorů připojení
-    updateConnectionStatus(state);
+    updateConnectionStatus();
 });
+
 
 //////////////////////////////////////////////////
 ///////// CONNECTION STATUS UI RENDER ////////////
 //////////////////////////////////////////////////
 
 /**
- * Vykreslí indikátory připojení na základě vstupu nebo window.state
- * @param {boolean|Object|null} input - Může být boolean (true/false) nebo objekt stavu (e.detail)
+ * Vykreslí indikátory připojení na základě window.state
  */
 function updateConnectionStatus(input = null) {
-    // Čerpáme stav z parametru (boolean / objekt) nebo z window.state
-    let isConnected = false;
-    if (typeof input === 'boolean') {
-        isConnected = input;
-    } else if (input && typeof input === 'object') {
-        isConnected = Boolean(input.connected ?? window.state?.connected);
-    } else {
-        isConnected = Boolean(window.state?.connected);
-    }
+    // Čerpáme stav výhradně z window.state
+    const isConnected = typeof input === 'boolean' 
+        ? input 
+        : Boolean(input?.connected ?? window.state?.connected);
 
-    // Uložení aktualizovaného stavu připojení
-    if (!window.state) window.state = {};
-    window.state.connected = isConnected;
+    // Uložíme aktualizovaný stav připojení
+    if (window.state) {
+        window.state.connected = isConnected;
+    }
 
     // A. Header Connection Indicator (#connection-indicator)
     const connIndicator = document.getElementById('connection-indicator');
@@ -110,11 +91,8 @@ function updateConnectionStatus(input = null) {
         socketStatusEl.style.color = isConnected ? '#4caf50' : '#f44336';
     }
 
-    // C. Diagnostika (z předaného objektu nebo z window.state)
-    const diagData = (typeof input === 'object' && input !== null) 
-        ? (input.diagnostics || window.state?.diagnostics)
-        : window.state?.diagnostics;
-
+    // C. Diagnostika (z objektu nebo z window.state)
+    const diagData = (typeof input === 'object' && input !== null) ? input : window.state?.diagnostics;
     if (diagData) {
         const queueCountEl = window.elements?.queueCount || document.getElementById('queue-count');
         if (queueCountEl && diagData.queueCount !== undefined) {
@@ -128,7 +106,7 @@ function updateConnectionStatus(input = null) {
     }
 }
 
-// Globální zpřístupnění
+// Global Access
 window.updateConnectionStatus = updateConnectionStatus;
 
 //////////////////////////////////////////////////
@@ -136,7 +114,7 @@ window.updateConnectionStatus = updateConnectionStatus;
 //////////////////////////////////////////////////
 
 /**
- * Handler pro samostatný příjem status události ze soketu
+ * Handler pro samostatný příjem status události ze socketu
  */
 function handleStatusUpdate(data) {
     if (!data || !data.status) return;
@@ -150,8 +128,9 @@ function updateStatus(status) {
     if (!status) return;
 
     // 1. Aktualizace Single Source of Truth
-    if (!window.state) window.state = {};
-    window.state.status = status;
+    if (window.state) {
+        window.state.status = status;
+    }
 
     // 2. Vykreslení do DOMu
     const statusEl = document.getElementById('status-text');
@@ -160,7 +139,7 @@ function updateStatus(status) {
     }
 
     // 3. Reakce na offline / idle stav
-    const lower = String(status).toLowerCase();
+    const lower = status.toLowerCase();
     if (lower.includes('idle') || lower.includes('offline')) {
         if (typeof safeClearDrop === 'function') {
             safeClearDrop();

@@ -1,21 +1,54 @@
-// ==================== UI & Settings Updates ====================
+///////////////////////////////////////////////////////////////////////////////
+// SETTINGS & MANUAL MODE MODULE (settings.js) ////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 
+// 1. EVENT LISTENER NA ZAČÁTKU SOUBORU
+// Odchytává událost a předává data přímo z detailu CustomEventu
+window.addEventListener('stateUpdated', (e) => {
+    const state = e.detail || window.state || {};
+    const settings = state.settings;
+    const manualMode = state.manualMode ?? state.manual_mode;
+
+    if (settings) {
+        updateSettingsUI(settings);
+    }
+
+    updateManualModeUI(manualMode);
+});
+
+/**
+ * Aktualizuje nastavení formulářů a vizuální prvky UI podle stavu settings
+ */
 function updateSettingsUI(settings) {
-    state.settings = settings || {};
-    
-    const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = Boolean(val); };
-    const setValue = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    // Bezpečnostní pojistka
+    if (!settings || typeof settings !== 'object') return;
 
-    setChecked('dark-mode', settings.dark_mode);
-    setChecked('auto-sort-by-end', settings.auto_sort_by_end);
-    setChecked('mine-badges-first', settings.mine_badges_first);
-    setChecked('auto-add-all-games', settings.auto_add_all_games);
-    setValue('connection-quality', settings.connection_quality || 1);
-    setValue('minimum-refresh-interval', settings.minimum_refresh_interval_minutes || 30);
+    // Synchronizace do globálního window.state (pokud existuje)
+    if (!window.state) window.state = {};
+    window.state.settings = settings;
 
+    // Pomocné funkce pro bezpečný zápis do DOMu
+    const setChecked = (id, val) => { 
+        const el = document.getElementById(id); 
+        if (el) el.checked = Boolean(val); 
+    };
+    const setValue = (id, val) => { 
+        const el = document.getElementById(id); 
+        if (el) el.value = val ?? ''; 
+    };
+
+    // Základní přepínače a vstupy (s podporou camelCase i snake_case)
+    const darkModeActive = Boolean(settings.dark_mode ?? settings.darkMode);
+    setChecked('dark-mode', darkModeActive);
+    setChecked('auto-sort-by-end', settings.auto_sort_by_end ?? settings.autoSortByEnd);
+    setChecked('mine-badges-first', settings.mine_badges_first ?? settings.mineBadgesFirst);
+    setChecked('auto-add-all-games', settings.auto_add_all_games ?? settings.autoAddAllGames);
+    setValue('connection-quality', settings.connection_quality ?? settings.connectionQuality ?? 1);
+    setValue('minimum-refresh-interval', settings.minimum_refresh_interval_minutes ?? settings.minimumRefreshIntervalMinutes ?? 30);
+
+    // Proxy nastavení
     const proxyUrl = settings.proxy || '';
-    const proxyInput = document.getElementById('proxy-url');
-    if (proxyInput) proxyInput.value = proxyUrl;
+    setValue('proxy-url', proxyUrl);
 
     const proxyIndicator = document.getElementById('proxy-indicator');
     if (proxyIndicator) {
@@ -23,57 +56,65 @@ function updateSettingsUI(settings) {
         proxyIndicator.title = proxyUrl ? `Proxy active: ${proxyUrl}` : 'Proxy disabled';
     }
 
+    // Jazyk
     if (settings.language) {
-        const languageSelect = document.getElementById('language');
-        if (languageSelect) languageSelect.value = settings.language;
+        setValue('language', settings.language);
     }
 
-    if (settings.dark_mode) {
-        document.body.classList.add('dark-mode');
-    } else {
-        document.body.classList.remove('dark-mode');
-    }
+    // Dark Mode class na <body>
+    document.body.classList.toggle('dark-mode', darkModeActive);
 
-    if (settings.games_available) {
-        availableGames = new Set(settings.games_available);
-        if (settings.games_to_watch) {
-            settings.games_to_watch.forEach(game => availableGames.add(game));
+    // Dostupné a sledované hry
+    const gamesAvailable = settings.games_available ?? settings.gamesAvailable;
+    if (gamesAvailable) {
+        window.availableGames = new Set(gamesAvailable);
+        const gamesToWatch = settings.games_to_watch ?? settings.gamesToWatch;
+        if (Array.isArray(gamesToWatch)) {
+            gamesToWatch.forEach(game => window.availableGames.add(game));
         }
     }
 
-    if (settings.inventory_filters) {
-        setChecked('filter-active', settings.inventory_filters.show_active);
-        setChecked('filter-not-linked', settings.inventory_filters.show_not_linked);
-        setChecked('filter-upcoming', settings.inventory_filters.show_upcoming);
-        setChecked('filter-expired', settings.inventory_filters.show_expired);
-        setChecked('filter-finished', settings.inventory_filters.show_finished);
+    // Filtry inventáře
+    const invFilters = settings.inventory_filters ?? settings.inventoryFilters;
+    if (invFilters) {
+        setChecked('filter-active', invFilters.show_active ?? invFilters.showActive);
+        setChecked('filter-not-linked', invFilters.show_not_linked ?? invFilters.showNotLinked);
+        setChecked('filter-upcoming', invFilters.show_upcoming ?? invFilters.showUpcoming);
+        setChecked('filter-expired', invFilters.show_expired ?? invFilters.showExpired);
+        setChecked('filter-finished', invFilters.show_finished ?? invFilters.showFinished);
 
-        selectedInventoryGames = Array.isArray(settings.inventory_filters.game_name_search)
-            ? [...settings.inventory_filters.game_name_search]
-            : [];
-        updateGameTagsDisplay();
+        const gameSearch = invFilters.game_name_search ?? invFilters.gameNameSearch;
+        window.selectedInventoryGames = Array.isArray(gameSearch) ? [...gameSearch] : [];
+            
+        if (typeof updateGameTagsDisplay === 'function') updateGameTagsDisplay();
 
-        setChecked('filter-benefit-item', settings.inventory_filters.show_benefit_item !== false);
-        setChecked('filter-benefit-badge', settings.inventory_filters.show_benefit_badge !== false);
-        setChecked('filter-benefit-emote', settings.inventory_filters.show_benefit_emote !== false);
-        setChecked('filter-benefit-other', settings.inventory_filters.show_benefit_other !== false);
+        setChecked('filter-benefit-item', (invFilters.show_benefit_item ?? invFilters.showBenefitItem) !== false);
+        setChecked('filter-benefit-badge', (invFilters.show_benefit_badge ?? invFilters.showBenefitBadge) !== false);
+        setChecked('filter-benefit-emote', (invFilters.show_benefit_emote ?? invFilters.showBenefitEmote) !== false);
+        setChecked('filter-benefit-other', (invFilters.show_benefit_other ?? invFilters.showBenefitOther) !== false);
     }
 
-    if (settings.mining_benefits) {
-        setChecked('mining-benefit-item', settings.mining_benefits.DIRECT_ENTITLEMENT);
-        setChecked('mining-benefit-badge', settings.mining_benefits.BADGE);
-        setChecked('mining-benefit-emote', settings.mining_benefits.EMOTE);
-        setChecked('mining-benefit-unknown', settings.mining_benefits.UNKNOWN);
+    // Těžební benefity
+    const miningBenefits = settings.mining_benefits ?? settings.miningBenefits;
+    if (miningBenefits) {
+        setChecked('mining-benefit-item', miningBenefits.DIRECT_ENTITLEMENT);
+        setChecked('mining-benefit-badge', miningBenefits.BADGE);
+        setChecked('mining-benefit-emote', miningBenefits.EMOTE);
+        setChecked('mining-benefit-unknown', miningBenefits.UNKNOWN);
     }
 
-    renderGamesToWatch();
+    // Volání externích vykreslovacích funkcí (pokud jsou definovány v DOMu)
+    if (typeof renderGamesToWatch === 'function') renderGamesToWatch();
     if (typeof renderChannels === 'function') renderChannels();
     if (typeof renderInventory === 'function') renderInventory();
-    
-    applyAutoAddIfNeeded();
+    if (typeof applyAutoAddIfNeeded === 'function') applyAutoAddIfNeeded();
+
     console.log('[Settings] UI elements updated from settings state.');
 }
 
+/**
+ * Aktualizuje indikátory Manuálního / Automatického režimu v UI
+ */
 function updateManualModeUI(manualModeInfo) {
     const manualBadge = document.getElementById('manual-mode-badge');
     const autoBadge = document.getElementById('auto-mode-badge');
@@ -83,21 +124,22 @@ function updateManualModeUI(manualModeInfo) {
 
     if (!manualBadge || !autoBadge) return;
 
-    if (manualModeInfo && manualModeInfo.active) {
-        manualBadge.classList.remove('hidden');
-        autoBadge.classList.add('hidden');
-        if (manualGameName) manualGameName.textContent = manualModeInfo.game_name || '';
+    const isActive = Boolean(manualModeInfo && manualModeInfo.active);
+    const gameName = manualModeInfo?.game_name ?? manualModeInfo?.gameName ?? '';
 
-        if (manualControls) {
-            manualControls.classList.remove('hidden');
-            if (manualModeGame) manualModeGame.textContent = manualModeInfo.game_name || '';
-        }
-    } else {
-        manualBadge.classList.add('hidden');
-        autoBadge.classList.remove('hidden');
+    // Přepínání odznaků
+    manualBadge.classList.toggle('hidden', !isActive);
+    autoBadge.classList.toggle('hidden', isActive);
 
-        if (manualControls) {
-            manualControls.classList.add('hidden');
+    if (manualGameName) {
+        manualGameName.textContent = isActive ? gameName : '';
+    }
+
+    // Přepínání ovládacích prvků
+    if (manualControls) {
+        manualControls.classList.toggle('hidden', !isActive);
+        if (manualModeGame) {
+            manualModeGame.textContent = isActive ? gameName : '';
         }
     }
 }

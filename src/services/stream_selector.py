@@ -1,5 +1,4 @@
 import logging
-
 from datetime import datetime, timezone
 
 from src.config.settings import Settings
@@ -22,7 +21,7 @@ class StreamSelector:
         now = datetime.now(timezone.utc)
 
         auto_add = getattr(settings, "auto_add_all_games", False)
-        
+
         # 1. Určení cílových her
         if auto_add or not settings.games_to_watch:
             ignored_games_lower = {g.lower() for g in getattr(settings, "ignored_games", [])}
@@ -65,78 +64,88 @@ class StreamSelector:
                     if getattr(drop, "is_claimed", False):
                         continue
 
+                    # Vrácena filtrace podle chtěných/nevybraných benefitů
                     filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
+                    if len(filtered_benefits) <= 0:
+                        continue
 
-                    if len(filtered_benefits) > 0:
-                        current_mins = getattr(drop, "current_minutes", 0)
-                        req_mins = getattr(drop, "required_minutes", 0)
+                    current_mins = getattr(drop, "current_minutes", 0)
+                    req_mins = getattr(drop, "required_minutes", 0)
 
-                        # Přeskočit dropy, které nevyžadují žádný čas (sub-dropy, badge s 0m atd.)
-                        if req_mins <= 0:
-                            continue
+                    # Přeskočit dropy, které nevyžadují žádný čas (sub-dropy, badge s 0m atd.)
+                    if req_mins <= 0:
+                        continue
 
-                        progress_val = getattr(drop, "progress", 0)
-                        if not progress_val and req_mins > 0:
-                            progress_val = int((current_mins / req_mins) * 100)
+                    is_mining = getattr(drop, "is_mining", False)
+                    is_claimed = getattr(drop, "is_claimed", False)
+                    can_claim = getattr(drop, "can_claim", False)
 
-                        wanted_drops.append(
-                            {
-                                "name": drop.name,
-                                "benefits": filtered_benefits,
-                                "is_claimed": getattr(drop, "is_claimed", False),
-                                "can_claim": getattr(drop, "can_claim", False),
-                                "current_minutes": current_mins,
-                                "required_minutes": req_mins,
-                                "progress": progress_val,
-                            }
-                        )
+                    # Bezpečný výpočet progressu (podpora pro desetiná čísla 0.0–1.0 i přímá %)
+                    raw_progress = getattr(drop, "progress", None)
+                    if raw_progress is not None:
+                        progress_val = round(raw_progress * 100) if raw_progress <= 1.0 else round(raw_progress)
+                    elif req_mins > 0:
+                        progress_val = int((current_mins / req_mins) * 100)
+                    else:
+                        progress_val = 0
 
-                if len(wanted_drops) > 0:
-                    claimed_count = sum(1 for d in campaign.drops if getattr(d, "is_claimed", False))
-                    total_count = len(campaign.drops)
+                    # Určení, zda je drop rozpracovaný (má načtené minuty, ale zrovna se netěží ani není hotový)
+                    is_in_progress = current_mins > 0 and not is_claimed and not can_claim and not is_mining
 
-                    starts_at = getattr(campaign, "starts_at", None)
-                    ends_at = getattr(campaign, "ends_at", None)
-                    starts_at_str = starts_at.isoformat() if hasattr(starts_at, "isoformat") else (str(starts_at) if starts_at else None)
-                    ends_at_str = ends_at.isoformat() if hasattr(ends_at, "isoformat") else (str(ends_at) if ends_at else None)
+                    wanted_drops.append(
+                        {
+                            "id": getattr(drop, "id", None),
+                            "name": drop.name,
+                            "image_url": getattr(drop, "image_url", ""),
+                            "benefits": filtered_benefits,
+                            "is_mining": is_mining,
+                            "is_claimed": is_claimed,
+                            "can_claim": can_claim,
+                            "is_in_progress": is_in_progress,
+                            "current_minutes": current_mins,
+                            "required_minutes": req_mins,
+                            "progress": progress_val,
+                        }
+                    )
+
+                if wanted_drops:
+                    campaign_url = getattr(campaign, "url", getattr(campaign, "campaign_url", "#"))
+                    total_drops = len(getattr(campaign, "drops", []))
+                    claimed_drops = sum(1 for d in getattr(campaign, "drops", []) if getattr(d, "is_claimed", False))
 
                     wanted_campaigns.append(
                         {
                             "id": campaign.id,
                             "name": campaign.name,
-                            "url": campaign.campaign_url,
-                            "starts_at": starts_at_str,
-                            "ends_at": ends_at_str,
-                            "_raw_ends_at": ends_at,
+                            "url": campaign_url,
+                            "total_drops_count": total_drops,
+                            "claimed_drops_count": claimed_drops,
+                            "starts_at": campaign.starts_at.isoformat() if hasattr(campaign.starts_at, "isoformat") else str(campaign.starts_at),
+                            "ends_at": campaign.ends_at.isoformat() if hasattr(campaign.ends_at, "isoformat") else str(campaign.ends_at),
+                            "remaining_minutes": campaign.remaining_minutes,
                             "drops": wanted_drops,
-                            "claimed_drops_count": claimed_count,
-                            "total_drops_count": total_count,
                         }
                     )
 
-            if len(wanted_campaigns) > 0:
-                all_remaining_mins = [
-                    max(0, d["required_minutes"] - d["current_minutes"])
-                    for c in wanted_campaigns
-                    for d in c["drops"]
-                ]
-                game_remaining_mins = max(all_remaining_mins, default=0)
-
+            if wanted_campaigns and game_obj:
+                icon_url = getattr(game_obj, "box_art_url", getattr(game_obj, "icon_url", None))
                 wanted_games.append(
                     {
-                        "game_id": game_obj.id if game_obj else None,
-                        "game_name": game_name,
-                        "game_icon": game_obj.box_art_url if game_obj else None,
-                        "game_obj": game_obj,
+                        "id": getattr(game_obj, "id", None),
+                        "name": game_obj.name,
+                        "icon_url": icon_url,
+                        "_game_obj": game_obj,
                         "campaigns": wanted_campaigns,
-                        "total_remaining_minutes": game_remaining_mins,
                     }
                 )
 
-        # 3. Řazení fronty her s bezpečným ošetřením časových pásem
+        return wanted_games
+
+        # 3. Řazení fronty her podle zbývajícího času a konce kampaní
         def get_game_sort_key(game_item):
+            total_game_remaining = sum(c.get("remaining_minutes", 0) for c in game_item["campaigns"])
+            
             end_times = []
-            max_progress = 0
             for c in game_item["campaigns"]:
                 raw_end = c.get("_raw_ends_at")
                 if raw_end and isinstance(raw_end, datetime):
@@ -152,13 +161,8 @@ class StreamSelector:
                     except Exception:
                         pass
 
-                for d in c["drops"]:
-                    prog = d.get("progress", 0)
-                    if 0 < prog < 100 and prog > max_progress:
-                        max_progress = prog
-
             earliest_end = min(end_times) if end_times else datetime.max.replace(tzinfo=timezone.utc)
-            return (earliest_end, -max_progress)
+            return (total_game_remaining, earliest_end)
 
         if getattr(settings, "auto_sort_by_end", True):
             wanted_games.sort(key=get_game_sort_key)
@@ -170,10 +174,11 @@ class StreamSelector:
                     e_times = [c.get("ends_at") for c in g["campaigns"] if c.get("ends_at")]
                     if e_times:
                         e_str = min(e_times)
-                queue_log.append(f"{g['game_name']} (Ends: {e_str})")
+                queue_log.append(f"{g['name']} (Ends: {e_str})")
 
             logger.info("Wanted games queue: %s", " -> ".join(queue_log))
 
+        # Úklid pomocného klíče _raw_ends_at před vrácením
         for g in wanted_games:
             for c in g["campaigns"]:
                 c.pop("_raw_ends_at", None)
@@ -183,11 +188,16 @@ class StreamSelector:
     def get_wanted_game_tree(
         self, settings: Settings, campaigns: list[DropsCampaign]
     ) -> list[dict]:
-        tree = [
-            {**game, "game_obj": None} for game in self._get_wanted_game_tree(settings, campaigns)
-        ]
-        
-        return tree
+        """Vrací kompletní strom struktur pro GUI / API bez ne-serializovatelných objektů."""
+        tree = self._get_wanted_game_tree(settings, campaigns)
+        clean_tree = []
+        for game in tree:
+            game_copy = game.copy()
+            game_copy.pop("_game_obj", None)  # Odstraníme objekt Game před odesláním do JSON/GUI
+            clean_tree.append(game_copy)
+        return clean_tree
 
     def get_wanted_games(self, settings: Settings, campaigns: list[DropsCampaign]) -> list[Game]:
-        return [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]
+        """Vrací čistý seznam objektů Game pro plánovač těžby."""
+        tree = self._get_wanted_game_tree(settings, campaigns)
+        return [game["_game_obj"] for game in tree if "_game_obj" in game and game["_game_obj"] is not None]

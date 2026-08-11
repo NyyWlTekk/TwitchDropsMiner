@@ -118,7 +118,9 @@ function renderWantedDropItem(drop) {
  */
 function renderWantedCampaignCard(campaign) {
     const drops = campaign.drops || [];
-    const claimedCount = drops.filter(d => d.is_claimed).length;
+    const claimedCount = campaign.claimed_drops_count
+    const totalCount = campaign.total_drops_count
+
 
     // Určení vizuálního stavu karty a badge
     let cardStateClass = 'is-queued';
@@ -169,7 +171,7 @@ function renderWantedCampaignCard(campaign) {
     }
 
     const badgeHTML = drops.length > 0 
-        ? `<span class="wanted-campaign-badge">${claimedCount}/${drops.length} Drops</span>` 
+        ? `<span class="wanted-campaign-badge">${claimedCount}/${totalCount} Drops</span>` 
         : '';
 
     const card = document.createElement('div');

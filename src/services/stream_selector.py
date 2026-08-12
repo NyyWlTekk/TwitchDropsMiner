@@ -58,29 +58,16 @@ class StreamSelector:
                     if ends_at_dt <= now:
                         continue
 
-                # 🎯 1. ZMĚNA: Přeskočit kampaň AŽ ve chvíli, kdy jsou VŠECHNY její dropy hotové
-                has_unclaimed_drops = any(
-                    not getattr(d, "is_claimed", False)
-                    for d in campaign.drops
-                    if getattr(d, "required_minutes", 0) > 0
-                )
-                if not has_unclaimed_drops:
-                    continue
-
                 wanted_drops = []
                 for drop in campaign.drops:
-                    is_claimed = drop.is_claimed
-                    is_mining = drop.is_mining
-                    can_claim = drop.can_claim
+                    # Přeskočit pouze pokud už je odměna vybraná (claimed)
+                    if drop.is_claimed:
+                        continue
 
-                    # 🎯 2. ZMĚNA: Neodstraňujeme drop, pokud je claimed!
-                    # Pro vybrané dropy použijeme jejich benefity přímo, pro nevybrané použijeme filtr.
-                    if is_claimed:
-                        filtered_benefits = getattr(drop, "benefits", [])
-                    else:
-                        filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
-                        if len(filtered_benefits) <= 0:
-                            continue
+                    # Vrácena filtrace podle chtěných/nevybraných benefitů
+                    filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
+                    if len(filtered_benefits) <= 0:
+                        continue
 
                     current_mins = drop.current_minutes
                     req_mins = getattr(drop, "required_minutes", 0)
@@ -89,24 +76,25 @@ class StreamSelector:
                     if req_mins <= 0:
                         continue
 
-                    # Bezpečný výpočet progressu (pro splněný drop natvrdo 100%)
-                    if is_claimed:
-                        progress_val = 100
+                    is_mining = drop.is_mining
+                    is_claimed = drop.is_claimed
+                    can_claim = drop.can_claim
+
+                    # Bezpečný výpočet progressu
+                    raw_progress = getattr(drop, "progress", None)
+                    if raw_progress is not None:
+                        progress_val = round(raw_progress * 100) if raw_progress <= 1.0 else round(raw_progress)
+                    elif req_mins > 0:
+                        progress_val = int((current_mins / req_mins) * 100)
                     else:
-                        raw_progress = getattr(drop, "progress", None)
-                        if raw_progress is not None:
-                            progress_val = round(raw_progress * 100) if raw_progress <= 1.0 else round(raw_progress)
-                        elif req_mins > 0:
-                            progress_val = int((current_mins / req_mins) * 100)
-                        else:
-                            progress_val = 0
+                        progress_val = 0
 
                     wanted_drops.append(
                         {
                             "id": drop.id,
                             "name": drop.name,
                             "image_url": drop.image_url,
-                            "status": drop.status,
+                            "status": drop.status,  # ✨ Unifikovaný stav dropu
                             "benefits": filtered_benefits,
                             "is_mining": is_mining,
                             "is_claimed": is_claimed,

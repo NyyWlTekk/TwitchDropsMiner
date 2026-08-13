@@ -10,14 +10,13 @@
 if (typeof socket !== 'undefined' && socket) {
     socket.on('state', handle_state);
 
-    // Pravidelná obnova stavu (každých 60 sekund)
     setInterval(() => {
         if (socket && socket.connected) {
             socket.emit('state');
         } else {
             console.warn('⚠️ Soket není připojen, přesakuji emit.');
         }
-    }, 1000); // 👈 Změněno z 5000ms na 60000ms (60 sekund), jak máš v komentáři
+    }, 1000); 
 }
 
 /**

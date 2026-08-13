@@ -387,7 +387,7 @@ async function fetchAndPopulateLanguages() {
             languageSelect.value = data.current;
         }
     } catch (error) {
-        console.error('Failed to fetch languages:', error);
+ //       console.error('Failed to fetch languages:', error);
         const languageSelect = document.getElementById('language');
         if (languageSelect) {
             languageSelect.replaceChildren(makeElement('option', { value: '' }, 'Failed to load languages'));

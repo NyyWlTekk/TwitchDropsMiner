@@ -17,12 +17,6 @@ const socket = io({
 /**
 socket.on('status_update', (...args) => handleStatusUpdate?.(...args));
 
-
-// Progress & Drops
-
-socket.on('drop_progress', (...args) => handleDropProgress?.(...args));
-// socket.on('drop_progress_stop', (...args) => handleDropProgressStop?.(...args));
-
 // Inventory & Campaigns
 
 socket.on('inventory_clear', (...args) => handleInventoryClear?.(...args));
@@ -79,13 +73,7 @@ socket.on('connect', () => {
 ///////////////////////////////////////////////////////////////
 
 // connection error handle :-)
-socket.on('connect_error', (...args) => handleConnectError?.(...args));
-
-function handleConnectError(error) {
-    if (isDebugEnabled()) {
-        console.error('[Socket DEBUG] Connection error:', error);
-    }
-}
+// socket.on('connect_error', (...args) => handleConnectError?.(...args));
 
 // ============================================================================
 // //////////////////////////////////////////////////////////////////////////

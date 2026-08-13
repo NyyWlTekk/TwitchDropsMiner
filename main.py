@@ -5,6 +5,11 @@ TwitchDropsMiner - Main entry point
 This is a simple launcher that runs the src package as a module.
 All application code is in the src/ directory.
 """
+import logging
+
+# Nastaví root logger na DEBUG
+logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger("src.services.stream_selector").setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
     import runpy

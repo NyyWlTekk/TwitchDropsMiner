@@ -126,6 +126,10 @@ class WebsocketTopic:
         target_id: int,
         process: TopicProcess,
     ):
+        try:
+            target_id = int(target_id)
+        except (TypeError, ValueError):
+            pass
         assert isinstance(target_id, int)
         self._id: str = self.as_str(category, topic_name, target_id)
         self._target_id = target_id

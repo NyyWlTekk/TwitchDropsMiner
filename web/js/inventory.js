@@ -2,6 +2,11 @@
 // ==================== Inventory Filtering ====================
 ////////////////////////////////////////////////////////////////
 
+// Listener na event ze state manageru
+window.addEventListener('stateUpdated', (e) => {
+	handleInventoryBatchUpdate(e.detail?.inventory, e.detail?.settings);
+});
+
 // GLOBAL STATES AND VARIABLES
 
 let selectedInventoryGames = [];
@@ -14,59 +19,85 @@ let gameDropdownVisible = false;
 /////////////////////////////////
 
 function handleInventoryClear() {
-    console.log('[Inventory] Received clear command (ignored to keep existing state until new data arrives)');
-    
-    // Zbytek kódu je zakomentovaný, aby se state.campaigns nemazalo předčasně
-    /*
-    if (typeof state !== 'undefined') {
-        state.campaigns = {};
-    }
-    if (typeof renderInventory === 'function') renderInventory();
-    syncAdminState();
-    */
+//    console.log('[Inventory] Received clear command (ignored to keep existing state until new data arrives)');
 }
 
 /**
- * Zpracování hromadné aktualizace inventáře ze serveru
+ * Pomocná funkce pro bezpečné vytažení názvu hry (řeší game_name i game.name)[cite: 1]
+ */
+function getCampaignGameName(campaign) {
+    if (!campaign) return '';
+    return campaign.game_name || campaign.game?.name || campaign.gameName || '';
+}
+
+/**
+ * Pomocná funkce pro bezpečné vytažení dropů z kampaně (sjednocuje timed_drops, timedDrops, drops)[cite: 1]
+ */
+function getCampaignDrops(campaign) {
+    if (!campaign) return [];
+    return campaign.timed_drops || campaign.timedDrops || campaign.drops || campaign.time_based_drops || [];
+}
+
+/**
+ * Zpracování hromadné aktualizace inventáře ze serveru[cite: 1]
  */
 function handleInventoryBatchUpdate(rawData) {
-    console.log('[Inventory] Processing batch inventory update');
     if (!rawData) return;
 
-    // 1. Bezpečná extrakce dat z příchozího payloadu
     const extracted = typeof extractWantedItemsData === 'function' ? extractWantedItemsData(rawData) : null;
     const sourceData = extracted?.inventory || rawData.campaigns || rawData.inventory || rawData;
 
-    // 2. Normalizace dat (vytvoříme pole i mapu podle ID)
     let inventoryList = [];
     let campaignsMap = {};
 
     if (Array.isArray(sourceData)) {
         inventoryList = sourceData;
         sourceData.forEach(camp => {
-            if (camp && camp.id) {
+            if (camp && (camp.id || camp.id === 0)) {
+                camp.game_name = getCampaignGameName(camp);
+                
+                // Bezpečná normalizace timed_drops, pokud by dorazily jako objekt
+                const drops = getCampaignDrops(camp);
+                if (camp.timed_drops && !Array.isArray(camp.timed_drops)) {
+                    camp.timed_drops = Object.values(camp.timed_drops);
+                } else if (!camp.timed_drops && Array.isArray(drops)) {
+                    camp.timed_drops = drops;
+                }
+
                 campaignsMap[camp.id] = camp;
             }
         });
     } else if (typeof sourceData === 'object' && sourceData !== null) {
-        campaignsMap = { ...sourceData };
-        inventoryList = Object.values(sourceData);
+        Object.keys(sourceData).forEach(key => {
+            const camp = sourceData[key];
+            if (camp && typeof camp === 'object') {
+                camp.game_name = getCampaignGameName(camp);
+                
+                const drops = getCampaignDrops(camp);
+                if (camp.timed_drops && !Array.isArray(camp.timed_drops)) {
+                    camp.timed_drops = Object.values(camp.timed_drops);
+                } else if (!camp.timed_drops && Array.isArray(drops)) {
+                    camp.timed_drops = drops;
+                }
+
+                campaignsMap[key] = camp;
+            }
+        });
+        inventoryList = Object.values(campaignsMap);
     }
 
-    // 3. Zápis do Single Source of Truth (window.state)
-    window.state = {
-        ...window.state,
-        inventory: inventoryList,
-        campaigns: campaignsMap
-    };
+    window.state = window.state || {};
+    window.state.inventory = inventoryList;
+    window.state.campaigns = campaignsMap;
 
-    console.log("[Inventory] Updated window.state.campaigns count:", Object.keys(window.state.campaigns || {}).length);
+    if (typeof state !== 'undefined' && state !== window.state) {
+        state.inventory = inventoryList;
+        state.campaigns = campaignsMap;
+    }
 
-    // 4. Odpálení události pro systém
-    window.dispatchEvent(new CustomEvent('stateUpdated'));
-
-    // 5. Přímé překreslení UI (zpětná kompatibilita pro starší renderery)
-    if (typeof renderInventory === 'function') renderInventory();
+    if (typeof updateGameTagsDisplay === 'function') updateGameTagsDisplay();
+    if (typeof renderGameDropdown === 'function') renderGameDropdown('', true);
+    if (typeof renderInventory === 'function') renderInventory(true);
     if (typeof applyAutoSortIfNeeded === 'function') applyAutoSortIfNeeded();
     if (typeof syncAdminState === 'function') syncAdminState();
 }
@@ -74,15 +105,13 @@ function handleInventoryBatchUpdate(rawData) {
 // ==================== Game Dropdown & Tags ====================
 
 function getAvailableGamesForDropdown() {
-    // Extract game names from campaigns safely and remove empty/falsy values
-    const gamesFromCampaigns = Object.values(state?.campaigns || {})
-        .map(campaign => campaign?.game_name)
+    const currentCampaigns = window.state?.campaigns || (typeof state !== 'undefined' ? state?.campaigns : {}) || {};
+
+    const gamesFromCampaigns = Object.values(currentCampaigns)
+        .map(campaign => getCampaignGameName(campaign))
         .filter(Boolean);
 
-    // Convert settings to array and filter falsy values
-    const gamesFromSettings = Array.from(availableGames || []).filter(Boolean);
-
-    // Merge, deduplicate, and sort alphabetically
+    const gamesFromSettings = Array.from(typeof availableGames !== 'undefined' ? availableGames : []).filter(Boolean);
     const uniqueGames = Array.from(new Set([...gamesFromCampaigns, ...gamesFromSettings]));
 
     return uniqueGames.sort((a, b) => a.localeCompare(b));
@@ -95,8 +124,6 @@ function renderGameDropdown(searchTerm = '', force = false) {
     if (!dropdown) return;
 
     const allGames = typeof getAvailableGamesForDropdown === 'function' ? getAvailableGamesForDropdown() : [];
-
-    // Filter games by search term (case-insensitive)
     const searchLower = searchTerm.toLowerCase().trim();
     const filteredGames = searchLower
         ? allGames.filter(game => game.toLowerCase().includes(searchLower))
@@ -105,7 +132,6 @@ function renderGameDropdown(searchTerm = '', force = false) {
     const selectedGames = Array.isArray(selectedInventoryGames) ? selectedInventoryGames : [];
     const focusedIdx = typeof gameDropdownFocusedIndex !== 'undefined' ? gameDropdownFocusedIndex : -1;
 
-    // Structural Fingerprint Check: Serialize filtered and selected games to capture actual state changes
     const filteredHash = filteredGames.join('|');
     const selectedHash = selectedGames.join('|');
     const currentHash = `${searchLower}_${filteredHash}_${focusedIdx}_${selectedHash}`;
@@ -115,7 +141,6 @@ function renderGameDropdown(searchTerm = '', force = false) {
     }
     lastGameDropdownHash = currentHash;
 
-    // Handle Empty States
     if (filteredGames.length === 0) {
         dropdown.replaceChildren(makeElement('div', { class: 'dropdown-item no-results' }, 'No games found'));
         if (typeof gameDropdownFocusedIndex !== 'undefined') {
@@ -124,7 +149,6 @@ function renderGameDropdown(searchTerm = '', force = false) {
         return;
     }
 
-    // Batch DOM Injection via DocumentFragment
     const fragment = document.createDocumentFragment();
 
     filteredGames.forEach((gameName, index) => {
@@ -132,7 +156,6 @@ function renderGameDropdown(searchTerm = '', force = false) {
         const isFocused = index === focusedIdx;
 
         const item = document.createElement('div');
-        // Added 'selected' class so CSS can style the background of checked items
         item.className = 'dropdown-item' 
             + (isFocused ? ' focused' : '') 
             + (isSelected ? ' selected' : '');
@@ -152,15 +175,11 @@ function renderGameDropdown(searchTerm = '', force = false) {
         item.appendChild(checkbox);
         item.appendChild(label);
 
-        // Click handler for the entire item
         item.addEventListener('click', (e) => {
             e.stopPropagation();
-
-            // Prevent double triggers from native label/checkbox clicks
             if (e.target === checkbox || e.target === label) {
                 e.preventDefault();
             }
-
             if (typeof toggleGameSelection === 'function') {
                 toggleGameSelection(gameName);
             }
@@ -169,7 +188,6 @@ function renderGameDropdown(searchTerm = '', force = false) {
         fragment.appendChild(item);
     });
 
-    // Atomic insertion of the entire tree into the DOM at once
     dropdown.replaceChildren(fragment);
 }
 
@@ -238,30 +256,24 @@ function toggleGameSelection(gameName) {
         selectedInventoryGames.push(gameName);
     }
 
-    console.log('[Game Filter] Toggled inventory game selection:', gameName, 'Active selection:', selectedInventoryGames);
-
-    // 1. Immediate local UI update (Optimistic UI)
     updateGameTagsDisplay();
     const searchInput = document.getElementById('inventory-game-search');
     renderGameDropdown(searchInput ? searchInput.value : '');
     if (typeof renderInventory === 'function') renderInventory();
 
-    // 2. Buffer / Debounce for server save
     if (inventorySaveTimeout) {
         clearTimeout(inventorySaveTimeout);
     }
 
     inventorySaveTimeout = setTimeout(() => {
-        console.log('[Game Filter] Flushing inventory selection to server...');
         saveSettings();
-    }, 1000); // Wait 1 second before saving
+    }, 1000);
 }
 
 function removeGameTag(gameName) {
     const index = selectedInventoryGames.indexOf(gameName);
     if (index >= 0) {
         selectedInventoryGames.splice(index, 1);
-        console.log('[Game Filter] Removed game tag:', gameName);
         updateGameTagsDisplay();
         const searchInput = document.getElementById('inventory-game-search');
         renderGameDropdown(searchInput ? searchInput.value : '');
@@ -300,11 +312,9 @@ function updateGameTagsDisplay() {
 
 function sortCampaigns(campaigns) {
     const now = Date.now();
-//    console.log('[Inventory Sort] Sorting campaigns array of count:', campaigns.length);
     return [...campaigns].sort((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1;
         
-        // Active: Sort by ending soonest
         if (a.active) {
             const dateA = a.ends_at ? new Date(a.ends_at).getTime() : Infinity;
             const dateB = b.ends_at ? new Date(b.ends_at).getTime() : Infinity;
@@ -314,19 +324,16 @@ function sortCampaigns(campaigns) {
         const statusA = getCampaignStatus(a, now);
         const statusB = getCampaignStatus(b, now);
         
-        // Upcoming: Prioritize over expired/finished
         if (statusA.isUpcoming !== statusB.isUpcoming) {
             return statusA.isUpcoming ? -1 : 1;
         }
         
-        // Both upcoming: Sort by starting soonest
         if (statusA.isUpcoming) {
             const startsA = a.starts_at ? new Date(a.starts_at).getTime() : Infinity;
             const startsB = b.starts_at ? new Date(b.starts_at).getTime() : Infinity;
             return startsA - startsB;
         }
         
-        // Both expired/finished: Sort by recently ended
         const endsAtA = a.ends_at ? new Date(a.ends_at).getTime() : 0;
         const endsAtB = b.ends_at ? new Date(b.ends_at).getTime() : 0;
         return endsAtB - endsAtA;
@@ -334,30 +341,25 @@ function sortCampaigns(campaigns) {
 }
 
 function getInventoryFilters() {
-    // Get filter state from UI checkboxes and selected games array
-    const filters = {
+    return {
         show_active: document.getElementById('filter-active')?.checked || false,
         show_not_linked: document.getElementById('filter-not-linked')?.checked || false,
         show_upcoming: document.getElementById('filter-upcoming')?.checked || false,
         show_expired: document.getElementById('filter-expired')?.checked || false,
         show_finished: document.getElementById('filter-finished')?.checked || false,
         game_name_search: [...selectedInventoryGames],
-        // Benefit type filters (default to true if checkbox doesn't exist)
         show_benefit_item: document.getElementById('filter-benefit-item')?.checked !== false,
         show_benefit_badge: document.getElementById('filter-benefit-badge')?.checked !== false,
         show_benefit_emote: document.getElementById('filter-benefit-emote')?.checked !== false,
         show_benefit_other: document.getElementById('filter-benefit-other')?.checked !== false,
     };
-    return filters;
 }
 
-// Determines the precise lifecycle state of a campaign
 function getCampaignStatus(campaign, now = Date.now()) {
     if (!campaign) {
         return { isActive: false, isUpcoming: false, isExpired: false, isFinished: false, isReady: false };
     }
 
-    // Bezpečný převod data na timestamp s ochranou proti NaN
     const parseTimestamp = (dateVal) => {
         if (!dateVal) return 0;
         const time = new Date(dateVal).getTime();
@@ -367,26 +369,23 @@ function getCampaignStatus(campaign, now = Date.now()) {
     const startsAt = parseTimestamp(campaign.starts_at);
     const endsAt = parseTimestamp(campaign.ends_at);
 
-    // 1. Check Upcoming (Plánovaná / Nadcházející)
     const isUpcoming = (startsAt > now) || 
                        (campaign.status === 'UPCOMING') || 
                        (campaign.upcoming === true);
 
-    // 2. Check Expired (Vypršená - nesmí být Upcoming)
     const isExpired = !isUpcoming && (
         (endsAt > 0 && endsAt <= now) || 
         (campaign.status === 'EXPIRED')
     );
 
-    // 3. Check Active (Aktivní - nesmí být Upcoming ani Expired)
     const isActive = !isUpcoming && !isExpired && (
         (startsAt > 0 && startsAt <= now && (endsAt === 0 || endsAt > now)) || 
         (campaign.status === 'ACTIVE') || 
         (campaign.active === true)
     );
 
-    // 4. Calculate Drops / Progress
-    const dropsList = campaign.drops || campaign.time_based_drops || [];
+    // Použití univerzální funkce getCampaignDrops pro správné načtení dropů z nového modelu[cite: 1]
+    const dropsList = getCampaignDrops(campaign);
     const realClaimed = dropsList.length > 0 
         ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
         : (campaign.claimed_drops || 0);
@@ -394,13 +393,13 @@ function getCampaignStatus(campaign, now = Date.now()) {
 
     const isFinished = realTotal > 0 && realClaimed >= realTotal;
 
-    // 5. Check Ready To Claim (Natěženo 100 %, nevyzvednuto, kampaň nevypršela)
     const hasClaimableDrop = dropsList.some(d => {
         const isClaimed = d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED';
         if (isClaimed) return false;
 
         const isClaimableFlag = d.is_claimable || d.claimable || d.isClaimable || d.status === 'READY_TO_CLAIM' || d.status === 'CLAIMABLE';
-        const isProgressFull = (d.current_minutes && d.required_minutes && d.current_minutes >= d.required_minutes);
+        const currentMins = d.current_minutes !== undefined ? d.current_minutes : (d.real_current_minutes || 0);
+        const isProgressFull = (currentMins && d.required_minutes && currentMins >= d.required_minutes);
 
         return isClaimableFlag || isProgressFull;
     });
@@ -422,7 +421,6 @@ function getCampaignStatus(campaign, now = Date.now()) {
     };
 }
 
-// Checks if a campaign matches status checkboxes
 function matchesStatusFilters(campaign, filters, status) {
     const hasAnyFilter = filters.show_active || filters.show_not_linked ||
                          filters.show_upcoming || filters.show_expired || 
@@ -430,7 +428,6 @@ function matchesStatusFilters(campaign, filters, status) {
     
     if (!hasAnyFilter) return true;
 
-    // Time status check (Active, Upcoming, Expired, Finished)
     const hasTimeFilter = filters.show_active || filters.show_upcoming || 
                           filters.show_expired || filters.show_finished;
     
@@ -442,7 +439,6 @@ function matchesStatusFilters(campaign, filters, status) {
         if (filters.show_active && status.isActive && !status.isFinished && !status.isUpcoming) matchesTime = true;
     }
 
-    // Connection status check (Not Linked)
     let matchesLink = true;
     if (!campaign.linked) {
         matchesLink = filters.show_not_linked;
@@ -453,24 +449,24 @@ function matchesStatusFilters(campaign, filters, status) {
     return matchesTime && matchesLink;
 }
 
-// Checks if a campaign matches the selected game filters
 function matchesGameFilter(campaign, filters) {
     if (!filters.game_name_search || filters.game_name_search.length === 0) return true;
-    return filters.game_name_search.includes(campaign.game_name);
+    const gameName = getCampaignGameName(campaign);
+    return filters.game_name_search.includes(gameName);
 }
 
-// Checks if a campaign has drops matching selected reward types
 function matchesBenefitFilter(campaign, filters) {
     const allBenefitsEnabled = filters.show_benefit_item && filters.show_benefit_badge &&
                                filters.show_benefit_emote && filters.show_benefit_other;
     
-    if (allBenefitsEnabled || !campaign.drops) return true;
+    const drops = getCampaignDrops(campaign);
+    if (allBenefitsEnabled || drops.length === 0) return true;
 
     const hasBenefitFilter = filters.show_benefit_item || filters.show_benefit_badge || 
                              filters.show_benefit_emote || filters.show_benefit_other;
     if (!hasBenefitFilter) return true;
 
-    for (const drop of campaign.drops) {
+    for (const drop of drops) {
         if (!drop.benefits) continue;
         for (const benefit of drop.benefits) {
             const benefitType = (benefit.type || '').toUpperCase();
@@ -483,37 +479,20 @@ function matchesBenefitFilter(campaign, filters) {
     return false;
 }
 
-// Main filter matcher
 function campaignMatchesFilters(campaign, filters) {
     const status = getCampaignStatus(campaign);
-
     const matchStatus = matchesStatusFilters(campaign, filters, status);
     const matchGame = matchesGameFilter(campaign, filters);
     const matchBenefit = matchesBenefitFilter(campaign, filters);
 
-    const result = matchStatus && matchGame && matchBenefit;
-
-    if (!result) {
-        console.log(`[Filter Debug] Rejected campaign '${campaign.game_name || campaign.name}':`, {
-            status,
-            matchStatus,
-            matchGame,
-            matchBenefit
-        });
-    }
-
-    return result;
+    return matchStatus && matchGame && matchBenefit;
 }
 
 function onInventoryFilterChange() {
-    console.log('[Inventory Filter] Filter state changed by user interaction.');
     saveSettings();
     renderInventory();
 }
 
-/**
- * Safely sets the checked state of a checkbox if it exists in the DOM.
- */
 function setCheckboxChecked(elementId, state) {
     const el = document.getElementById(elementId);
     if (el) {
@@ -521,9 +500,6 @@ function setCheckboxChecked(elementId, state) {
     }
 }
 
-/**
- * Clears all inventory filters to default state safely.
- */
 function clearInventoryFilters() {
     const idsToUncheck = [
         'filter-active',
@@ -540,44 +516,34 @@ function clearInventoryFilters() {
         'filter-benefit-other'
     ];
 
-    // 1. Safely uncheck state filters
     idsToUncheck.forEach(id => setCheckboxChecked(id, false));
-
-    // 2. Safely check benefit filters
     idsToCheck.forEach(id => setCheckboxChecked(id, true));
 
-    // 3. Safely clear search input
     const searchInput = document.getElementById('inventory-game-search');
     if (searchInput) {
         searchInput.value = '';
     }
 
-    // 4. Safely clear array without breaking reference
     if (typeof selectedInventoryGames !== 'undefined' && Array.isArray(selectedInventoryGames)) {
         selectedInventoryGames.length = 0;
     }
 
-    // 5. Update UI tags display & dropdown checkboxes
     if (typeof updateGameTagsDisplay === 'function') {
         updateGameTagsDisplay();
     }
     if (typeof renderGameDropdown === 'function') {
-        renderGameDropdown('', true); // Force re-render dropdownu bez vybraných her
+        renderGameDropdown('', true);
     }
 
-    console.log('[Inventory Filter] Cleared all inventory filters to default state.');
-
-    // 6. Save settings and re-render grid
     if (typeof saveSettings === 'function') {
         saveSettings();
     }
 
     if (typeof renderInventory === 'function') {
-        renderInventory(true); // Force re-render inventory mřížky
+        renderInventory(true);
     }
 }
 
-// Renders a single benefit item
 function renderBenefitItem(benefit, statusClass = '') {
     const className = statusClass ? `benefit-item ${statusClass}` : 'benefit-item';
     
@@ -593,7 +559,6 @@ function renderBenefitItem(benefit, statusClass = '') {
     });
 }
 
-// Renders a single drop item with progress and benefits
 function renderDropItem(drop, t) {
     let statusClass = '';
     if (drop.is_claimed) {
@@ -654,8 +619,9 @@ function renderDropItem(drop, t) {
 
         if (!isDirect) {
             if (!drop.can_claim) {
-                const progressPercent = Math.round((drop.progress || 0) * 100);
-                contentWrapper.appendChild(makeElement('div', {}, `${drop.current_minutes || 0} / ${drop.required_minutes} minutes (${progressPercent}%)`));
+                const currentMins = drop.current_minutes !== undefined ? drop.current_minutes : (drop.real_current_minutes || 0);
+                const progressPercent = Math.round((drop.progress || (drop.required_minutes ? currentMins / drop.required_minutes : 0)) * 100);
+                contentWrapper.appendChild(makeElement('div', {}, `${currentMins} / ${drop.required_minutes} minutes (${progressPercent}%)`));
             } else {
                 contentWrapper.appendChild(makeElement('div', { style: 'color: var(--warning-color); font-weight: bold; margin-top: 5px;' }, 'Ready to claim!'));
             }
@@ -676,7 +642,7 @@ function renderDropBlock(drop, t) {
         statusClass = 'drop-ready';
     } else if (drop.is_expired) {
         statusClass = 'drop-expired';
-    } else if ((drop.progress || 0) > 0 || drop.current_minutes > 0) {
+    } else if ((drop.progress || 0) > 0 || (drop.current_minutes || drop.real_current_minutes) > 0) {
         statusClass = 'drop-active';
     }
 
@@ -687,7 +653,6 @@ function renderDropBlock(drop, t) {
     return dropBlock;
 }
 
-// Renders header section for a campaign card
 function renderCardHeaderSection(campaign, statusClass, t) {
     const campaignHeader = makeElement('div', { class: 'campaign-header' });
 
@@ -728,11 +693,10 @@ function renderCardHeaderSection(campaign, statusClass, t) {
     return campaignHeader;
 }
 
-// Renders info section (status, counters, timing)
 function renderCardInfoSection(campaign, statusText, t) {
     const infoSection = makeElement('div', { class: 'campaign-info' });
 
-    const dropsList = campaign.drops || campaign.time_based_drops || [];
+    const dropsList = getCampaignDrops(campaign);
     const realClaimed = dropsList.length > 0 
         ? dropsList.filter(d => d.is_claimed || d.claimed || d.isClaimed || d.status === 'CLAIMED').length 
         : (campaign.claimed_drops || 0);
@@ -773,15 +737,15 @@ function renderCardInfoSection(campaign, statusText, t) {
     return infoSection;
 }
 
-// Renders campaign drops section
 function renderCardDropsSection(campaign, t) {
     const dropsBox = makeElement('div', { class: 'campaign-drops' });
     const currentDrop = (typeof state !== 'undefined' && state.currentDrop) || null;
 
-    if (campaign.drops && campaign.drops.length > 0) {
+    const dropsList = getCampaignDrops(campaign);
+    if (dropsList.length > 0) {
         dropsBox.appendChild(makeElement('div', { class: 'campaign-drop-title' }, campaign.name));
         
-        campaign.drops.forEach(drop => {
+        dropsList.forEach(drop => {
             const dropId = drop.id || drop.drop_id || '';
             let isActivelyMining = false;
             
@@ -790,7 +754,7 @@ function renderCardDropsSection(campaign, t) {
                 isActivelyMining = currentId && String(dropId) === String(currentId);
             }
 
-            const current = Math.round(drop.current_minutes || 0);
+            const current = Math.round(drop.current_minutes !== undefined ? drop.current_minutes : (drop.real_current_minutes || 0));
             const required = drop.required_minutes || 0;
             const isClaimed = drop.is_claimed === true || drop.is_claimed === 1 || drop.is_claimed === 'true' || drop.is_claimed === '1';
             const canClaim = drop.can_claim === true || drop.can_claim === 1;
@@ -817,8 +781,6 @@ function renderCardDropsSection(campaign, t) {
     return dropsBox;
 }
 
-// Builds the final HTML element for a single campaign card
-// Builds the final HTML element for a single campaign card
 function renderCampaignCard(campaign, t) {
     const status = getCampaignStatus(campaign);
     const isLinked = campaign.linked !== undefined ? campaign.linked : (campaign.is_account_connected !== undefined ? campaign.is_account_connected : true);
@@ -826,7 +788,6 @@ function renderCampaignCard(campaign, t) {
     let statusClass = 'upcoming';
     let statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
 
-    // Status evaluation hierarchy
     if (!isLinked) {
         statusClass = 'not-linked';
         statusText = t.gui?.inventory?.status?.not_linked || 'Not Linked';
@@ -837,7 +798,6 @@ function renderCampaignCard(campaign, t) {
         statusClass = 'completed';
         statusText = t.gui?.inventory?.status?.completed || 'Completed';
     } else if (status.isReady) {
-        // Orange status for ready to claim drops
         statusClass = 'ready';
         statusText = t.gui?.inventory?.status?.ready || 'Ready to Claim';
     } else if (campaign.is_mining_in_progress) {
@@ -864,45 +824,30 @@ function renderCampaignCard(campaign, t) {
 
 let lastInventoryRenderHash = null;
 
-// Main grid rendering procedure
 function renderInventory(force = false) {
-//    console.log('[Inventory Debug] === Executing renderInventory ===');
     try {
         const container = document.getElementById('inventory-grid');
         if (!container) {
-//            console.error('[Inventory Debug] ERROR: Element #inventory-grid NOT FOUND in DOM!');
             return;
         }
 
         if (typeof updateOverallProgress === 'function') {
             updateOverallProgress();
-        } else {
-//            console.log('[Inventory Debug] WARNING: Function updateOverallProgress does not exist.');
         }
 
         const t = state?.translations || {};
         const allCampaigns = state?.campaigns ? Object.values(state.campaigns) : [];
-
-//        console.log(`[Inventory Debug] Total campaigns in state object: ${allCampaigns.length}`, state?.campaigns);
-
         const filters = getInventoryFilters();
-//        console.log('[Inventory Debug] Loaded filters from UI:', filters);
 
-        // Filter & Sort
         const filteredCampaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
-//        console.log(`[Inventory Debug] Campaigns passing filter: ${filteredCampaigns.length} of ${allCampaigns.length}`);
-
         const sortedCampaigns = sortCampaigns(filteredCampaigns);
 
-        // Enhanced Fingerprint Guard: Includes campaign state, live progress, claimed counts, account link status, and isReady state
         const campaignStateFingerprint = sortedCampaigns.map(c => {
             const id = c.id || c.game_name || '';
             const progress = c.current_minutes || c.progress || 0;
             const claimed = c.claimed_drops_count || c.claimed || 0;
             const status = c.status || '';
             const isLinked = c.is_account_connected !== undefined ? c.is_account_connected : (c.linked !== undefined ? c.linked : true);
-            
-            // Check if campaign is in READY TO CLAIM state
             const isReadyState = typeof getCampaignStatus === 'function' ? getCampaignStatus(c).isReady : false;
 
             return `${id}:${status}:${progress}:${claimed}:${isLinked}:${isReadyState}`;
@@ -911,20 +856,17 @@ function renderInventory(force = false) {
         const currentHash = `${sortedCampaigns.length}_${campaignStateFingerprint}_${JSON.stringify(filters)}`;
 
         if (!force && lastInventoryRenderHash === currentHash) {
-//            console.log('[Inventory Debug] Render skipped (identical data, live status, and filters - fingerprint match).');
             return;
         }
         lastInventoryRenderHash = currentHash;
 
         if (allCampaigns.length === 0) {
-//            console.log('[Inventory Debug] WARNING: No data in state.campaigns!');
             const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
             return;
         }
 
         if (sortedCampaigns.length === 0) {
-//            console.log('[Inventory Debug] WARNING: Filters rejected ALL campaigns!');
             const noMatchMsg = t.gui?.inventory?.no_matching_campaigns || 'No campaigns match the current filters.';
             container.replaceChildren(makeElement('p', { class: 'empty-message' }, noMatchMsg));
             return;
@@ -935,14 +877,13 @@ function renderInventory(force = false) {
             try {
                 fragment.appendChild(renderCampaignCard(campaign, t));
             } catch (err) {
-//                console.error(`[Inventory Debug] ERROR creating card for campaign #${idx} (${campaign.game_name}):`, err);
+                // console.error(err);
             }
         });
 
         container.replaceChildren(fragment);
-//        console.log('[Inventory Debug] SUCCESS: Grid successfully rendered into DOM!');
 
     } catch (globalErr) {
-//        console.error('[Inventory Debug] CRITICAL ERROR inside renderInventory:', globalErr);
+        // console.error(globalErr);
     }
 }

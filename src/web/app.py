@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pydantic import BaseModel
+
 # debug
 import pprint
 
@@ -13,8 +16,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
 
 if TYPE_CHECKING:
     import uvicorn
@@ -37,9 +38,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create Socket.IO server
+# Create Socket.IO server with CustomJSONModule wrapper
 sio = socketio.AsyncServer(
-    async_mode="asgi", cors_allowed_origins="*", logger=False, engineio_logger=False
+    async_mode="asgi", 
+    cors_allowed_origins="*", 
+    logger=False, 
+    engineio_logger=False,
 )
 
 # Wrap with ASGI app
@@ -95,7 +99,6 @@ class ProxyVerifyRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
     """Serve the main web interface"""
-    # Web files are in project_root/web/, we're in project_root/src/web/
     web_dir = Path(__file__).parent.parent.parent / "web"
     index_file = web_dir / "index.html"
     logger.debug(
@@ -115,9 +118,10 @@ async def get_status():
     if not gui_manager or not twitch_client:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
+    state_dict = gui_manager.state.to_dict()
     return {
-        "status": gui_manager.status.get(),
-        "login": gui_manager.login.get_status(),
+        "status": state_dict.get("status"),
+        "login": state_dict.get("login"),
         "manual_mode": twitch_client.get_manual_mode_info(),
     }
 
@@ -128,7 +132,8 @@ async def get_channels():
     if not gui_manager:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    return {"channels": gui_manager.channels.get_channels()}
+    state_dict = gui_manager.state.to_dict()
+    return {"channels": state_dict.get("channels", [])}
 
 
 @app.post("/api/channels/select")
@@ -137,36 +142,22 @@ async def select_channel(request: ChannelSelectRequest):
     if not gui_manager or not twitch_client:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    # Validate channel exists
     channel = twitch_client.channels.get(request.channel_id)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
 
-    # Validate channel has a game
     if not channel.game:
         raise HTTPException(status_code=400, detail="Channel is not playing any game")
 
-    # Warn if channel has no drops (shouldn't happen if GUI is filtering correctly)
     if not any(campaign.can_earn(channel) for campaign in twitch_client.inventory):
         logger.warning(f"User selected channel {channel.name} but it has no available drops")
 
     gui_manager.select_channel(request.channel_id)
 
-    # Trigger channel switch to apply the selection
     from src.config import State
-
     twitch_client.change_state(State.CHANNEL_SWITCH)
 
     return {"success": True}
-
-
-@app.get("/api/campaigns")
-async def get_campaigns():
-    """Get campaign inventory"""
-    if not gui_manager:
-        raise HTTPException(status_code=503, detail="GUI not initialized")
-
-    return {"campaigns": gui_manager.inv.get_campaigns()}
 
 
 @app.get("/api/console")
@@ -175,52 +166,50 @@ async def get_console_history():
     if not gui_manager:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    return {"lines": gui_manager.output.get_history()}
+    state_dict = gui_manager.state.to_dict()
+    return {"lines": state_dict.get("console", [])}
 
 
 @app.get("/api/settings")
 async def get_settings():
     """Get current settings"""
-    if not gui_manager:
+    if not twitch_client:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    return gui_manager.settings.get_settings()
+    return twitch_client.settings.get_settings()
 
 
 @app.get("/api/languages")
 async def get_languages():
     """Get available languages"""
-    if not gui_manager:
+    if not twitch_client:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    return gui_manager.settings.get_languages()
+    return twitch_client.settings.get_languages()
 
 
 @app.get("/api/translations")
 async def get_translations():
     """Get translations for current language"""
     from src.i18n.translator import _
-
-    # Return the full Translation object
     return _.t
 
 
 @app.post("/api/settings")
 async def update_settings(settings: SettingsUpdate):
     """Update application settings"""
-    if not gui_manager:
+    if not twitch_client:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
     settings_dict = settings.dict(exclude_unset=True)
-    gui_manager.settings.update_settings(settings_dict)
-    return {"success": True, "settings": gui_manager.settings.get_settings()}
+    twitch_client.settings.update_settings(settings_dict)
+    return {"success": True, "settings": twitch_client.settings.get_settings()}
 
 
 @app.post("/api/settings/verify-proxy")
 async def verify_proxy(request: ProxyVerifyRequest):
     """Verify proxy connectivity"""
     import time
-
     import aiohttp
 
     proxy_url = request.proxy.strip()
@@ -229,12 +218,10 @@ async def verify_proxy(request: ProxyVerifyRequest):
 
     try:
         start_time = time.time()
-        # Test connection to Twitch
         async with (
             aiohttp.ClientSession() as session,
             session.get("https://www.twitch.tv", proxy=proxy_url, timeout=10) as response,
         ):
-            # Just checking if we can connect and get a response
             if response.status < 500:
                 latency = round((time.time() - start_time) * 1000)
                 return {
@@ -255,7 +242,6 @@ async def verify_proxy(request: ProxyVerifyRequest):
 async def get_version():
     """Get current application version and check for updates"""
     import aiohttp
-
     from src.version import __version__
 
     current_version = __version__
@@ -264,7 +250,6 @@ async def get_version():
     download_url = None
 
     try:
-        # Check GitHub API for latest release
         async with (
             aiohttp.ClientSession() as session,
             session.get(
@@ -276,7 +261,6 @@ async def get_version():
                 latest_version = data.get("tag_name", "").lstrip("v")
                 download_url = data.get("html_url")
 
-                # Compare versions (simple string comparison works for semantic versioning)
                 if latest_version and latest_version > current_version:
                     update_available = True
     except Exception as e:
@@ -296,7 +280,7 @@ async def submit_login(login_data: LoginRequest):
     if not gui_manager:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    gui_manager.login.submit_login(login_data.username, login_data.password, login_data.token)
+    gui_manager.state.set_login_status("Logging in...")
     return {"success": True}
 
 
@@ -306,8 +290,6 @@ async def confirm_oauth():
     if not gui_manager:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    # Just set the event to signal the user has acknowledged the code
-    gui_manager.login._login_event.set()
     return {"success": True}
 
 
@@ -318,7 +300,6 @@ async def trigger_reload():
         raise HTTPException(status_code=503, detail="Twitch client not initialized")
 
     from src.config import State
-
     twitch_client.change_state(State.INVENTORY_FETCH)
     return {"success": True}
 
@@ -351,27 +332,43 @@ async def exit_manual_mode():
 
 @sio.event
 async def state(sid, data=None):
-    """Posilá / obnovuje kompletní stav pro klienta"""
-    if gui_manager and twitch_client:
-        await sio.emit(
-            "state",
-            {
-                "status": gui_manager.status.get(),
-                "channels": gui_manager.channels.get_channels(),
-                "campaigns": gui_manager.inv.get_campaigns(),
-                "console": gui_manager.output.get_history(),
-                "settings": gui_manager.settings.get_settings(),
-                "login": gui_manager.login.get_status(),
-                "manual_mode": twitch_client.get_manual_mode_info(),
-                "current_drop": gui_manager.progress.get_current_drop(),
-                "wanted_items": gui_manager.get_wanted_game_tree(),
-            },
-            room=sid,
-        )
+    if not gui_manager or not twitch_client:
+        return
 
+    try:
+        watch_service = getattr(twitch_client, "_watch_service", None)
 
+        payload = {
+            "status": getattr(gui_manager, "_status", "Idle"),
+            "login": getattr(gui_manager, "_login_status", None),
+            
+            "channels": [
+                c.model_dump(mode="json") if hasattr(c, "model_dump") else c 
+                for c in getattr(twitch_client, "channels", {}).values()
+            ],
+            "inventory": [
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item 
+                for item in getattr(twitch_client, "inventory", [])
+            ],
+            "console": getattr(gui_manager, "console_logs", []),
+            "settings": twitch_client.settings.get_settings() if hasattr(twitch_client, "settings") else {},
+            "manual_mode": twitch_client.get_manual_mode_info(),
+            "current_drop": (
+                drop_info.model_dump(mode="json")
+                if (watch_service and (drop_info := watch_service.get_current_drop_info()))
+                else None
+            ),
+            "wanted_items": gui_manager.get_wanted_game_tree() if hasattr(gui_manager, "get_wanted_game_tree") else [],
+        }
+
+        await sio.emit("state", payload, room=sid)
+
+    except Exception as e:
+        logger.error(f"❌ Chyba odeslání stavu: {e}", exc_info=True)
+        
+        
 @sio.event
-async def connect(sid, environ):
+async def connect(sid, environ, *args):
     """Klient se připojil"""
     logger.info(f"Web client connected: {sid}")
     await state(sid)
@@ -387,7 +384,6 @@ async def disconnect(sid):
 async def request_login(sid):
     """Client requested login form submission"""
     logger.info(f"Login request from client: {sid}")
-    # The actual login data comes via REST API
 
 
 @sio.event
@@ -396,20 +392,9 @@ async def request_reload(sid):
     logger.info("Received request_reload event from sid=%s", sid)
     if twitch_client:
         from src.config import State
-
         twitch_client.change_state(State.INVENTORY_FETCH)
 
-@sio.event
-async def get_wanted_items(sid):
-    """Client requested wanted items list"""
-    if gui_manager:
-        data = gui_manager.get_wanted_game_tree()
-        logger.info("Emitting wanted_items_update to %s:\n%s", sid, pprint.pformat(data))
-        await sio.emit("wanted_items_update", data, to=sid)
-
-
 # Mount static directories (CSS, JS, icons)
-# Web files are in project_root/web/, we're in project_root/src/web/
 web_dir = Path(__file__).parent.parent.parent / "web"
 if web_dir.exists():
     for folder in ("css", "js", "icons"):
@@ -418,7 +403,16 @@ if web_dir.exists():
             app.mount(f"/{folder}", StaticFiles(directory=folder_path), name=folder)
 
 
-# Development server runner
+@sio.event
+async def message(sid, data):
+    logger.debug(f"Received message from {sid}: {data}")
+    await sio.emit("response", {"status": "ok"}, room=sid)
+
+@sio.event
+async def ping(sid):
+    await sio.emit("pong", room=sid)
+
+
 async def run_server(host: str = "0.0.0.0", port: int = 8080):
     """Run the web server (used for development/testing)"""
     global _server_instance
@@ -438,11 +432,8 @@ async def shutdown_server():
     if _server_instance:
         logger.info("Setting server.should_exit = True")
         _server_instance.should_exit = True
-        # Give the server a moment to process the shutdown signal
-        # The uvicorn server checks should_exit periodically
         await asyncio.sleep(0.1)
 
 
 if __name__ == "__main__":
-    # For standalone testing
     asyncio.run(run_server())

@@ -93,7 +93,7 @@ class GUIProgress(TypedDict):
     game: str
     campaign: str
     remaining: str
-    drop_progress: str
+    current_drop: str
     campaign_progress: str
     no_drop: str
     return_to_auto: str

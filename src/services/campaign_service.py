@@ -14,46 +14,18 @@ from src.api import GQLClient
 from src.config import GQL_OPERATIONS, State
 from src.exceptions import ExitRequest
 from src.i18n import _
-from src.models.campaign import DropsCampaign
+from src.models.models import DropsCampaign
 from src.utils import chunk
 
 
 if TYPE_CHECKING:
     from src.config import JsonType
     from src.core.client import Twitch
-    from src.models.channel import Channel
+    from src.models.models import Channel
 
 
 logger = logging.getLogger("TwitchDrops")
 HISTORY_FILE = Path("data/claimed_history.json")
-
-
-def load_local_history() -> set[str]:
-    """Načte ID z lokální pojistky (claimed_history.json)."""
-    if HISTORY_FILE.exists():
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-        except Exception as e:
-            logger.error("Chyba při načítání lokální historie: %s", e)
-    return set()
-
-
-def save_to_history(item_ids: set[str] | list[str] | str) -> None:
-    """Uloží získaná/sanovaná ID do lokální pojistky."""
-    if isinstance(item_ids, str):
-        item_ids = [item_ids]
-
-    history = load_local_history()
-    history.update(str(i) for i in item_ids if i)
-
-    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(sorted(list(history)), f, indent=2)
-    except Exception as e:
-        logger.error("Chyba při zápisu do lokální historie: %s", e)
-
 
 class InventoryService:
     """
@@ -401,129 +373,135 @@ class InventoryService:
         return emotes
 
     async def fetch_inventory(self) -> None:
-        """
-        Fetch the complete inventory including campaigns, drops, user emotes, and badges.
-        """
-        # Bezpečný obal pro status update (funguje s GUI i v headless testech)
-        def status_update(msg: str) -> None:
-            if getattr(self._twitch, "gui", None) and getattr(self._twitch.gui, "status", None):
-                try:
-                    self._twitch.gui.status.update(msg)
-                except Exception:
-                    pass
+        """Kompletní synchronizace inventáře Twitche, odznaků a kampaní."""
+        self._update_status(_.t["gui"]["status"]["fetching_inventory"])
 
-        status_update(_.t["gui"]["status"]["fetching_inventory"])
+        # 1. Načtení a synchronizace uživatelských odznaků a emotů
+        user_emotes, user_badges = await self._sync_user_assets()
 
-        # 1. NAČTENÍ EMOTŮ A ODZNAKŮ Z GQL
-        user_emotes: set[str] = await self._fetch_user_emotes()
-        user_badges: set[str] = await self._fetch_user_badges()
+        # 2. Získání základních dat z GQL a sestavení množiny získaných ID
+        inventory_raw = await self._fetch_raw_inventory()
+        claimed_map, all_claimed_ids = self._extract_claimed_ids(
+            inventory_raw, user_emotes, user_badges
+        )
 
-        # 📌 ULOŽENÍ DO ATRIBUTŮ (Pro přístup z BaseDrop a dalších služeb)
-        self._twitch.user_emotes = user_emotes
-        self._twitch.user_badges = user_badges
-        self.user_emotes = user_emotes
-        self.user_badges = user_badges
+        # 3. Načtení a sloučení detailů pro všechny dostupné kampaně
+        inventory_data = self._parse_ongoing_campaigns(inventory_raw)
+        await self._fetch_and_merge_available_campaigns(inventory_data)
+
+        # 4. Sanitace, tvorba objektů DropsCampaign a jejich seřazení
+        campaigns = self._build_and_sort_campaigns(inventory_data, claimed_map, all_claimed_ids)
+
+        # 5. Aktualizace vnitřního stavu a vykreslení do GUI
+        await self._apply_inventory_to_state(campaigns)
+        self._schedule_maintenance_tasks()
+    
+    def _update_status(self, msg: str) -> None:
+        """Bezpečný pomocník pro aktualizaci stavového řádku v GUI."""
+        gui = getattr(self._twitch, "gui", None)
+        if gui and getattr(gui, "status", None):
+            try:
+                gui.status.update(msg)
+            except Exception:
+                pass
+
+
+    async def _sync_user_assets(self) -> tuple[set[str], set[str]]:
+        """Načte a uloží uživatelské emoty a odznaky."""
+        emotes: set[str] = await self._fetch_user_emotes()
+        badges: set[str] = await self._fetch_user_badges()
+
+        self._twitch.user_emotes = emotes
+        self._twitch.user_badges = badges
+        self.user_emotes = emotes
+        self.user_badges = badges
 
         logger.info(
             "[Inventory] Synchronizováno %d emotů a %d odznaků do systémového stavu.",
-            len(user_emotes),
-            len(user_badges),
+            len(emotes),
+            len(badges),
         )
+        return emotes, badges
 
-        # Fetch in-progress campaigns (inventory)
+
+    async def _fetch_raw_inventory(self) -> dict[str, Any]:
+        """Stáhne surová data inventáře z Twitche."""
         response = await self._twitch.gql_request(GQL_OPERATIONS["Inventory"])
         data = response.get("data", response) if isinstance(response, dict) else {}
         user_data = data.get("currentUser", data) if isinstance(data, dict) else {}
-        inventory: dict[str, Any] = user_data.get("inventory", {}) if isinstance(user_data, dict) else {}
+        return user_data.get("inventory", {}) if isinstance(user_data, dict) else {}
 
-        ongoing_campaigns: list[JsonType] = inventory.get("dropCampaignsInProgress") or []
 
-        # 2. Shromáždíme všechna získaná ID z Twitch inventáře a lokální historie
-        claimed_benefits_map: dict[str, datetime] = {
-            b["id"]: isoparse(b["lastAwardedAt"])
-            for b in (inventory.get("gameEventDrops") or [])
-            if isinstance(b, dict) and "id" in b and "lastAwardedAt" in b
-        }
-
-        # Načtení lokální historie souboru
-        all_claimed_ids: set[str] = {str(item).lower().strip() for item in load_local_history()}
-        all_claimed_ids.update(str(k).lower().strip() for k in claimed_benefits_map.keys())
+    def _extract_claimed_ids(self, inventory_raw, user_emotes, user_badges):
+        claimed_map = {}  # nebo tvá stávající logika pro načtení claimed_map
         
-        # PROPOJENÍ: Přidáme všechny načtené emoty i odznaky z GQL do celkové množiny
-        all_claimed_ids.update(user_emotes)
-        all_claimed_ids.update(user_badges)
+        # 1. INICIALIZACE MNOŽINY (Tohle řádku předtím chybělo!)
+        all_claimed_ids: set[str] = set()
 
-        # 3. Vytáhneme ID i NÁZVY přímo z gameEventDrops pro Name-Matching v sanitaci
-        for drop in (inventory.get("gameEventDrops") or []):
-            if not isinstance(drop, dict):
-                continue
+        # 2. Přidání klíčů z claimed_map
+        if claimed_map:
+            all_claimed_ids.update(str(k).lower().strip() for k in claimed_map.keys())
 
-            # Přidání ID dropu / benefitu
-            b_id = drop.get("id") or drop.get("benefitID")
-            if b_id:
-                all_claimed_ids.add(str(b_id).lower().strip())
+        # 3. Pokud načítáš i emoty / odznaky / lokální historii, přidáš je do all_claimed_ids:
+        if user_emotes:
+            all_claimed_ids.update(str(e).lower().strip() for e in user_emotes)
+        if user_badges:
+            all_claimed_ids.update(str(b).lower().strip() for b in user_badges)
 
-            # Přidání ošetřeného názvu dropu
-            d_name = (
-                str(drop.get("name") or "")
-                .lower()
-                .replace("emote", "")
-                .replace("badge", "")
-                .replace("emotes", "")
-                .replace("badges", "")
-                .strip()
-            )
-            if len(d_name) > 2:
-                all_claimed_ids.add(d_name)
+        return claimed_map, all_claimed_ids
 
-            # Procházení pod-benefitů
-            for benefit in (drop.get("benefits") or []):
-                if isinstance(benefit, dict):
-                    if "id" in benefit:
-                        all_claimed_ids.add(str(benefit["id"]).lower().strip())
-                    
-                    b_name = (
-                        str(benefit.get("name") or "")
-                        .lower()
-                        .replace("emote", "")
-                        .replace("badge", "")
-                        .replace("emotes", "")
-                        .replace("badges", "")
-                        .strip()
-                    )
-                    if len(b_name) > 2:
-                        all_claimed_ids.add(b_name)
 
-        inventory_data: dict[str, JsonType] = {
-            c["id"]: c for c in ongoing_campaigns if isinstance(c, dict) and "id" in c
-        }
+    @staticmethod
+    def _add_clean_name(target_set: set[str], raw_name: Any) -> None:
+        """Vyčistí název odměny a přidá ho do množiny pro name-matching sanitaci."""
+        if not raw_name:
+            return
+        clean = (
+            str(raw_name)
+            .lower()
+            .replace("emote", "")
+            .replace("badge", "")
+            .replace("emotes", "")
+            .replace("badges", "")
+            .strip()
+        )
+        if len(clean) > 2:
+            target_set.add(clean)
 
-        # Fetch general available campaigns data (campaigns)
-        response_campaigns = await self._twitch.gql_request(GQL_OPERATIONS["Campaigns"])
-        c_data = response_campaigns.get("data", response_campaigns) if isinstance(response_campaigns, dict) else {}
+
+    def _parse_ongoing_campaigns(self, inventory: dict[str, Any]) -> dict[str, JsonType]:
+        """Vytáhne probíhající kampaně z inventáře."""
+        ongoing = inventory.get("dropCampaignsInProgress") or []
+        return {c["id"]: c for c in ongoing if isinstance(c, dict) and "id" in c}
+
+
+    async def _fetch_and_merge_available_campaigns(
+        self, inventory_data: dict[str, JsonType]
+    ) -> None:
+        """Stáhne seznam všech veřejných kampaní a po dávkách dočte jejich detaily."""
+        response = await self._twitch.gql_request(GQL_OPERATIONS["Campaigns"])
+        c_data = response.get("data", response) if isinstance(response, dict) else {}
         c_user_data = c_data.get("currentUser", c_data) if isinstance(c_data, dict) else {}
-        available_list: list[JsonType] = c_user_data.get("dropCampaigns") or []
+        available_list = c_user_data.get("dropCampaigns") or []
 
-        applicable_statuses = ("ACTIVE", "UPCOMING")
-        available_campaigns: dict[str, JsonType] = {
+        available_campaigns = {
             c["id"]: c
             for c in available_list
-            if isinstance(c, dict) and c.get("status") in applicable_statuses
+            if isinstance(c, dict) and c.get("status") in ("ACTIVE", "UPCOMING")
         }
 
-        # Fetch detailed data for each campaign, in chunks
-        status_update(_.t["gui"]["status"]["fetching_campaigns"])
-        fetch_campaigns_tasks: list[asyncio.Task[Any]] = [
-            asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
-            for campaigns_chunk in chunk(available_campaigns.items(), 20)
+        self._update_status(_.t["gui"]["status"]["fetching_campaigns"])
+
+        fetch_tasks = [
+            asyncio.create_task(self.fetch_campaigns(chunk_data))
+            for chunk_data in chunk(available_campaigns.items(), 20)
         ]
-        logger.info("Inventory fetched: %d total campaigns available from Twitch.", len(available_list))
+        logger.info("Inventory fetched: %d total campaigns available.", len(available_list))
 
         try:
-            for coro in asyncio.as_completed(fetch_campaigns_tasks):
-                chunk_campaigns_data = await coro
-                # Šetrné sloučení: namísto GQLClient.merge_data chránícího před přepsáním pokroku minut
-                for cid, fetched_camp in chunk_campaigns_data.items():
+            for coro in asyncio.as_completed(fetch_tasks):
+                chunk_campaigns = await coro
+                for cid, fetched_camp in chunk_campaigns.items():
                     if cid in inventory_data:
                         inventory_data[cid] = self._merge_campaign_progress(
                             inventory_data[cid], fetched_camp
@@ -531,49 +509,58 @@ class InventoryService:
                     else:
                         inventory_data[cid] = fetched_camp
         except Exception:
-            for task in fetch_campaigns_tasks:
+            for task in fetch_tasks:
                 task.cancel()
             raise
 
-        # Filter out invalid campaigns and sanitize in-place
-        for campaign_id in list(inventory_data.keys()):
-            if not isinstance(inventory_data[campaign_id], dict):
-                del inventory_data[campaign_id]
+
+    def _build_and_sort_campaigns(
+        self,
+        inventory_data: dict[str, JsonType],
+        claimed_map: dict[str, datetime],
+        all_claimed_ids: set[str],
+    ) -> list[DropsCampaign]:
+        """Sanituje slovníky z inventáře a vytvoří seřazené instance DropsCampaign."""
+        campaigns: list[DropsCampaign] = []
+
+        for cid, camp_dict in inventory_data.items():
+            if not isinstance(camp_dict, dict):
                 continue
 
-            if inventory_data[campaign_id].get("game") is None:
-                inventory_data[campaign_id]["game"] = {
+            # Ošetření kampaní bez přiřazené hry (např. Special Events)
+            if camp_dict.get("game") is None:
+                camp_dict["game"] = {
                     "id": "special_event",
-                    "name": inventory_data[campaign_id].get("name", "Special Events")
+                    "name": camp_dict.get("name", "Special Events"),
                 }
 
-            # VYČIŠTĚNÍ přímo v hlavním objektu před předáním do DropsCampaign
-            inventory_data[campaign_id] = self._sanitize_campaign_dict(
-                inventory_data[campaign_id], all_claimed_ids
+            # 1. Sanitizace JSONu (vyřešení desynchronizace, emotů a odznaků na úrovni služby)
+            sanitized_dict = self._sanitize_campaign_dict(camp_dict, all_claimed_ids)
+
+            # 2. Vytvoření instance kampaně z opravených dat
+            campaigns.append(DropsCampaign.from_json(self._twitch, sanitized_dict, claimed_map))
+
+        # 3. Vícekritériové řazení kampaní v jediném spolehlivém průchodu
+        campaigns.sort(
+            key=lambda c: (
+                not c.eligible,                           # 1. Dostupné kampaně první
+                not c.active,                             # 2. Aktivně běžící kampaně první
+                c.starts_at if c.upcoming else c.ends_at, # 3. Seřazení podle času
             )
+        )
 
-        # Vytvořit instance DropsCampaign z vyčištěných dat
-        campaigns: list[DropsCampaign] = [
-            DropsCampaign(
-                self._twitch,
-                campaign_data,
-                claimed_benefits_map,
-            )
-            for campaign_data in inventory_data.values()
-        ]
+        return campaigns
 
-        campaigns.sort(key=lambda c: c.active, reverse=True)
-        campaigns.sort(key=lambda c: c.upcoming and c.starts_at or c.ends_at)
-        campaigns.sort(key=lambda c: c.eligible, reverse=True)
 
+    async def _apply_inventory_to_state(self, campaigns: list[DropsCampaign]) -> None:
+        """Uloží kampaně do vnitřního stavu klienta a předá je do GUI."""
         self._twitch._drops.clear()
-        self._twitch.gui.inv.clear()
         self._twitch.inventory.clear()
         self._twitch._mnt_triggers.clear()
+
         switch_triggers: set[datetime] = set()
         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
 
-        # Add the campaigns to the internal inventory
         for campaign in campaigns:
             for drop in campaign.drops:
                 drop.sync_minutes(drop.current_minutes)
@@ -581,41 +568,27 @@ class InventoryService:
             self._twitch._drops.update({drop.id: drop for drop in campaign.drops})
             if campaign.can_earn_within(next_hour):
                 switch_triggers.update(campaign.time_triggers)
+
             self._twitch.inventory.append(campaign)
             self._twitch._campaigns[campaign.id] = campaign
 
-        # Concurrently add the campaigns into the GUI
-        status_update(
-            _.t["gui"]["status"]["adding_campaigns"].format(counter=f"(0/{len(campaigns)})")
-        )
-        add_campaign_tasks: list[asyncio.Task[None]] = [
-            asyncio.create_task(self._twitch.gui.inv.add_campaign(campaign))
-            for campaign in campaigns
-        ]
-
-        try:
-            for i, coro in enumerate(asyncio.as_completed(add_campaign_tasks), start=1):
-                await coro
-                status_update(
-                    _.t["gui"]["status"]["adding_campaigns"].format(
-                        counter=f"({i}/{len(campaigns)})"
-                    )
-                )
-                if self._twitch._state == State.EXIT:
-                    raise ExitRequest()
-        except Exception:
-            for task in add_campaign_tasks:
-                task.cancel()
-            raise
-
         self._twitch._mnt_triggers.extend(sorted(switch_triggers))
 
+        # 💡 PŘIDANÝ ŘÁDEK: Odeslání zpracovaných kampaní do Web GUI 💡
+        gui = getattr(self._twitch, "gui", None)
+        if gui and hasattr(gui, "inventory"):
+            gui.inventory.update(campaigns)
+
+
+    def _schedule_maintenance_tasks(self) -> None:
+        """Pročistí staré časovače a spustí údržbovou úlohu."""
         now = datetime.now(timezone.utc)
         while self._twitch._mnt_triggers and self._twitch._mnt_triggers[0] <= now:
             self._twitch._mnt_triggers.popleft()
 
         if self._twitch._mnt_task is not None and not self._twitch._mnt_task.done():
             self._twitch._mnt_task.cancel()
+
         self._twitch._mnt_task = asyncio.create_task(
             self._twitch._maintenance_service.run_maintenance_task()
         )

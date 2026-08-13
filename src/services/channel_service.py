@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING
 
 from src.config import GQL_OPERATIONS, MAX_INT
 from src.exceptions import GQLException, MinerException
-from src.models.channel import Channel
+from src.models.models import Channel
 from src.utils import chunk
 
 
 if TYPE_CHECKING:
     from src.config import GQLRequest, JsonType
     from src.core.client import Twitch
-    from src.models.game import Game
+    from src.models.models import Game
 
 
 logger = logging.getLogger("TwitchDrops")

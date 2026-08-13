@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from contextlib import suppress
 from time import time
 from typing import TYPE_CHECKING
 
 import aiohttp
+from aiohttp.client_exceptions import ClientConnectionResetError, ClientError
 
 from src.config import PING_INTERVAL, PING_TIMEOUT, WS_TOPICS_LIMIT
 from src.exceptions import WebsocketClosed
@@ -150,16 +152,6 @@ class Websocket:
         asyncio.create_task(self.stop(remove=remove))
 
     async def _backoff_connect(self, ws_url: str, **kwargs):
-        """
-        Connect to websocket with exponential backoff retry logic.
-
-        Args:
-            ws_url: Websocket URL to connect to
-            **kwargs: Additional arguments passed to ExponentialBackoff
-
-        Yields:
-            Connected websocket instances
-        """
         session = await self._twitch.get_session()
         backoff = ExponentialBackoff(**kwargs)
         proxy = self._twitch.settings.proxy or None
@@ -176,10 +168,12 @@ class Websocket:
                 aiohttp.ClientResponseError,
                 aiohttp.ClientConnectionError,
             ):
+                # Přidáme jitter (0.5 až 2.5s), aby se předešlo současnému reconnectu všech socketů
+                jittered_delay = delay + random.uniform(0.5, 2.5)
                 ws_logger.info(
-                    f"Websocket[{self._idx}] connection problem (sleep: {round(delay)}s)"
+                    f"Websocket[{self._idx}] connection problem (sleep: {round(jittered_delay, 1)}s)"
                 )
-                await asyncio.sleep(delay)
+                await asyncio.sleep(jittered_delay)
             except RuntimeError:
                 ws_logger.warning(
                     f"Websocket[{self._idx}] exiting backoff connect loop "
@@ -296,20 +290,17 @@ class Websocket:
             self._submitted.update(added)
 
     async def _gather_recv(self, messages: list[JsonType], timeout: float = 0.5):
-        """
-        Gather incoming messages over the timeout specified.
-
-        Args:
-            messages: List to append received messages to (modified in-place)
-            timeout: How long to gather messages for in seconds
-
-        Raises:
-            WebsocketClosed: When the websocket connection closes
-        """
         ws = self._ws.get_with_default(None)
         assert ws is not None
         while True:
-            raw_message: aiohttp.WSMessage = await ws.receive(timeout=timeout)
+            try:
+                raw_message: aiohttp.WSMessage = await ws.receive(timeout=timeout)
+            except (ClientConnectionResetError, ClientError, ConnectionResetError) as exc:
+                ws_logger.warning(
+                    f"Websocket[{self._idx}] transport reset during receive: {exc}"
+                )
+                raise WebsocketClosed(received=False, raw_message=str(exc))
+
             ws_logger.debug(f"Websocket[{self._idx}] received: {raw_message}")
             if raw_message.type is WSMsgType.TEXT:
                 message: JsonType = json.loads(raw_message.data)
@@ -397,15 +388,27 @@ class Websocket:
         self._topics_changed.set()
 
     async def send(self, message: JsonType):
-        """
-        Send a JSON message to the websocket.
-
-        Args:
-            message: JSON-serializable message dict
-        """
         ws = self._ws.get_with_default(None)
         assert ws is not None
-        if message["type"] != "PING":
+
+        msg_type = message.get("type", "UNKNOWN")
+
+        if msg_type != "PING":
             message["nonce"] = create_nonce(CHARS_ASCII, 30)
-        await ws.send_json(message, dumps=json_minify)
-        ws_logger.debug(f"Websocket[{self._idx}] sent: {message}")
+
+            # 🔥 TADY TO VŠECHNO VYŘEŠÍŠ 🔥
+            await asyncio.sleep(0.3)
+
+            topics = message.get("data", {}).get("topics", [])
+            topics_summary = f" | Topics: {topics}" if topics else ""
+
+#            ws_logger.info(
+ #               f"Websocket[{self._idx}] 📤 Sending {msg_type}{topics_summary}"
+  #          )
+        else:
+            ws_logger.debug(f"Websocket[{self._idx}] 📤 Sending PING")
+
+        try:
+            await ws.send_json(message, dumps=json_minify)
+        except (ClientConnectionResetError, ClientError, ConnectionResetError) as exc:
+            ...

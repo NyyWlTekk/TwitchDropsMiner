@@ -19,8 +19,8 @@ from src.utils import task_wrapper
 if TYPE_CHECKING:
     from src.config import JsonType
     from src.core.client import Twitch
-    from src.models import TimedDrop
-    from src.models.channel import Channel, Stream
+    from src.models.models import TimedDrop
+    from src.models.models import Channel, Stream
 
 
 logger = logging.getLogger("TwitchDrops")
@@ -61,7 +61,7 @@ class MessageHandlerService:
         channel: Channel | None = self._twitch.channels.get(channel_id)
 
         if channel is None:
-            logger.error(f"Stream state change for a non-existing channel: {channel_id}")
+            logger.debug(f"Stream state change for a non-existing channel: {channel_id}")
             return
 
         if msg_type == "viewcount":
@@ -87,28 +87,16 @@ class MessageHandlerService:
     async def process_stream_update(self, channel_id: int, message: JsonType) -> None:
         """
         Process websocket broadcast settings updates (game/title changes).
-
-        Args:
-            channel_id: The channel ID that sent the update
-            message: The websocket message payload containing:
-                - channel_id: Channel ID string
-                - type: "broadcast_settings_update"
-                - channel: Channel login name
-                - old_status: Previous stream title
-                - status: New stream title
-                - old_game: Previous game name
-                - game: New game name
-                - old_game_id: Previous game ID
-                - game_id: New game ID
         """
         channel: Channel | None = self._twitch.channels.get(channel_id)
 
         if channel is None:
-            logger.error(f"Broadcast settings update for a non-existing channel: {channel_id}")
+            # OPRAVA: Změněno z ERROR na DEBUG, aby se nezaplavoval log po cleanupu kanálů
+            logger.debug(f"Broadcast settings update for an untracked/removed channel: {channel_id}")
             return
 
-        if message["old_game"] != message["game"]:
-            game_change = f", game changed: {message['old_game']} -> {message['game']}"
+        if message.get("old_game") != message.get("game"):
+            game_change = f", game changed: {message.get('old_game')} -> {message.get('game')}"
         else:
             game_change = ""
 
@@ -125,17 +113,6 @@ class MessageHandlerService:
     ) -> None:
         """
         Called by a Channel when its status is updated (ONLINE, OFFLINE, title/tags change).
-
-        This method determines whether a channel switch is needed based on the
-        status change and channel watching eligibility.
-
-        Args:
-            channel: The channel that was updated
-            stream_before: The previous stream state (None if was offline)
-            stream_after: The new stream state (None if now offline)
-
-        Note:
-            'stream_before' gets deallocated once this function finishes.
         """
         watching_channel: Channel | None = self._twitch.watching_channel.get_with_default(None)
         is_watching_this: bool = watching_channel is not None and watching_channel == channel
@@ -183,10 +160,6 @@ class MessageHandlerService:
     async def process_drops(self, user_id: int, message: JsonType) -> None:
         """
         Process websocket drop progress and claim updates.
-
-        Args:
-            user_id: The user ID that sent the message
-            message: The websocket message payload
         """
         msg_type: str = message["type"]
         if msg_type not in ("drop-progress", "drop-claim"):
@@ -207,7 +180,10 @@ class MessageHandlerService:
             drop.update_claim(message["data"]["drop_instance_id"])
             campaign = drop.campaign
             await drop.claim()
-            drop.display()
+            
+            # OPRAVA: Opraven chybějící odkaz 'gui' -> 'self._twitch.gui'
+            if hasattr(self._twitch, "gui") and hasattr(self._twitch.gui, "display_drop"):
+                self._twitch.gui.display_drop(drop)
 
             # About 4-20s after claiming the drop, next drop can be started
             await asyncio.sleep(4)
@@ -230,7 +206,13 @@ class MessageHandlerService:
                 self._twitch.restart_watching()
             else:
                 logger.info(f"Campaign completed for {campaign.game}. Resetting active watching state.")
-                self._twitch.stop_watching()
+                # OPRAVA: Voláme stop_watching bez vyvolání automatického stream selectu,
+                # protože hned ručně měníme stav na INVENTORY_FETCH
+                if hasattr(self._twitch, "_watch_service"):
+                    self._twitch._watch_service.stop_watching(notify_state_machine=False)
+                else:
+                    self._twitch.stop_watching()
+                    
                 if hasattr(self._twitch, "gui") and hasattr(self._twitch.gui, "channels"):
                     self._twitch.gui.channels.clear_watching()
                 self._twitch.change_state(State.INVENTORY_FETCH)
@@ -258,10 +240,6 @@ class MessageHandlerService:
         Process websocket notification updates.
 
         Handles notification for drop rewards that are ready to claim.
-
-        Args:
-            user_id: The user ID that sent the notification
-            message: The websocket message payload
         """
         if message["type"] == "create-notification":
             data: JsonType = message["data"]["notification"]

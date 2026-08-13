@@ -25,10 +25,11 @@ from src.exceptions import (
     RequestException,
 )
 from src.i18n import _
-from src.models.campaign import DropsCampaign
-from src.models.channel import Channel
+from src.models.models import DropsCampaign
+from src.models.models import Channel
+from src.models.models import BaseDrop
 from src.services.channel_service import ChannelService
-from src.services.inventory_service import InventoryService
+from src.services.campaign_service import InventoryService
 from src.services.maintenance import MaintenanceService
 from src.services.message_handlers import MessageHandlerService
 from src.services.stream_selector import StreamSelector
@@ -41,9 +42,9 @@ from src.websocket import WebsocketPool
 if TYPE_CHECKING:
     from src.config import ClientInfo, GQLRequest, JsonType
     from src.config.settings import Settings
-    from src.models.channel import Stream
-    from src.models.drop import TimedDrop
-    from src.models.game import Game
+    from src.models.models import Stream
+    from src.models.models import TimedDrop
+    from src.models.models import Game
     from src.web.gui_manager import WebGUIManager
 
 
@@ -125,9 +126,17 @@ class Twitch:
         self.stop_watching()
         if self._watching_task is not None:
             self._watching_task.cancel()
+            try:
+                await self._watching_task
+            except asyncio.CancelledError:
+                pass
             self._watching_task = None
         if self._mnt_task is not None:
             self._mnt_task.cancel()
+            try:
+                await self._mnt_task
+            except asyncio.CancelledError:
+                pass
             self._mnt_task = None
         await self.websocket.stop(clear_topics=True)
         if self._http_client is not None:
@@ -138,7 +147,7 @@ class Twitch:
         self._auth_state.clear()
         self.wanted_games.clear()
         self._mnt_triggers.clear()
-        await asyncio.sleep(start_time + 0.5 - time())
+        await asyncio.sleep(max(0, start_time + 0.5 - time()))
 
     def wait_until_login(self) -> abc.Coroutine[Any, Any, Literal[True]]:
         return self._auth_state._logged_in.wait()
@@ -148,6 +157,27 @@ class Twitch:
             self._state = state
         self._state_change.set()
 
+    def trigger_stream_selection(self, force: bool = False) -> None:
+        """Vyvolá okamžitý výběr nového streamu nebo kompletní re-evaluaci inventáře."""
+        logger.info("Triggering stream selection (force=%s)...", force)
+        if force:
+            self._inventory_dirty = True
+            self._full_cleanup = True
+            self.change_state(State.INVENTORY_FETCH)
+        else:
+            self.change_state(State.CHANNEL_SWITCH)
+
+    def request_stream_select(self) -> None:
+        """Callback pro WatchService v případě ztráty/ukončení sledovaného kanálu."""
+        self.change_state(State.CHANNEL_SWITCH)
+
+    def build_wanted_games(self) -> list[Game]:
+        """Přebuduje seznam požadovaných her podle aktuálního nastavení a inventáře."""
+        filtered_inventory = get_filtered_inventory(self)
+        next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
+        self.wanted_games = get_wanted_games(self, filtered_inventory, next_hour, force_rebuild=True)
+        return self.wanted_games
+
     def get_change_state_callable(self, state: State) -> abc.Callable[[], None]:
         return partial(self.change_state, state)
 
@@ -155,7 +185,8 @@ class Twitch:
         self.change_state(State.EXIT)
 
     def print(self, message: str) -> None:
-        self.gui.print(message)
+        if self.gui:
+            self.gui.print(message)
 
     def _remove_channel_topics(self, channels: abc.Iterable[Channel]) -> None:
         topics_to_remove: list[str] = []
@@ -167,30 +198,39 @@ class Twitch:
 
     async def run(self) -> None:
         """Bootstrap the client services and hand execution over to the flat state loop."""
-        while True:
-            try:
-                self.ignored_count = 0
-                self.claimed_count = 0
-                self._ensure_api_clients()
-                auth_state = await self.get_auth()
-                await self.websocket.start()
+        try:
+            while True:
+                try:
+                    self.ignored_count = 0
+                    self.claimed_count = 0
+                    self._ensure_api_clients()
+                    auth_state = await self.get_auth()
+                    await self.websocket.start()
 
-                if self._watching_task is not None:
-                    self._watching_task.cancel()
-                self._watching_task = asyncio.create_task(self._watch_service.watch_loop())
+                    if self._watching_task is not None:
+                        self._watching_task.cancel()
+                        try:
+                            await self._watching_task
+                        except asyncio.CancelledError:
+                            pass
+                    self._watching_task = asyncio.create_task(self._watch_service.watch_loop())
 
-                self.websocket.add_topics([
-                    WebsocketTopic("User", "Drops", auth_state.user_id, self._message_handler_service.process_drops),
-                    WebsocketTopic("User", "Notifications", auth_state.user_id, self._message_handler_service.process_notifications),
-                ])
+                    user_id = getattr(auth_state, "user_id", getattr(self._auth_state, "user_id", None))
+                    if user_id:
+                        self.websocket.add_topics([
+                            WebsocketTopic("User", "Drops", user_id, self._message_handler_service.process_drops),
+                            WebsocketTopic("User", "Notifications", user_id, self._message_handler_service.process_notifications),
+                        ])
 
-                self.change_state(State.INVENTORY_FETCH)
-                await run_state_machine_loop(self)
-                break
-            except ExitRequest:
-                break
-            except aiohttp.ContentTypeError as exc:
-                raise RequestException(_.t["login"]["unexpected_content"]) from exc
+                    self.change_state(State.INVENTORY_FETCH)
+                    await run_state_machine_loop(self)
+                    break
+                except ExitRequest:
+                    break
+                except aiohttp.ContentTypeError as exc:
+                    raise RequestException(_.t["login"]["unexpected_content"]) from exc
+        finally:
+            await self.shutdown()
 
     # ==========================================
     # Service Delegations
@@ -221,7 +261,8 @@ class Twitch:
         self._manual_target_channel = channel
         self._manual_target_game = channel.game
         logger.info(f"Entered manual mode for game: {channel.game.name}, channel: {channel.name}")
-        self.gui.broadcast_manual_mode_change(self.get_manual_mode_info())
+        if self.gui:
+            self.gui.broadcast_manual_mode_change(self.get_manual_mode_info())
 
     def exit_manual_mode(self, reason: str = "") -> None:
         if not self.is_manual_mode():
@@ -230,7 +271,8 @@ class Twitch:
         logger.info(f"Exiting manual mode for game: {game_name}. Reason: {reason or 'User requested'}")
         self._manual_target_channel = None
         self._manual_target_game = None
-        self.gui.broadcast_manual_mode_change(self.get_manual_mode_info())
+        if self.gui:
+            self.gui.broadcast_manual_mode_change(self.get_manual_mode_info())
         self.change_state(State.CHANNEL_SWITCH)
 
     def get_manual_mode_info(self) -> dict[str, Any]:
@@ -258,25 +300,7 @@ class Twitch:
         return await self._inventory_service.fetch_campaigns(campaigns_chunk)
 
     async def fetch_inventory(self) -> None:
-        raw_inventory = await self.gql_request(GQL_OPERATIONS["Inventory"])
-        claimed_benefits = {
-            b["id"]: isoparse(b["lastAwardedAt"]) 
-            for b in raw_inventory.get("gameEventDrops", [])
-        }
-
-        # Fetch both in-progress and potential new campaigns if returned by GQL query
-        campaigns_data = raw_inventory.get("dropCampaignsInProgress", [])
-        
-        # FIX: Direct mapping to self.inventory so rest of application reads current campaigns
-        self.inventory = [
-            DropsCampaign(self, camp_data, claimed_benefits)
-            for camp_data in campaigns_data
-        ]
-
-        self._inventory_dirty = True
         await self._inventory_service.fetch_inventory()
-
-        # Call prioritization after loading
         handle_prioritize_badge_games(self)
 
     async def bulk_check_online(self, channels: abc.Iterable[Channel]) -> None:
@@ -297,11 +321,29 @@ async def run_state_machine_loop(client: Twitch) -> None:
     """The main worker loop that processes and coordinates state transitions."""
     while True:
         if client._state is State.EXIT:
-            client.gui.status.update(_.t["gui"]["status"]["exiting"])
+            if client.gui and hasattr(client.gui, "status"):
+                client.gui.status.update(_.t["gui"]["status"]["exiting"])
             break
 
-        await dispatch_state(client)
-        await client._state_change.wait()
+        try:
+            await dispatch_state(client)
+        except asyncio.CancelledError:
+            logger.debug("State machine loop task cancelled")
+            raise
+        except Exception as exc:
+            logger.exception("Unhandled error in state machine loop (current state: %s): %s", client._state, exc)
+            if client.gui and hasattr(client.gui, "status"):
+                client.gui.status.update(f"Error in state {client._state.name}. Recovering...")
+            client.change_state(State.IDLE)
+            await asyncio.sleep(5)
+
+        if client._state is not State.EXIT:
+            if not client._state_change.is_set():
+                try:
+                    await client._state_change.wait()
+                except asyncio.CancelledError:
+                    break
+            client._state_change.clear()
 
 
 async def dispatch_state(client: Twitch) -> None:
@@ -328,21 +370,35 @@ async def dispatch_state(client: Twitch) -> None:
 # ==============================================================================
 
 async def handle_state_idle(client: Twitch) -> None:
-    client.gui.status.update(_.t["gui"]["status"]["idle"])
+    if client.gui and hasattr(client.gui, "status"):
+        client.gui.status.update(_.t["gui"]["status"]["idle"])
     client.stop_watching()
-    client._state_change.clear()
 
 async def handle_state_inventory_fetch(client: Twitch) -> None:
     await client.websocket.start()
     await client.fetch_inventory()
-    client.gui.set_games({campaign.game for campaign in client.inventory})
-    client.gui.broadcast_wanted_items()
-    client.gui.status.update("Campaigns reloaded successfully")
-    asyncio.create_task(client.gui._broadcaster.emit("reload_complete", {}))
+    if client.gui:
+        client.gui.set_games({campaign.game for campaign in client.inventory if campaign.game})
+        client.gui.broadcast_wanted_items()
+        client.gui.status.update("Campaigns reloaded successfully")
+        if hasattr(client.gui, "_broadcaster") and hasattr(client.gui._broadcaster, "emit"):
+            try:
+                await client.gui._broadcaster.emit("reload_complete", {})
+            except Exception as e:
+                logger.debug("Failed to emit reload_complete: %s", e)
     client.change_state(State.GAMES_UPDATE)
 
 async def handle_state_games_update(client: Twitch) -> None:
-    await claim_eligible_drops(client)
+    for campaign in client.inventory:
+        if not getattr(campaign, "linked", True) or getattr(campaign, "upcoming", False):
+            continue
+
+        for drop in campaign.drops:
+            if drop.can_claim:
+                logger.info("Attempting to claim drop: %s (ID: %s)", drop.name, drop.id)
+                await asyncio.sleep(2)
+                await drop.claim(client)
+
     filtered_inventory = get_filtered_inventory(client)
 
     handle_auto_add_games(client, filtered_inventory)
@@ -350,7 +406,6 @@ async def handle_state_games_update(client: Twitch) -> None:
 
     next_hour: datetime = datetime.now(timezone.utc) + timedelta(hours=1)
     logger.info("inventory has %d eligible campaigns", sum(1 for c in client.inventory if c.eligible))
-    logger.debug("inventories: %s", client.inventory)
 
     if logger.isEnabledFor(logging.DEBUG):
         output_campaign_mapping(client, next_hour)
@@ -362,7 +417,8 @@ async def handle_state_games_update(client: Twitch) -> None:
 
 
 async def handle_state_channels_cleanup(client: Twitch) -> None:
-    client.gui.status.update(_.t["gui"]["status"]["cleanup"])
+    if client.gui and hasattr(client.gui, "status"):
+        client.gui.status.update(_.t["gui"]["status"]["cleanup"])
     channels = client.channels
 
     if not client.wanted_games or client._full_cleanup:
@@ -373,7 +429,7 @@ async def handle_state_channels_cleanup(client: Twitch) -> None:
             if not channel.acl_based and (channel.offline or (channel.game is None or channel.game not in client.wanted_games))
         ]
 
-    client._full_cleanup = False  # Reset flagu
+    client._full_cleanup = False
     if to_remove_channels:
         client._remove_channel_topics(to_remove_channels)
         for channel in to_remove_channels:
@@ -388,71 +444,65 @@ async def handle_state_channels_cleanup(client: Twitch) -> None:
 
 
 async def handle_state_channels_fetch(client: Twitch) -> None:
-    client.gui.status.update(_.t["gui"]["status"]["gathering"])
+    if client.gui and hasattr(client.gui, "status"):
+        client.gui.status.update(_.t["gui"]["status"]["gathering"])
+    
+    logger.info("Fetching channels for wanted games...")
+    
     channels = client.channels
-    new_channels: set[Channel] = set(channels.values())
+    old_channels = set(channels.values())
     channels.clear()
 
     no_acl: set[Game] = set()
-    acl_channels: set[Channel] = set()
+    all_acl_channels: set[Channel] = set()
     next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
 
     for campaign in client.inventory:
         if campaign.game in client.wanted_games and campaign.can_earn_within(next_hour):
             if campaign.allowed_channels:
-                acl_channels.update(campaign.allowed_channels)
+                for channel in campaign.allowed_channels:
+                    # PROPOVÁZÁNÍ HRY: Pokud kanál nemá nastavenou hru, předáme mu ji z kampaně
+                    if channel.game is None:
+                        channel.game = campaign.game
+                all_acl_channels.update(campaign.allowed_channels)
             else:
-                no_acl.add(campaign.game)
+                if campaign.game:
+                    no_acl.add(campaign.game)
 
-    acl_channels.difference_update(new_channels)
-    await client.bulk_check_online(acl_channels)
-    new_channels.update(acl_channels)
+    logger.info("Found %d ACL channels and %d games without ACL to fetch.", len(all_acl_channels), len(no_acl))
 
+    # Online stav zjišťujeme pouze pro NOVĚ objevené ACL kanály (pro úsporu API dotazů)
+    new_acl_channels = all_acl_channels - old_channels
+    if new_acl_channels:
+        await client.bulk_check_online(new_acl_channels)
+    
+    # Do celkového seznamu sloučíme dřívější kanály + všechny ACL kanály
+    gathered_channels: set[Channel] = old_channels | all_acl_channels
+
+    # Získat živé streamy pro hry bez ACL restriction
     for game in no_acl:
-        new_channels.update(await client.get_live_streams(game, drops_enabled=True))
+        logger.debug("Fetching live streams for game: %s", game.name)
+        gathered_channels.update(await client.get_live_streams(game, drops_enabled=True))
 
-    ordered_channels: list[Channel] = sorted(new_channels, key=ChannelService.get_viewers_key, reverse=True)
-    ordered_channels.sort(key=lambda ch: ch.acl_based, reverse=True)
-    ordered_channels.sort(key=client._channel_service.get_priority)
+    # Uložení pouze živých kanálů do paměti
+    for channel in gathered_channels:
+        if getattr(channel, "online", False):
+            channels[channel.id] = channel
 
-    to_remove_channels = ordered_channels[MAX_CHANNELS:]
-    ordered_channels = ordered_channels[:MAX_CHANNELS]
-    if to_remove_channels:
-        client._remove_channel_topics(to_remove_channels)
-        del to_remove_channels
+    logger.info("Total gathered live channels saved to cache: %d", len(channels))
 
-    for channel in ordered_channels:
-        channels[channel.id] = channel
-
-    client.gui.channels.batch_update(ordered_channels)
-
-    to_add_topics: list[WebsocketTopic] = []
-    for channel_id in channels:
-        to_add_topics.append(WebsocketTopic("Channel", "StreamState", channel_id, client._message_handler_service.process_stream_state))
-        to_add_topics.append(WebsocketTopic("Channel", "StreamUpdate", channel_id, client._message_handler_service.process_stream_update))
-    client.websocket.add_topics(to_add_topics)
-
-    watching_channel = client.watching_channel.get_with_default(None)
-    if watching_channel is not None:
-        new_watching: Channel | None = channels.get(watching_channel.id)
-        if new_watching is not None and client.can_watch(new_watching):
-            client.watch(new_watching, update_status=False)
-        del new_watching
-
-    for channel in channels.values():
-        if client.can_watch(channel):
-            if (active_campaign := client.get_active_campaign(channel)) is not None and (active_drop := active_campaign.first_drop) is not None:
-                active_drop.display(countdown=False, subone=True)
-            break
-
+    # Přepnutí stavu
     client.change_state(State.CHANNEL_SWITCH)
 
 
 async def handle_state_channel_switch(client: Twitch) -> None:
-    client.gui.status.update(_.t["gui"]["status"]["switching"])
+    logger.info("CHANNEL_SWITCH: Processing %d channels in inventory/cache", len(client.channels))
+    
+    if client.gui and hasattr(client.gui, "status"):
+        client.gui.status.update(_.t["gui"]["status"]["switching"])
     channels = client.channels
     new_watching: Channel | None = None
-    selected_channel: Channel | None = client.gui.channels.get_selection()
+    selected_channel: Channel | None = client.gui.channels.get_selection() if client.gui and hasattr(client.gui, "channels") else None
     watching_channel: Channel | None = client.watching_channel.get_with_default(None)
 
     if watching_channel:
@@ -472,7 +522,12 @@ async def handle_state_channel_switch(client: Twitch) -> None:
             new_watching = client._manual_target_channel
         else:
             for channel in channels.values():
-                if channel.game == client._manual_target_game and client.can_watch(channel):
+                # Kontrola porovnání her (porovnáváme ID i název pro jistotu)
+                same_game = (
+                    channel.game == client._manual_target_game
+                    or (getattr(channel.game, "id", None) == getattr(client._manual_target_game, "id", -1))
+                )
+                if same_game and client.can_watch(channel):
                     new_watching = channel
                     client._manual_target_channel = channel
                     game_name = client._manual_target_game.name if client._manual_target_game else "Unknown"
@@ -481,24 +536,62 @@ async def handle_state_channel_switch(client: Twitch) -> None:
             if new_watching is None:
                 client.exit_manual_mode("No channels available for manual game")
     else:
-        for channel in sorted(channels.values(), key=client._channel_service.get_priority):
+        # --- DIAGNOSTIKA PŘED VÝBĚREM ---
+        sorted_channels = sorted(channels.values(), key=client._channel_service.get_priority)
+        
+        logger.info("=== DIAGNOSTIKA VÝBĚRU KANÁLU ===")
+        logger.info("Celkem kanálů k posouzení: %d", len(sorted_channels))
+        logger.info("Počet chtěných her (wanted_games): %d", len(client.wanted_games))
+        
+        # Vypíšeme podrobnosti o prvních 5 kanálech
+        for idx, ch in enumerate(sorted_channels[:5]):
+            ch_game_id = getattr(ch.game, "id", None) if ch.game else None
+            ch_game_name = getattr(ch.game, "name", "NoGame") if ch.game else "NoGame"
+            
+            can_w = client.can_watch(ch)
+            should_s = client.should_switch(ch)
+            
+            # Zjištění, zda hra kanálu odpovídá nějaké chtěné hře
+            matches_wanted = any(
+                (getattr(g, "id", None) == ch_game_id) or (getattr(g, "name", None) == ch_game_name)
+                for g in client.wanted_games
+            ) if ch.game else False
+
+            logger.info(
+                "[%d/%d] Kanál '%s' | Hra: '%s' (ID: %s) | In Wanted: %s | Online: %s | can_watch: %s | should_switch: %s",
+                idx + 1,
+                len(sorted_channels),
+                ch.name,
+                ch_game_name,
+                ch_game_id,
+                matches_wanted,
+                getattr(ch, "online", None),
+                can_w,
+                should_s
+            )
+        logger.info("==================================")
+
+        for channel in sorted_channels:
             if client.can_watch(channel) and client.should_switch(channel):
                 new_watching = channel
                 break
 
     if new_watching is not None:
+        logger.info("CHANNEL_SWITCH: Successfully selected channel to watch: %s", new_watching.name)
         client.watch(new_watching)
         if (active_campaign := client.get_active_campaign(new_watching)) is not None and (active_drop := active_campaign.first_drop) is not None:
-            active_drop.display(countdown=False, subone=True)
-        client._state_change.clear()
+            if client.gui:
+                client.gui.display_drop(active_drop, countdown=False, subone=True)
     elif watching_channel is not None and client.can_watch(watching_channel):
+        logger.info("CHANNEL_SWITCH: Continuing to watch current channel: %s", watching_channel.name)
         if client.is_manual_mode() and client._manual_target_game:
             status_text = f"🎯 Manual Mode: Watching {watching_channel.name} for {client._manual_target_game.name}"
         else:
             status_text = _.t["status"]["watching"].format(channel=watching_channel.name)
-        client.gui.status.update(status_text)
-        client._state_change.clear()
+        if client.gui and hasattr(client.gui, "status"):
+            client.gui.status.update(status_text)
     else:
+        logger.warning("CHANNEL_SWITCH: No suitable channel found! Falling back to State.IDLE. Channels count: %d", len(channels))
         client.print(_.t["status"]["no_channel"])
         client.change_state(State.IDLE)
 
@@ -507,65 +600,13 @@ async def handle_state_channel_switch(client: Twitch) -> None:
 # 4. STATE MACHINE AUXILIARY WORKERS (Flat module level - 0 Indentations)
 # ==============================================================================
 
-async def claim_eligible_drops(client: Twitch) -> None:
-    logger.debug("Campaign count in inventory: %d", len(client.inventory))
-
-    for campaign in client.inventory:
-        if not campaign.has_watchable_drops:
-            continue
-
-        if not getattr(campaign, "linked", True):
-            client.ignored_count += 1
-            continue
-
-        if not campaign.upcoming:
-            for drop in campaign.drops:
-                if drop.can_claim:
-                    logger.info("Attempting to claim drop: %s (ID: %s)", drop.name, drop.id)
-
-                    await asyncio.sleep(2)
-
-                    if await drop.claim():
-                        client.claimed_count += 1
-                        # FIX: Invalidate cache after successful drop claim
-                        client._inventory_dirty = True
-                        logger.info(
-                            "Successfully claimed drop: %s (Total session claims: %d)",
-                            drop.name,
-                            client.claimed_count,
-                        )
-                    else:
-                        logger.warning(
-                            "Claim failed for drop: %s (ID: %s)",
-                            drop.name,
-                            drop.id,
-                        )
-                else:
-                    if hasattr(drop, "current_minutes") and hasattr(drop, "required_minutes"):
-                        if drop.current_minutes < drop.required_minutes:
-                            progress = (drop.current_minutes / drop.required_minutes) * 100
-                            logger.debug(
-                                "Drop %s in progress: %d/%d min (%.1f%%)",
-                                drop.name,
-                                drop.current_minutes,
-                                drop.required_minutes,
-                                progress,
-                            )
-                    else:
-                        logger.debug("Drop %s cannot be claimed yet (can_claim=False)", drop.name)
-
-
 def get_filtered_inventory(client: Twitch) -> list[DropsCampaign]:
     return [c for c in client.inventory if getattr(c, "progress", 0) < 100 and c.has_watchable_drops]
 
 
-# ==========================================
-# Helpers for Stream Queue Management
-# ==========================================
-
 def force_stream_reevaluation(client: Twitch) -> None:
     """Force immediate stop and re-evaluation of stream queue."""
-    logger.info("[DEBUG-EVAL] Forcing stream re-evaluation and switch...")
+    logger.info("Forcing stream re-evaluation and switch...")
     watch_service = getattr(client, "_watch_service", None)
     
     if watch_service:
@@ -574,44 +615,27 @@ def force_stream_reevaluation(client: Twitch) -> None:
         if hasattr(watch_service, "restart_watching"):
             watch_service.restart_watching()
 
-    if hasattr(client, "trigger_stream_selection") and callable(client.trigger_stream_selection):
-        client.trigger_stream_selection(force=True)
+    client.trigger_stream_selection(force=True)
 
-
-# ==========================================
-# Handlers for Ignored & Auto-Added Games
-# ==========================================
 
 def handle_ignored_games_update(client: Twitch, new_ignored_games: list[str]) -> None:
-    logger.info("==================================================")
-    logger.info("[DEBUG-IGN] Event received. New ignored games: %s", new_ignored_games)
+    logger.info("Ignored games event received: %s", new_ignored_games)
 
     normalized_ignored = [g.strip() for g in new_ignored_games if g]
     client.settings.ignored_games = normalized_ignored
     client.settings.save()
 
-    # 1. Rebuild wanted games in client
-    if hasattr(client, "build_wanted_games"):
-        client.build_wanted_games()
-        logger.info("[DEBUG-IGN] Client wanted_games rebuilt: %s", getattr(client, "wanted_games", "N/A"))
-
-    # 2. Force immediate re-evaluation and stream switch
+    client.build_wanted_games()
     force_stream_reevaluation(client)
 
-    logger.info("==================================================")
-    
+
 def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
-    """
-    Sorts games_to_watch based on pending badges and campaign ending times.
-    Serves as the missing handler referenced during client state updates.
-    """
     logger.info("Auto-sorting games by pending badges and ending time")
 
     if not client.settings.games_to_watch:
         logger.debug("Skip auto-sorting: games_to_watch is empty.")
         return
 
-    # Map campaigns by game name
     campaign_map: dict[str, list[DropsCampaign]] = {}
     for c in filtered_inventory:
         if not c.has_watchable_drops:
@@ -627,39 +651,34 @@ def handle_auto_sort_games(client: Twitch, filtered_inventory: list[DropsCampaig
         g_lower = game_name.strip().lower()
         campaigns = campaign_map.get(g_lower, [])
         if not campaigns:
-            return (0, float('inf'))
+            return (0, datetime.max.replace(tzinfo=timezone.utc))
         
-        # Priority based on earliest campaign end time
-        earliest_end = min(
-            (getattr(c, "end_time", float('inf')) for c in campaigns),
-            default=float('inf')
-        )
+        dates = []
+        for c in campaigns:
+            if hasattr(c, "end_time") and isinstance(c.end_time, datetime):
+                dt = c.end_time
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dates.append(dt)
+        
+        earliest_end = min(dates) if dates else datetime.max.replace(tzinfo=timezone.utc)
         return (1, earliest_end)
 
     old_queue = list(client.settings.games_to_watch)
     client.settings.games_to_watch.sort(key=sort_key)
-    logger.debug("Games successfully auto-sorted.")
 
     if client.settings.games_to_watch != old_queue:
         client.settings.save()
 
 
 def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign]) -> None:
-    logger.debug(
-        "handle_auto_add_games invoked. Auto-add setting: %s, Inventory count: %d",
-        getattr(client.settings, "auto_add_all_games", False),
-        len(filtered_inventory) if client.inventory else 0,
-    )
-    
     if not getattr(client.settings, "auto_add_all_games", False) or not client.inventory:
-        logger.debug("Skipping handle_auto_add_games (auto_add_all_games is disabled or inventory empty).")
         return
 
     if not isinstance(client.settings.games_to_watch, list):
         client.settings.games_to_watch = []
 
     ignored_games = {g.strip().lower() for g in getattr(client.settings, "ignored_games", [])}
-    logger.debug("Active ignored_games filter (lowercase): %s", ignored_games)
 
     inventory_games_original = {}
     for c in filtered_inventory:
@@ -670,83 +689,40 @@ def handle_auto_add_games(client: Twitch, filtered_inventory: list[DropsCampaign
         c_game_name = c_game_name.strip()
         c_lower = c_game_name.lower()
         
-        if c_game_name:
-            if c_lower in ignored_games:
-                logger.debug("Ignoring campaign game: '%s' (matched ignore list)", c_game_name)
-            else:
-                inventory_games_original[c_lower] = c_game_name
-
-    logger.debug("Filtered inventory games available to watch: %s", list(inventory_games_original.values()))
+        if c_game_name and c_lower not in ignored_games:
+            inventory_games_original[c_lower] = c_game_name
 
     existing_games = {g.strip().lower(): g for g in client.settings.games_to_watch}
     newly_added = []
 
-    # 1. Add new games
     for c_lower, c_original in inventory_games_original.items():
         if c_lower not in existing_games:
             client.settings.games_to_watch.append(c_original)
             existing_games[c_lower] = c_original
             newly_added.append(c_original)
 
-    # 2. Remove inactive or ignored games
-    removed_games = []
-    updated_list = []
-    for g in client.settings.games_to_watch:
-        g_lower = g.strip().lower()
-        if g_lower in inventory_games_original and g_lower not in ignored_games:
-            updated_list.append(g)
-        else:
-            removed_games.append(g)
-
-    client.settings.games_to_watch = updated_list
-
-    # Save and handle changes
-    if newly_added or removed_games:
-        if newly_added:
-            logger.info("Automatically added new games to watch list: %s", ", ".join(newly_added))
-        if removed_games:
-            logger.info("Automatically removed inactive/ignored games from watch list: %s", ", ".join(removed_games))
-
+    if newly_added:
         client.settings.save()
         if hasattr(client, "socketio"):
             client.socketio.emit("settings_updated", client.settings.__dict__)
 
-        current_watched_game = getattr(client, "current_game", None)
-        is_watched_removed = current_watched_game and current_watched_game.strip().lower() in {
-            g.strip().lower() for g in removed_games
-        }
-        
-        if is_watched_removed:
-            logger.info(
-                "Currently watched game '%s' was removed/ignored during auto-sync. Stopping stream and switching...",
-                current_watched_game,
-            )
+        force_stream_reevaluation(client)
 
-        if newly_added or is_watched_removed:
-            force_stream_reevaluation(client)
-    else:
-        logger.debug("No changes in games_to_watch after auto-add sync.")
-        
+
 def handle_prioritize_badge_games(client: Twitch, filtered_inventory: list[DropsCampaign] | None = None) -> None:
-    """
-    Separated function without full auto-sort.
-    If 'mine_badges_first' is enabled, moves games with pending badges to the front of the queue.
-    """
     if not getattr(client.settings, "mine_badges_first", False) or not client.inventory:
         return
 
-    # If filtered_inventory is not provided, load it from client
     if filtered_inventory is None:
         filtered_inventory = get_filtered_inventory(client)
 
-    # 1. Find game names that have active and unclaimed badges
     badge_games: set[str] = set()
 
     for campaign in filtered_inventory:
         if not campaign.has_watchable_drops or not campaign.active:
             continue
 
-        game_name = campaign.game.name if hasattr(campaign.game, "name") else str(campaign.game)
+        game_name = campaign.game.name if hasattr(campaign, "game") and hasattr(campaign.game, "name") else str(getattr(campaign, "game", ""))
 
         for drop in getattr(campaign, "drops", []):
             is_badge = getattr(drop, "is_badge", False) or "badge" in getattr(drop, "name", "").lower()
@@ -759,36 +735,47 @@ def handle_prioritize_badge_games(client: Twitch, filtered_inventory: list[Drops
     if not badge_games:
         return
 
-    # 2. Split the list into badge games and others
     current_games = getattr(getattr(client, "settings", None), "games_to_watch", []) or []
     with_badges = [g for g in current_games if g in badge_games]
     without_badges = [g for g in current_games if g not in badge_games]
 
-    # 3. Put badge games first
     new_queue = with_badges + without_badges
 
     if new_queue != current_games:
-        client.settings.games_to_watch = new_queue
-        logger.info("Prioritized games with badges to the front of the queue: %s", with_badges)
-        
-        # Save settings and force immediate re-evaluation
         client.settings.save()
         force_stream_reevaluation(client)
 
+
 def handle_manual_mode_priority(client: Twitch) -> None:
-    if client.is_manual_mode():
+    if client.is_manual_mode() and client._manual_target_game is not None:
         next_hour: datetime = datetime.now(timezone.utc) + timedelta(hours=1)
+        
+        target_id = getattr(client._manual_target_game, "id", None)
+        target_name = getattr(client._manual_target_game, "name", str(client._manual_target_game))
+
         manual_has_drops = any(
-            campaign.can_earn_within(next_hour) and campaign.game == client._manual_target_game
+            campaign.can_earn_within(next_hour) and (
+                getattr(campaign.game, "id", None) == target_id if target_id else getattr(campaign.game, "name", str(campaign.game)) == target_name
+            )
             for campaign in client.inventory
-            if campaign.has_watchable_drops
+            if campaign.has_watchable_drops and campaign.game
         )
+
         if not manual_has_drops:
             client.exit_manual_mode("All drops completed for manual game")
-        elif client._manual_target_game in client.wanted_games:
-            client.wanted_games.remove(client._manual_target_game)
-            client.wanted_games.insert(0, client._manual_target_game)
-            logger.info(f"Manual mode: prioritizing game {client._manual_target_game.name}")
+        else:
+            updated_wanted = list(client.wanted_games)
+            matching_idx = None
+            for idx, g in enumerate(updated_wanted):
+                if (target_id and getattr(g, "id", None) == target_id) or getattr(g, "name", str(g)) == target_name:
+                    matching_idx = idx
+                    break
+            
+            if matching_idx is not None:
+                game_obj = updated_wanted.pop(matching_idx)
+                updated_wanted.insert(0, game_obj)
+                client.wanted_games = updated_wanted
+
 
 def get_wanted_games(
     client: Twitch, 
@@ -797,75 +784,19 @@ def get_wanted_games(
     force_rebuild: bool = False
 ) -> list[Game]:
     if client._inventory_dirty or force_rebuild or not client._wanted_games_cache:
-        logger.info("Building wanted games list")
-        
-        # --- PODROBNÝ DEBUG KAMPANÍ A DŮVODŮ VYŘAZENÍ ---
-        logger.info("[DEBUG-WANTED] Analýza %d filtrovaných kampaní:", len(filtered_inventory))
-        
-        for c in filtered_inventory:
-            g_name = c.game.name if hasattr(c.game, "name") else str(c.game)
-            c_name = getattr(c, "name", "Neznámá kampaň")
-
-            # 1. Kontrola, zda je kampaň kompletně vybraná / sanitovaná
-            if getattr(c, "is_claimed", False):
-                logger.info("  [SKIP] Kampaň '%s' (%s) | Důvod: Všechny odměny/odznaky v kampani už vlastníš.", c_name, g_name)
-                continue
-
-            # 2. Kontrola, zda kampaň obsahuje sledovatelné dropy
-            if not getattr(c, "has_watchable_drops", True):
-                logger.info("  [SKIP] Kampaň '%s' (%s) | Důvod: Kampaň nemá žádné aktivní dropy k sledování.", c_name, g_name)
-                continue
-
-            # 3. Kontrola časového okna plnění
-            if hasattr(c, "can_earn_within") and not c.can_earn_within(next_hour):
-                logger.info("  [SKIP] Kampaň '%s' (%s) | Důvod: Kampaň nelze plnit v nadcházejícím časovém okně (vypršela nebo ještě nezačala).", c_name, g_name)
-                continue
-
-            # Pokud kampaň prošla, zalogujeme její aktivní dropy
-            drops_info = [
-                f"{d.name} ({getattr(d, 'required_minutes', 0)}m)" 
-                for d in getattr(c, "drops", [])
-            ]
-            logger.info(
-                "  [OK] Kampaň '%s' (%s) připravena ke sledování | Dropy: %s",
-                c_name,
-                g_name,
-                ", ".join(drops_info) if drops_info else "Žádné"
-            )
-        # --------------------------------------------------
-
         raw_wanted = client._stream_selector.get_wanted_games(
             client.settings, filtered_inventory
         )
         
-        # Extrakce čistých objektů Game ze slovníků
         client._wanted_games_cache = [
             item["game"] if isinstance(item, dict) and "game" in item else item 
             for item in raw_wanted
         ]
         
-        logger.info("Wanted games list built")
         client._inventory_dirty = False
 
-        if client._wanted_games_cache:
-            logger.info(
-                "Wanted games (%d): %s", 
-                len(client._wanted_games_cache), 
-                ", ".join(game.name for game in client._wanted_games_cache)
-            )
-        else:
-            logger.warning(
-                "No wanted games found! games_to_watch=%s, eligible_campaigns=%d",
-                client.settings.games_to_watch,
-                sum(
-                    1 for c in filtered_inventory 
-                    if c.has_watchable_drops 
-                    and getattr(c, "eligible", True) 
-                    and c.can_earn_within(next_hour)
-                ),
-            )
-            
-    return client._wanted_games_cache
+    return list(client._wanted_games_cache)
+
 
 def output_campaign_mapping(client: Twitch, next_hour: datetime) -> None:
     logger.info("=== Active Campaigns Mapping ===")
@@ -873,37 +804,15 @@ def output_campaign_mapping(client: Twitch, next_hour: datetime) -> None:
 
     game_campaign_map: dict[str, list[tuple[DropsCampaign, list[str]]]] = defaultdict(list)
     for campaign in client.inventory:
-        if not campaign.has_watchable_drops:
+        if not campaign.has_watchable_drops or not campaign.game:
             continue
-        if campaign.eligible and not campaign.finished:
-            logger.info("eligible Campaign: %s - %s", campaign.name, campaign.game.name)
         if campaign.can_earn_within(next_hour):
-            channel_names = []
-            if campaign.allowed_channels:
-                channel_names = [ch.name for ch in campaign.allowed_channels]
-            else:
-                channel_names = ["<directory>"]
+            channel_names = [ch.name for ch in campaign.allowed_channels] if campaign.allowed_channels else ["<directory>"]
             game_campaign_map[campaign.game.name].append((campaign, channel_names))
+
     for game_name in sorted(game_campaign_map.keys()):
         logger.debug(f"Game: {game_name}")
         for campaign, channel_list in game_campaign_map[game_name]:
-            status_info = f"{'ACTIVE' if campaign.active else 'UPCOMING'}"
-            ends_info = campaign.ends_at.astimezone().strftime("%Y-%m-%d %H:%M")
-            channel_info = f"{len(channel_list)} channels" if channel_list[0] != "<directory>" else "directory"
-            logger.debug(f"  └─ Campaign: {campaign.name} [{status_info}] (ends: {ends_info})")
-            logger.debug(f"     Channels: {channel_info}")
-            if channel_list[0] != "<directory>" and len(channel_list) <= 10:
-                logger.debug(f"     └─ {', '.join(channel_list)}")
-            elif channel_list[0] != "<directory>":
-                logger.debug(f"     └─ {', '.join(channel_list[:10])} ... (+{len(channel_list) - 10} more)")
+            status_info = "ACTIVE" if campaign.active else "UPCOMING"
+            logger.debug(f"  └─ Campaign: {campaign.name} [{status_info}]")
     logger.info("=== End Campaigns Mapping ===")
-
-
-# momentaly unused
-def log_summary(self) -> None:
-        """Vypíše přehled o tom, co se za tento běh stihlo."""
-        if self.ignored_count > 0 or self.claimed_count > 0:
-            logger.info(
-                f"Session Summary: {self.claimed_count} claimed, "
-                f"{self.ignored_count} ignored (unlinked)."
-            )

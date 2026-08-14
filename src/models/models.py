@@ -149,7 +149,13 @@ class Channel(BaseModel):
     acl_based: bool = False
     drops_enabled: bool = True
     game: Any | None = None
-    _is_online: bool = True
+    
+    # 🔹 Připojené relace pro StreamSelector
+    stream: Any | None = None  # Instance třídy Stream, pokud je online
+    campaigns: list[Any] = Field(default_factory=list)  # Seznam dostupných kampaní
+    
+    # 🔹 Privátní atributy správně přes PrivateAttr
+    _is_online: bool = PrivateAttr(default=True)
     _twitch: Any = PrivateAttr(default=None)
 
     model_config = ConfigDict(
@@ -214,7 +220,11 @@ class Channel(BaseModel):
     @property
     def online(self) -> bool:
         """Vrátí stav, zda je kanál online."""
-        return getattr(self, "_is_online", True)
+        return self._is_online
+
+    @online.setter
+    def online(self, value: bool) -> None:
+        self._is_online = value
 
     def check_online(self) -> bool:
         return self.online
@@ -474,7 +484,7 @@ class Campaign(BaseModel):
     def time_triggers(self) -> set[datetime]:
         return extract_campaign_time_triggers(self.starts_at, self.ends_at)
 
-    def can_earn_within(self, timestamp: datetime) -> bool:
+    def can_earn_within(self, timestamp: datetime | None = None) -> bool:
         return is_campaign_earnable_within(
             self.starts_at, self.ends_at, self.eligibility, timestamp
         )

@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from base64 import b64encode
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
 
@@ -228,14 +228,19 @@ def check_can_earn_within(
     ends_at: datetime,
     required_minutes: int,
     current_minutes: int,
-    target_stamp: datetime,
-    base_conditions_met: bool,
+    target_stamp: datetime | None = None,
+    base_conditions_met: bool = True,
 ) -> bool:
     """Ověří, zda je fyzicky možné drop dokončit v daném časovém okně."""
     now = datetime.now(timezone.utc)
     starts_at_utc = _ensure_utc(starts_at)
     ends_at_utc = _ensure_utc(ends_at)
-    target_stamp_utc = _ensure_utc(target_stamp)
+
+    # Pokud target_stamp není předán, dynamicky nastavit výchozí okno +1 hodina od teď
+    if target_stamp is None:
+        target_stamp_utc = now + timedelta(hours=1)
+    else:
+        target_stamp_utc = _ensure_utc(target_stamp)
 
     if not (starts_at_utc < target_stamp_utc and ends_at_utc > now):
         return False
@@ -377,15 +382,27 @@ def update_drop_minutes(current_minutes: int, required_minutes: int, new_minutes
         return current_minutes
     return min(new_minutes, required_minutes)
 
-def is_campaign_earnable_within(starts_at: datetime, ends_at: datetime, is_eligible: bool, target_time: datetime) -> bool:
+def is_campaign_earnable_within(
+    starts_at: datetime, 
+    ends_at: datetime, 
+    is_eligible: bool, 
+    target_time: datetime | None = None
+) -> bool:
     """Ověří, zda je kampaň aktivní/dostupná pro těžení před nebo do zvoleného času."""
     if not is_eligible:
         return False
+        
     now = datetime.now(timezone.utc)
-    start = starts_at if starts_at.tzinfo else starts_at.replace(tzinfo=timezone.utc)
-    end = ends_at if ends_at.tzinfo else ends_at.replace(tzinfo=timezone.utc)
-    target = target_time if target_time.tzinfo else target_time.replace(tzinfo=timezone.utc)
     
+    # Pokud target_time chybí, použije se výchozí okno +1 hodina od teď
+    if target_time is None:
+        target = now + timedelta(hours=1)
+    else:
+        target = _ensure_utc(target_time)
+
+    start = _ensure_utc(starts_at)
+    end = _ensure_utc(ends_at)
+
     # Kampaň nesmí být již ukončena a musí začít před/v rámci target_time
     return (now <= end) and (start <= target)
 

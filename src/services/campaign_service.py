@@ -559,14 +559,13 @@ class InventoryService:
         self._twitch._mnt_triggers.clear()
 
         switch_triggers: set[datetime] = set()
-        next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
 
         for campaign in campaigns:
             for drop in campaign.drops:
                 drop.sync_minutes(drop.current_minutes)
 
             self._twitch._drops.update({drop.id: drop for drop in campaign.drops})
-            if campaign.can_earn_within(next_hour):
+            if campaign.can_earn_within():
                 switch_triggers.update(campaign.time_triggers)
 
             self._twitch.inventory.append(campaign)

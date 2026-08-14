@@ -154,7 +154,7 @@ class Channel(BaseModel):
     stream: Any | None = None  # Instance třídy Stream, pokud je online
     campaigns: list[Any] = Field(default_factory=list)  # Seznam dostupných kampaní
     
-    # 🔹 Privátní atributy správně přes PrivateAttr
+    # 🔹 Privátní atributy
     _is_online: bool = PrivateAttr(default=True)
     _twitch: Any = PrivateAttr(default=None)
 
@@ -171,9 +171,6 @@ class Channel(BaseModel):
     def __hash__(self) -> int:
         return hash((self.id, self.login, self.name))
 
-    # --------------------------------------------------------------------------
-    # PROPERTY PRO PŘÍSTUP K PRIVATE ATRIBUTU _twitch
-    # --------------------------------------------------------------------------
     @property
     def twitch(self) -> Any:
         return self._twitch
@@ -181,35 +178,6 @@ class Channel(BaseModel):
     @twitch.setter
     def twitch(self, value: Any) -> None:
         self._twitch = value
-
-    async def send_watch(self) -> bool:
-        """Odešle watch payload / zahájí sledování kanálu přes Twitch klienta."""
-        if not self._twitch:
-            return False
-
-        # Vyhledání metody pro sledování na Twitch klientovi
-        watch_method = None
-        for method_name in ("watch", "send_spade_minute", "send_watch_payload", "watch_channel"):
-            if hasattr(self._twitch, method_name):
-                watch_method = getattr(self._twitch, method_name)
-                break
-
-        if watch_method is None:
-            return False
-
-        # Zavolání metody (může být sync i async)
-        result = watch_method(self)
-
-        # Pokud metoda vrátila coroutine/Task, vyčkám na ni
-        if inspect.isawaitable(result):
-            result = await result
-
-        # Pokud funkce vrátila None (běžná sync funkce bez returnu), 
-        # ale neprošla výjimkou, považujeme akci za úspěšnou
-        if result is None:
-            return True
-
-        return bool(result)
 
     @property
     def stream_gql(self) -> Any:
@@ -275,7 +243,7 @@ class Channel(BaseModel):
 # ==============================================================================
 
 class Drop(BaseModel):
-    """Původní model reprezentující časovaný Twitch Drop."""
+    """Model reprezentující časovaný Twitch Drop."""
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
@@ -325,7 +293,9 @@ class Drop(BaseModel):
         # 2. Extrakce závislostí
         if "preconditionDrops" in flat_data and "precondition_drops" not in flat_data:
             preconditions = flat_data.get("preconditionDrops") or []
-            flat_data["precondition_drops"] = [p["id"] for p in preconditions if isinstance(p, dict) and "id" in p]
+            flat_data["precondition_drops"] = [
+                p["id"] for p in preconditions if isinstance(p, dict) and "id" in p
+            ]
 
         # 3. Zpracování benefitů a obrázku
         if "benefitEdges" in flat_data:
@@ -343,23 +313,109 @@ class Drop(BaseModel):
         if self.is_claimed:
             self.real_current_minutes = self.required_minutes
 
-    @property
-    def status(self) -> str:
-        return resolve_drop_status(
-            is_claimed=self.is_claimed,
-            can_claim=bool(self.claim_id and not self.is_claimed),
-            is_stuck=self.is_stuck,
-            current_minutes=self.real_current_minutes,
-        )
-    
-    @property
-    def remaining_minutes(self) -> int:
-        """Vrátí zbývající počet minut do dokončení dropu."""
-        return max(0, self.required_minutes - self.current_minutes)
-    
-    @property
-    def current_minutes(self) -> int:
-        return self.real_current_minutes
+    def update_progress(self, progress_data: dict[str, Any]) -> None:
+        """Bezpečně aktualizuje pokrok dropu z dat z dropCampaignsInProgress."""
+        self_data = progress_data.get("self") if isinstance(progress_data.get("self"), dict) else {}
+
+        # 1. Aktualizace claimu
+        if progress_data.get("isClaimed") or self_data.get("isClaimed"):
+            self.is_claimed = True
+            self.real_current_minutes = self.required_minutes
+
+        # 2. Aktualizace napozorovaných minut
+        inc_minutes = self_data.get("currentMinutesWatched")
+        if inc_minutes is not None:
+            self.real_current_minutes = max(self.real_current_minutes, int(inc_minutes))
+
+        # 3. Aktualizace ID instance pro claim
+        claim_id = self_data.get("dropInstanceID")
+        if claim_id:
+            self.claim_id = claim_id
+
+    def apply_desync_sanitization(
+        self,
+        claimed_tokens: set[str],
+        desync_log: list[dict] | None = None,
+        campaign_name: str = "Neznámá kampaň",
+    ) -> bool:
+        """Porovná stav dropu s již získanými odměnami a opraví desynchronizaci."""
+        if self.is_claimed:
+            return False
+
+        check_targets: list[tuple[str, str]] = [
+            (b.id, b.name) for b in self.benefits
+        ]
+        if not check_targets and self.name:
+            check_targets.append(("", self.name))
+
+        drop_should_be_claimed = False
+        matched_reason = ""
+
+        for b_id, b_name in check_targets:
+            clean_b_id = b_id.lower().strip()
+            clean_name = (
+                b_name.lower()
+                .replace("emote", "")
+                .replace("badge", "")
+                .replace("emotes", "")
+                .replace("badges", "")
+                .strip()
+            )
+
+            if clean_b_id and clean_b_id in claimed_tokens:
+                drop_should_be_claimed = True
+                matched_reason = "ID v historii"
+                break
+
+            if clean_name:
+                for token in claimed_tokens:
+                    if len(token) <= 2:
+                        continue
+
+                    clean_token = (
+                        token.lower()
+                        .replace("emote", "")
+                        .replace("badge", "")
+                        .replace("emotes", "")
+                        .replace("badges", "")
+                        .strip()
+                    )
+
+                    if (
+                        clean_name == clean_token
+                        or clean_name in clean_token
+                        or clean_token in clean_name
+                    ):
+                        drop_should_be_claimed = True
+                        matched_reason = f"Match názvu: '{clean_name}' vs '{clean_token}'"
+                        break
+
+            if drop_should_be_claimed:
+                break
+
+        if drop_should_be_claimed:
+            if desync_log is not None:
+                desync_log.append({
+                    "campaign": campaign_name,
+                    "drop_name": self.name,
+                    "drop_id": self.id,
+                    "api_claimed": False,
+                    "api_progress": f"{self.real_current_minutes}/{self.required_minutes}m",
+                    "reason": matched_reason,
+                })
+
+            self.is_claimed = True
+            self.real_current_minutes = self.required_minutes
+            if not self.claim_id:
+                self.claim_id = "SANITIZED_CLAIMED"
+
+            logger.debug(
+                f"Desync resolved: Drop '{self.name}' ({self.id}) "
+                f"marked as claimed [{matched_reason}]"
+            )
+            return True
+
+        return False
 
     def sync_minutes(self, minutes: int) -> None:
         self.real_current_minutes = update_drop_minutes(
@@ -368,13 +424,30 @@ class Drop(BaseModel):
         if self.real_current_minutes >= self.required_minutes and self.required_minutes > 0:
             self.is_claimed = True
 
-    def get_wanted_unclaimed_benefits(self, mining_benefits: list | None = None) -> list:
-        rewards = getattr(self, "benefits", []) or getattr(self, "rewards", [])
-        return filter_wanted_unclaimed_benefits(rewards, self.is_claimed, mining_benefits)
+    @property
+    def status(self) -> str:
+        return resolve_drop_status(
+            is_claimed=self.is_claimed,
+            can_claim=bool(self.claim_id and not self.is_claimed),
+            is_stuck=self.is_stuck,
+            current_minutes=self.real_current_minutes,
+        )
+
+    @property
+    def remaining_minutes(self) -> int:
+        return max(0, self.required_minutes - self.current_minutes)
+
+    @property
+    def current_minutes(self) -> int:
+        return self.real_current_minutes
 
     @property
     def can_claim(self) -> bool:
         return check_drop_can_claim(self.current_minutes, self.required_minutes, self.is_claimed)
+
+    def get_wanted_unclaimed_benefits(self, mining_benefits: list | None = None) -> list:
+        rewards = getattr(self, "benefits", []) or getattr(self, "rewards", [])
+        return filter_wanted_unclaimed_benefits(rewards, self.is_claimed, mining_benefits)
 
     def __repr__(self) -> str:
         additional = ", claimed=True" if self.is_claimed else ""
@@ -391,6 +464,8 @@ class Drop(BaseModel):
 # ==============================================================================
 
 class Campaign(BaseModel):
+    """Model reprezentující Twitch Drop kampaň."""
+
     id: str = Field(validation_alias=AliasChoices("id", "campaign_id"))
     campaign_url: str = ""
     name: str = ""
@@ -401,51 +476,168 @@ class Campaign(BaseModel):
     ends_at: datetime = Field(validation_alias=AliasChoices("ends_at", "endAt"))
     valid: bool = True
     allowed_channels: list[Channel] = Field(default_factory=list)
-    timed_drops: dict[str, TimedDrop] = Field(default_factory=dict)
+    timed_drops: dict[str, Drop] = Field(default_factory=dict)
+
+    _twitch: Any = PrivateAttr(default=None)
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
         populate_by_name=True,
     )
 
-    @property
-    def remaining_minutes(self) -> int:
-        """Zbývající čas k odsedění (watch time) pro kampaň."""
-        return calculate_campaign_remaining_minutes(self)
+    @model_validator(mode="before")
+    @classmethod
+    def _preprocess_campaign(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        c_data = dict(data)
+
+        if "accountLinkURL" in c_data or "self" in c_data:
+            link_url = c_data.get("accountLinkURL", "")
+            self_data = c_data.get("self") or {}
+            is_connected = (
+                self_data.get("isAccountConnected", False)
+                if isinstance(self_data, dict)
+                else False
+            )
+
+            fake_link_domains = ("twitch.tv", "help.twitch.tv")
+            has_real_link = bool(link_url) and not any(
+                domain in link_url for domain in fake_link_domains
+            )
+            c_data.setdefault("linked", not has_real_link or bool(is_connected))
+
+        if "status" in c_data:
+            c_data.setdefault("valid", c_data.get("status") != "EXPIRED")
+
+        if "id" in c_data and not c_data.get("campaign_url"):
+            c_data["campaign_url"] = (
+                f"https://www.twitch.tv/drops/campaigns?dropID={c_data['id']}"
+            )
+
+        return c_data
+
+    @classmethod
+    def from_json(
+        cls,
+        twitch: Any,
+        data: dict[str, Any],
+        claimed_benefits: dict[str, datetime],
+        desync_log: list[dict] | None = None,
+    ) -> Campaign:
+        """Konstruktor pro načtení kampaně ze surového JSONu s automatickou sanitací desynchronizace."""
+        allowed: dict[str, Any] = data.get("allow", {})
+        allowed_channels = (
+            [Channel.from_acl(twitch, ch) for ch in allowed.get("channels", [])]
+            if allowed.get("channels") and allowed.get("isEnabled", True)
+            else []
+        )
+
+        game_data = data.get("game")
+        game_name = data.get("name") or "Unknown Event"
+        game = (
+            Game.model_validate(game_data)
+            if game_data
+            else Game(id="special_event", name=game_name)
+        )
+
+        campaign = cls.model_validate(
+            {**data, "game": game, "allowed_channels": allowed_channels}
+        )
+        campaign._twitch = twitch
+
+        claimed_tokens = (
+            {token.lower().strip() for token in claimed_benefits.keys() if token}
+            if claimed_benefits
+            else set()
+        )
+
+        timed_drops_dict = {}
+        for drop_data in data.get("timeBasedDrops", []):
+            drop_instance = Drop.model_validate(drop_data)
+            drop_instance.campaign = campaign
+            drop_instance._twitch = twitch
+
+            if claimed_tokens:
+                drop_instance.apply_desync_sanitization(
+                    claimed_tokens=claimed_tokens,
+                    desync_log=desync_log,
+                    campaign_name=campaign.name,
+                )
+
+            timed_drops_dict[drop_instance.id] = drop_instance
+
+        campaign.timed_drops = timed_drops_dict
+        return campaign
+
+    def update_progress_from_gql(self, progress_data: dict[str, Any]) -> None:
+        """Aktualizuje pokrok kampaně a všech jejích dropů z dat dropCampaignsInProgress."""
+        incoming_drops = progress_data.get("timeBasedDrops", []) or []
+
+        for inc_drop in incoming_drops:
+            if not isinstance(inc_drop, dict):
+                continue
+
+            drop_id = str(inc_drop.get("id") or "")
+            if drop_id in self.timed_drops:
+                self.timed_drops[drop_id].update_progress(inc_drop)
+
+    def can_earn_on(self, channel: Any) -> bool:
+        if self.allowed_channels:
+            ch_id = getattr(channel, "id", None)
+            ch_name = getattr(channel, "name", None)
+            return any(
+                (getattr(c, "id", None) == ch_id) or (getattr(c, "name", None) == ch_name)
+                for c in self.allowed_channels
+            )
+
+        ch_game = getattr(channel, "game", None)
+        if self.game and ch_game:
+            cg_id = getattr(self.game, "id", None)
+            chg_id = getattr(ch_game, "id", None)
+            if cg_id and chg_id:
+                return cg_id == chg_id
+            return getattr(self.game, "name", None) == getattr(ch_game, "name", None)
+
+        return True
+
+    def can_earn(self, channel: Any) -> bool:
+        return self.can_earn_on(channel)
+
+    def can_earn_within(self, timestamp: datetime | None = None) -> bool:
+        return is_campaign_earnable_within(
+            self.starts_at, self.ends_at, self.eligibility, timestamp
+        )
 
     @property
-    def drops(self) -> list[TimedDrop]:
-        """Vrátí seznam všech dropů v kampani pro zpětnou kompatibilitu."""
+    def drops(self) -> list[Drop]:
         return list(self.timed_drops.values())
 
-    # --------------------------------------------------------------------------
-    # NOVĚ PŘIDANÉ PROPERTIES PRO ZOBRAZENÍ A SLEDOVÁNÍ POKROKU
-    # --------------------------------------------------------------------------
-
     @property
-    def first_drop(self) -> TimedDrop | None:
-        """Vrátí první nezískaný/aktivní drop v kampani, případně první v pořadí."""
+    def first_drop(self) -> Drop | None:
         for drop in self.drops:
-            if not getattr(drop, "claimed", False):
+            if not drop.is_claimed:
                 return drop
         return self.drops[0] if self.drops else None
 
     @property
     def progress(self) -> float:
-        """Vrátí celkový postup kampaně v procentech (0.0 až 100.0)."""
         if not self.drops:
             return 0.0
-        if all(getattr(d, "claimed", False) for d in self.drops):
+        if all(d.is_claimed for d in self.drops):
             return 100.0
-        
+
         total_required = sum(getattr(d, "required_minutes", 0) for d in self.drops)
         if total_required == 0:
-            return 100.0 if all(getattr(d, "claimed", False) for d in self.drops) else 0.0
-            
+            return 100.0 if all(d.is_claimed for d in self.drops) else 0.0
+
         total_current = sum(getattr(d, "current_minutes", 0) for d in self.drops)
         return min(100.0, (total_current / total_required) * 100.0)
 
-    # --------------------------------------------------------------------------
+    @property
+    def remaining_minutes(self) -> int:
+        return calculate_campaign_remaining_minutes(self)
 
     @property
     def eligible(self) -> bool:
@@ -459,21 +651,26 @@ class Campaign(BaseModel):
 
     @property
     def active(self) -> bool:
-        """Indikuje, zda kampaň právě probíhá."""
         return resolve_campaign_active(self.starts_at, self.ends_at)
 
     @property
     def upcoming(self) -> bool:
-        """Indikuje, zda kampaň ještě nezačala."""
         now = datetime.now(timezone.utc)
-        start = self.starts_at if self.starts_at.tzinfo else self.starts_at.replace(tzinfo=timezone.utc)
+        start = (
+            self.starts_at
+            if self.starts_at.tzinfo
+            else self.starts_at.replace(tzinfo=timezone.utc)
+        )
         return now < start
 
     @property
     def expired(self) -> bool:
-        """Indikuje, zda kampaň již skončila."""
         now = datetime.now(timezone.utc)
-        end = self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
+        end = (
+            self.ends_at
+            if self.ends_at.tzinfo
+            else self.ends_at.replace(tzinfo=timezone.utc)
+        )
         return now > end
 
     @property
@@ -484,94 +681,6 @@ class Campaign(BaseModel):
     def time_triggers(self) -> set[datetime]:
         return extract_campaign_time_triggers(self.starts_at, self.ends_at)
 
-    def can_earn_within(self, timestamp: datetime | None = None) -> bool:
-        return is_campaign_earnable_within(
-            self.starts_at, self.ends_at, self.eligibility, timestamp
-        )
-
-    # --------------------------------------------------------------------------
-    # DOPLNĚNÉ METODY PRO KONTROLU KANÁLŮ (can_earn / can_earn_on)
-    # --------------------------------------------------------------------------
-
-    def can_earn_on(self, channel: Any) -> bool:
-        """Vrátí True, pokud lze v té kampani získat drops na daném kanálu."""
-        # 1. Pokud kampaň definuje ACL (allowed_channels), kanál tam musí být
-        if self.allowed_channels:
-            ch_id = getattr(channel, "id", None)
-            ch_name = getattr(channel, "name", None)
-            return any(
-                (getattr(c, "id", None) == ch_id) or (getattr(c, "name", None) == ch_name)
-                for c in self.allowed_channels
-            )
-
-        # 2. Bez ACL kontrolujeme shodu hry (Game ID nebo název)
-        ch_game = getattr(channel, "game", None)
-        if self.game and ch_game:
-            cg_id = getattr(self.game, "id", None)
-            chg_id = getattr(ch_game, "id", None)
-            if cg_id and chg_id:
-                return cg_id == chg_id
-            return getattr(self.game, "name", None) == getattr(ch_game, "name", None)
-
-        return True
-
-    def can_earn(self, channel: Any) -> bool:
-        """Alias k can_earn_on pro zpětnou kompatibilitu se starším voláním."""
-        return self.can_earn_on(channel)
-
-    # --------------------------------------------------------------------------
-
-    @model_validator(mode="before")
-    @classmethod
-    def _preprocess_campaign(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-
-        c_data = dict(data)
-
-        if "accountLinkURL" in c_data or "self" in c_data:
-            link_url = c_data.get("accountLinkURL", "")
-            self_data = c_data.get("self") or {}
-            is_connected = self_data.get("isAccountConnected", False) if isinstance(self_data, dict) else False
-
-            fake_link_domains = ("twitch.tv", "help.twitch.tv")
-            has_real_link = bool(link_url) and not any(domain in link_url for domain in fake_link_domains)
-            c_data.setdefault("linked", not has_real_link or bool(is_connected))
-
-        if "status" in c_data:
-            c_data.setdefault("valid", c_data.get("status") != "EXPIRED")
-
-        if "id" in c_data and not c_data.get("campaign_url"):
-            c_data["campaign_url"] = f"https://www.twitch.tv/drops/campaigns?dropID={c_data['id']}"
-
-        return c_data
-
-    @classmethod
-    def from_json(
-        cls, twitch: Twitch, data: JsonType, claimed_benefits: dict[str, datetime]
-    ) -> Campaign:
-        """Čistá tovární metoda využívající nativní Pydantic validaci."""
-        allowed: JsonType = data.get("allow", {})
-        allowed_channels = (
-            [Channel.from_acl(twitch, ch) for ch in allowed.get("channels", [])]
-            if allowed.get("channels") and allowed.get("isEnabled", True)
-            else []
-        )
-
-        game_data = data.get("game")
-        game_name = data.get("name") or "Unknown Event"
-        game = Game.model_validate(game_data) if game_data else Game(id="special_event", name=game_name)
-
-        campaign = cls.model_validate({**data, "game": game, "allowed_channels": allowed_channels})
-
-        timed_drops_dict = {}
-        for drop_data in data.get("timeBasedDrops", []):
-            drop_instance = TimedDrop.model_validate(drop_data)
-            drop_instance.campaign = campaign
-            timed_drops_dict[drop_instance.id] = drop_instance
-
-        campaign.timed_drops = timed_drops_dict
-        return campaign
 
 # ==============================================================================
 # 6. STREAM
@@ -634,7 +743,12 @@ class Stream(BaseModel):
             viewers=stream["viewersCount"],
             title=settings["title"],
         )
-        
+
+
+# ==============================================================================
+# 7. GUI / TREE STRUCTURES
+# ==============================================================================
+
 class CurrentDropInfo(BaseModel):
     """Snímek aktuálně těženého dropu pro GUI/WebSocket."""
 
@@ -649,7 +763,7 @@ class CurrentDropInfo(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-############## ??? maybe merge with another idk
+
 class CurrentDropSession(BaseModel):
     """Payload z Twitch GraphQL pro aktuálně sledovaný drop."""
     drop_id: str = Field(validation_alias=AliasChoices("dropID", "drop_id"))
@@ -657,9 +771,8 @@ class CurrentDropSession(BaseModel):
         default=0,
         validation_alias=AliasChoices("currentMinutesWatched", "current_minutes_watched"),
     )
-   
-   
-######## WANTED QUEUE ################
+
+
 class DropTreeItem(BaseModel):
     """Reprezentace jednoho dropu v hierarchii."""
 
@@ -693,7 +806,6 @@ class CampaignTreeItem(BaseModel):
     remaining_minutes: int = 0
     drops: list[DropTreeItem] = Field(default_factory=list)
 
-    # Pomocný ne-serializovaný klíč pro vnitřní řazení
     raw_ends_at: Optional[datetime] = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -707,20 +819,17 @@ class GameTreeItem(BaseModel):
     icon_url: Optional[str] = None
     campaigns: list[CampaignTreeItem] = Field(default_factory=list)
 
-    # Pomocný objekt Game pro plánovač (při model_dump() / JSON exportu se vynechá)
     game_obj: Optional[Game] = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-#########################################################################################################X
 
-# class WantedQueue(BaseModel):
 
 # Aliasy pro zpětnou kompatibilitu
 DropsCampaign = Campaign
 BaseDrop = Drop
 TimedDrop = Drop
 
-# Rebuild Pydantic schémat
+# Rebuild Pydantic schémat pro rozlišení dopředných odkazů
 Channel.model_rebuild()
 TimedDrop.model_rebuild()
 Campaign.model_rebuild()

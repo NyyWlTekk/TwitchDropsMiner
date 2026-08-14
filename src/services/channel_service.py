@@ -17,7 +17,6 @@ from src.exceptions import GQLException, MinerException
 from src.models.models import Channel
 from src.utils import chunk
 
-
 if TYPE_CHECKING:
     from src.config import GQLRequest, JsonType
     from src.core.client import Twitch
@@ -53,19 +52,10 @@ class ChannelService:
 
         Priority is determined by the position of the channel's game in the
         wanted_games list. Lower numbers indicate higher priority.
-
-        Args:
-            channel: The channel to evaluate
-
-        Returns:
-            Priority number where:
-            - 0 has the highest priority (first in games_to_watch list)
-            - Higher numbers indicate lower priority
-            - MAX_INT signifies the lowest possible priority (unwanted game or offline)
         """
         if (
             (game := channel.game) is None  # None when OFFLINE or no game set
-            or game not in self._twitch.wanted_games  # we don't care about the played game
+            or game not in self._twitch.wanted_games  # We don't care about the played game
         ):
             return MAX_INT
         return self._twitch.wanted_games.index(game)
@@ -74,12 +64,6 @@ class ChannelService:
     def get_viewers_key(channel: Channel) -> int:
         """
         Sort key for channels by viewer count (descending).
-
-        Args:
-            channel: The channel to evaluate
-
-        Returns:
-            Viewer count, or -1 if not available (offline channels)
         """
         if (viewers := channel.viewers) is not None:
             return viewers
@@ -90,17 +74,6 @@ class ChannelService:
     ) -> list[Channel]:
         """
         Fetch live streams for a specific game from Twitch directory.
-
-        Args:
-            game: The game to fetch streams for
-            limit: Maximum number of streams to return (default: 20)
-            drops_enabled: Only return channels with drops enabled (default: True)
-
-        Returns:
-            List of Channel objects representing live streams
-
-        Raises:
-            MinerException: If the GQL request fails
         """
         filters: list[str] = []
         if drops_enabled:
@@ -122,37 +95,31 @@ class ChannelService:
         except GQLException as exc:
             raise MinerException(f"Game: {game.slug}") from exc
 
-        if "game" in response["data"]:
-            return [
-                Channel.from_directory(
-                    self._twitch, stream_channel_data["node"], drops_enabled=drops_enabled
-                )
-                for stream_channel_data in response["data"]["game"]["streams"]["edges"]
-                if stream_channel_data["node"]["broadcaster"] is not None
-            ]
+        # Defenzivní kontrola obsahu odpovědi
+        if isinstance(response, dict) and response.get("data"):
+            game_data = response["data"].get("game")
+            if game_data and "streams" in game_data and game_data["streams"]:
+                edges = game_data["streams"].get("edges", [])
+                return [
+                    Channel.from_directory(
+                        self._twitch, stream_channel_data["node"], drops_enabled=drops_enabled
+                    )
+                    for stream_channel_data in edges
+                    if isinstance(stream_channel_data, dict) and stream_channel_data.get("node", {}).get("broadcaster") is not None
+                ]
         return []
 
     async def bulk_check_online(self, channels: abc.Iterable[Channel]) -> None:
         """
         Utilize batch GQL requests to check ONLINE status for multiple channels at once.
-
-        This method efficiently checks the online status and drops_enabled flag
-        for a large number of channels by batching GraphQL requests.
-
-        Args:
-            channels: Iterable of Channel objects to check
         """
         channel_list = list(channels)
         acl_streams_map: dict[int, JsonType] = {}
         stream_gql_ops: list[GQLRequest] = [channel.stream_gql for channel in channel_list]
 
         if not stream_gql_ops:
-            # shortcut for nothing to process
-            # NOTE: Have to do this here, because "channels" can be any iterable
             return
 
-        # gql_request may return either a single JsonType or a list[JsonType],
-        # so accept the union in the Task type.
         stream_gql_tasks: list[asyncio.Task[JsonType | list[JsonType]]] = [
             asyncio.create_task(self._twitch.gql_request(stream_gql_chunk))
             for stream_gql_chunk in chunk(stream_gql_ops, 20)
@@ -161,28 +128,32 @@ class ChannelService:
         try:
             for coro in asyncio.as_completed(stream_gql_tasks):
                 response = await coro
-                # Normalize response to a list for uniform processing
-                if isinstance(response, list):
-                    response_list: list[JsonType] = response
-                else:
-                    response_list = [response]
+                # Normalizace odpovědi na list
+                response_list: list[JsonType] = response if isinstance(response, list) else [response]
+                
                 for response_json in response_list:
-                    channel_data: JsonType = response_json["data"]["user"]
-                    if channel_data is not None:
-                        acl_streams_map[int(channel_data["id"])] = channel_data
+                    if not isinstance(response_json, dict):
+                        continue
+                    
+                    data = response_json.get("data")
+                    if isinstance(data, dict):
+                        user_data = data.get("user")
+                        if isinstance(user_data, dict) and "id" in user_data:
+                            acl_streams_map[int(user_data["id"])] = user_data
+                            
         except Exception:
-            # asyncio.as_completed doesn't cancel tasks on errors
             for task in stream_gql_tasks:
                 task.cancel()
             raise
 
-        # Update all channels with their stream data
+        # Aktualizace jednotlivých kanálů nalezenými daty
         for channel in channel_list:
             channel_id = channel.id
             if channel_id not in acl_streams_map:
                 continue
+            
             channel_data = acl_streams_map[channel_id]
-            if channel_data["stream"] is None:
+            if channel_data.get("stream") is None:
                 continue
-            # Update channel with stream data (no available drops check)
+                
             channel.external_update(channel_data, [])

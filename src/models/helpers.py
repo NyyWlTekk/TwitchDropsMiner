@@ -223,37 +223,6 @@ def resolve_drop_status(
     return "queued"
 
 
-def check_can_earn_within(
-    starts_at: datetime,
-    ends_at: datetime,
-    required_minutes: int,
-    current_minutes: int,
-    target_stamp: datetime | None = None,
-    base_conditions_met: bool = True,
-) -> bool:
-    """Ověří, zda je fyzicky možné drop dokončit v daném časovém okně."""
-    now = datetime.now(timezone.utc)
-    starts_at_utc = _ensure_utc(starts_at)
-    ends_at_utc = _ensure_utc(ends_at)
-
-    # Pokud target_stamp není předán, dynamicky nastavit výchozí okno +1 hodina od teď
-    if target_stamp is None:
-        target_stamp_utc = now + timedelta(hours=1)
-    else:
-        target_stamp_utc = _ensure_utc(target_stamp)
-
-    if not (starts_at_utc < target_stamp_utc and ends_at_utc > now):
-        return False
-
-    time_left_minutes = (ends_at_utc - now).total_seconds() / 60
-    remaining_needed = max(0, required_minutes - current_minutes)
-
-    if time_left_minutes < remaining_needed:
-        return False
-
-    return base_conditions_met
-
-
 # ==============================================================================
 # 4. SÍŤOVÉ A API POMOCNÉ FUNKCE
 # ==============================================================================
@@ -381,30 +350,6 @@ def update_drop_minutes(current_minutes: int, required_minutes: int, new_minutes
     if new_minutes < 0:
         return current_minutes
     return min(new_minutes, required_minutes)
-
-def is_campaign_earnable_within(
-    starts_at: datetime, 
-    ends_at: datetime, 
-    is_eligible: bool, 
-    target_time: datetime | None = None
-) -> bool:
-    """Ověří, zda je kampaň aktivní/dostupná pro těžení před nebo do zvoleného času."""
-    if not is_eligible:
-        return False
-        
-    now = datetime.now(timezone.utc)
-    
-    # Pokud target_time chybí, použije se výchozí okno +1 hodina od teď
-    if target_time is None:
-        target = now + timedelta(hours=1)
-    else:
-        target = _ensure_utc(target_time)
-
-    start = _ensure_utc(starts_at)
-    end = _ensure_utc(ends_at)
-
-    # Kampaň nesmí být již ukončena a musí začít před/v rámci target_time
-    return (now <= end) and (start <= target)
 
 def extract_campaign_time_triggers(starts_at: datetime, ends_at: datetime) -> set[datetime]:
     """Vrátí časové body (začátek a konec), které slouží jako spouštěče přepnutí kampaně."""

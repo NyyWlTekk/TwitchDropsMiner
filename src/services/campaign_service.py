@@ -171,15 +171,17 @@ class InventoryFetcher:
 # ============================================================================
 # 3. INVENTORY COORDINATOR (Hlavní řídící třída)
 # ============================================================================
+
 class InventoryCoordinator:
     """
     Hlavní koordinátor inventáře a správy kampaní.
 
     Řídí celý životní cyklus:
     1. Koordinace stahování přes InventoryFetcher
-    2. Předávání dat k sanitaci přes CampaignSanitizer
-    3. Aktualizace vnitřního stavu Twitch klienta a GUI
-    4. Řízení událostí a přechodů mezi stavy (State Machine)
+    2. Synchronizace uživatelských assetů (emotikony, odznaky)
+    3. Sloučení a sanitace GQL dat do Pydantic modelů
+    4. Aktualizace vnitřního stavu Twitch klienta a GUI
+    5. Řízení událostí a přechodů mezi stavy (State Machine)
     """
 
     def __init__(self, twitch: Twitch) -> None:
@@ -194,25 +196,25 @@ class InventoryCoordinator:
         """Kompletní synchronizační workflow inventáře, odznaků a kampaní."""
         self._update_status(_.t["gui"]["status"]["fetching_inventory"])
 
-        # 1. Stažení a synchronizace assetů
+        # 1. Stažení a synchronizace assetů (emoty & badges)
         user_emotes, user_badges = await self._sync_user_assets()
 
-        # 2. Získání surových dat a příprava množiny claimed ID
+        # 2. Získání surových dat a příprava sloučené O(1) množiny claimed ID
         inventory_raw = await self._fetcher.fetch_raw_inventory()
         claimed_map, all_claimed_ids = self._extract_claimed_ids(
             inventory_raw, user_emotes, user_badges
         )
 
-        # 3. Parsování a dotažení veřejných kampaní v dávkách
+        # 3. Parsování ongoing kampaní a dotažení veřejných detailů v dávkách (včetně merge)
         inventory_data = self._parse_ongoing_campaigns(inventory_raw)
         await self._fetch_and_merge_available_campaigns(inventory_data)
 
-        # 4. Sanitace, stavba modelů a seřazení
+        # 4. Sanitace, stavba Pydantic modelů a seřazení
         campaigns = self._build_and_sort_campaigns(
             inventory_data, claimed_map, all_claimed_ids
         )
 
-        # 5. Aplikace stavu a naplánování údržby
+        # 5. Aplikace stavu do klienta a naplánování údržby
         await self._apply_inventory_to_state(campaigns)
         self._schedule_maintenance_tasks()
 
@@ -237,7 +239,7 @@ class InventoryCoordinator:
         self._twitch.change_state(State.GAMES_UPDATE)
 
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
-        """Určí aktivní kampaň pro daný kanál."""
+        """Určí aktivní kampaň pro daný kanál s využitím sjednocené metody can_earn."""
         if not self._twitch.wanted_games:
             return None
 
@@ -248,7 +250,7 @@ class InventoryCoordinator:
         campaigns: list[DropsCampaign] = [
             campaign
             for campaign in self._twitch.inventory
-            if campaign.can_earn(watching_channel)
+            if campaign.can_earn_on_this_channel(watching_channel)
         ]
 
         if campaigns:
@@ -269,11 +271,6 @@ class InventoryCoordinator:
         self.user_emotes = emotes
         self.user_badges = badges
 
-        logger.info(
-            "[Inventory] Synchronizováno %d emotů a %d odznaků do systémového stavu.",
-            len(emotes),
-            len(badges),
-        )
         return emotes, badges
 
     def _extract_claimed_ids(
@@ -282,20 +279,37 @@ class InventoryCoordinator:
         user_emotes: set[str],
         user_badges: set[str],
     ) -> tuple[dict[str, datetime], set[str]]:
-        """Sestaví množinu všech získaných ID pro name matching sanitaci."""
+        """
+        Sestaví spolehlivou množinu všech získaných ID (Dropy, Emoty, Badges)
+        a vytvoří claimed_map pro časová razítka. All IDs jsou normalizována.
+        """
         claimed_map: dict[str, datetime] = {}
         all_claimed_ids: set[str] = set()
-
         now_utc = datetime.now(timezone.utc)
+
+        # 1. Získané dropy z inventáře (gameEventDrops)
         game_event_drops = inventory_raw.get("gameEventDrops") or []
         for drop in game_event_drops:
             if isinstance(drop, dict) and drop.get("id"):
                 drop_id = str(drop["id"]).lower().strip()
                 claimed_map[drop_id] = now_utc
 
+        # 2. Sloučení ID dropů, emotů a odznaků do jednotné lowercase množiny
         all_claimed_ids.update(claimed_map.keys())
-        all_claimed_ids.update(user_emotes)
-        all_claimed_ids.update(user_badges)
+        all_claimed_ids.update(str(e).lower().strip() for e in user_emotes if e)
+        all_claimed_ids.update(str(b).lower().strip() for b in user_badges if b)
+
+        # 3. Čisté dvourádkové logování
+        asset_count = len(user_emotes) + len(user_badges)
+        logger.info(
+            "📦 [Inventory] Načten kompletní inventář (%d dropů) + synchronizováno %d uživatelských assetů.",
+            len(claimed_map),
+            asset_count,
+        )
+        logger.info(
+            "🎯 [Match] Zjištěno %d unikátních splněných ID (příznaky 100%% splněno připraveny).",
+            len(all_claimed_ids),
+        )
 
         return claimed_map, all_claimed_ids
 
@@ -307,7 +321,7 @@ class InventoryCoordinator:
     async def _fetch_and_merge_available_campaigns(
         self, inventory_data: dict[str, JsonType]
     ) -> None:
-        """Koordinuje stažení všech dostupných kampaní v dávkách."""
+        """Koordinuje stažení dostupných kampaní v dávkách a bezpečně je sloučí."""
         response = await self._twitch.gql_request(GQL_OPERATIONS["Campaigns"])
         c_data = response.get("data", response) if isinstance(response, dict) else {}
         c_user_data = c_data.get("currentUser", c_data) if isinstance(c_data, dict) else {}
@@ -329,15 +343,45 @@ class InventoryCoordinator:
             "Inventory fetched: %d total campaigns available.", len(available_list)
         )
 
+        fetched_details: dict[str, JsonType] = {}
+
         try:
             for coro in asyncio.as_completed(fetch_tasks):
                 chunk_campaigns = await coro
-                inventory_data.update(chunk_campaigns)
+                fetched_details.update(chunk_campaigns)
+
+            # Sloučení VŠECH načtených detailů s in-progress daty
+            merged_result = self.merge_campaign_data(inventory_data, fetched_details)
+            inventory_data.clear()
+            inventory_data.update(merged_result)
+
         except Exception:
             for task in fetch_tasks:
                 task.cancel()
             await asyncio.gather(*fetch_tasks, return_exceptions=True)
             raise
+
+    def merge_campaign_data(
+        self,
+        ongoing_campaigns: dict[str, JsonType],
+        fetched_details: dict[str, JsonType],
+    ) -> dict[str, JsonType]:
+        """Sloučí VŠECHNY dostupné kampaně s probíhajícím pokrokem uživatele."""
+        all_campaign_ids = set(fetched_details.keys()) | set(ongoing_campaigns.keys())
+
+        merged_data: dict[str, JsonType] = {}
+        for cid in all_campaign_ids:
+            details = fetched_details.get(cid, {})
+            ongoing = ongoing_campaigns.get(cid, {})
+            merged_data[cid] = {**details, **ongoing}
+
+        logger.info(
+            "[Merge] Úspěšně sloučeno %d kampaní celkem (%d s aktivním pokrokem).",
+            len(merged_data),
+            len(ongoing_campaigns),
+        )
+
+        return merged_data
 
     def _build_and_sort_campaigns(
         self,
@@ -345,16 +389,20 @@ class InventoryCoordinator:
         claimed_map: dict[str, datetime],
         all_claimed_ids: set[str],
     ) -> list[DropsCampaign]:
-        """Sestaví a seřadí doménové objekty DropsCampaign ze surových dat."""
+        """Sestaví a seřadí doménové Pydantic objekty DropsCampaign ze surových dat."""
         campaigns: list[DropsCampaign] = []
 
         for cid, camp_dict in inventory_data.items():
             if not isinstance(camp_dict, dict):
                 continue
 
-            # Předáváme přímo surový slovník z GQL API
             campaigns.append(
-                DropsCampaign.from_json(self._twitch, camp_dict, claimed_map)
+                DropsCampaign.from_json(
+                    self._twitch,
+                    camp_dict,
+                    claimed_map=claimed_map,
+                    all_claimed_ids=all_claimed_ids,
+                )
             )
 
         campaigns.sort(
@@ -366,7 +414,7 @@ class InventoryCoordinator:
         )
 
         return campaigns
-    
+
     async def _apply_inventory_to_state(self, campaigns: list[DropsCampaign]) -> None:
         """Aplikuje zpracované kampaně do vnitřního stavu Twitch klienta a GUI."""
         self._twitch._drops.clear()
@@ -380,13 +428,14 @@ class InventoryCoordinator:
                 drop.sync_minutes(drop.current_minutes)
 
             self._twitch._drops.update({drop.id: drop for drop in campaign.drops})
-            if campaign.can_earn_within():
+            
+            # Využití nového atributu campaign.is_earnable bez závorek
+            if campaign.is_campaign_earnable:
                 switch_triggers.update(campaign.time_triggers)
 
             self._twitch.inventory.append(campaign)
             self._twitch._campaigns[campaign.id] = campaign
 
-        # Převedeme na deque, aby fungoval .popleft()
         self._twitch._mnt_triggers = deque(sorted(switch_triggers))
 
         gui = getattr(self._twitch, "gui", None)

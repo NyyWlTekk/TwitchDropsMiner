@@ -319,18 +319,31 @@ class Websocket:
             else:
                 ws_logger.error(f"Websocket[{self._idx}] error: Unknown message: {raw_message}")
 
-    def _handle_message(self, message):
-        """
-        Route a received MESSAGE to the appropriate topic handler.
+    def _handle_message(self, message: dict[str, Any]) -> None:
+        """Zpracuje příchozí PubSub zprávu a předá ji zaregistrovanému handleru."""
+        data = message.get("data", {})
+        topic_name = data.get("topic")
+        raw_payload = data.get("message")
 
-        Args:
-            message: Websocket message dict with topic and message data
-        """
-        # request the assigned topic to process the response
-        topic = self.topics.get(message["data"]["topic"])
-        if topic is not None:
-            # use a task to not block the websocket
-            asyncio.create_task(topic(json.loads(message["data"]["message"])))
+        if not topic_name or not raw_payload:
+            return
+
+        # Získání handleru zřejmého z veřejného atributu self.topics
+        handler = self.topics.get(topic_name)
+        if not handler:
+            base_topic = topic_name.split(".")[0]
+            handler = self.topics.get(base_topic)
+
+        if not callable(handler):
+            logger.debug("Nenalezen callable handler pro topic: %s", topic_name)
+            return
+
+        payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
+
+        if asyncio.iscoroutinefunction(handler):
+            asyncio.create_task(handler(payload))
+        else:
+            handler(payload)
 
     async def _handle_recv(self):
         """Handle receiving and processing messages from the websocket."""

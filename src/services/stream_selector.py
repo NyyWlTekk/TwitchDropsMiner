@@ -1,5 +1,6 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.config.settings import Settings
@@ -8,7 +9,6 @@ from src.models.models import (
     Channel,
     DropTreeItem,
     DropsCampaign,
-    Game,
     GameTreeItem,
 )
 
@@ -25,10 +25,9 @@ class StreamSelector:
         self._channel_service = channel_service
         self._watch_service = watch_service
         self._twitch = twitch
-        self.wanted_games: list[Game] = []
+        self.wanted_games: list[Any] = []
 
     def _get_watch_service(self) -> Any:
-        """Pomocná metoda pro bezpečné získání instance WatchService."""
         return self._watch_service or getattr(self._twitch, "watch_service", None)
 
     # ==========================================================================
@@ -44,7 +43,7 @@ class StreamSelector:
             earnable_count = sum(
                 1
                 for campaign in getattr(channel, "campaigns", [])
-                if hasattr(campaign, "can_earn_within") and campaign.can_earn_within()
+                if campaign.is_campaign_earnable
             )
 
             base_priority = 999_999
@@ -62,16 +61,13 @@ class StreamSelector:
         return None
 
     def can_watch(self, channel: Any) -> bool:
-        """Přesměrováno na WatchService.can_watch(channel)."""
         watch_svc = self._get_watch_service()
         if watch_svc and hasattr(watch_svc, "can_watch"):
             return watch_svc.can_watch(channel)
 
-        # Fallback pouze pro případ, že WatchService ještě není dostupná
-        return getattr(channel, "online", True) and getattr(channel, "drops_enabled", True)
+        return channel.online and channel.drops_enabled
 
     def should_switch(self, channel: Any) -> bool:
-        """Přesměrováno na WatchService.should_switch(channel)."""
         watch_svc = self._get_watch_service()
         if watch_svc and hasattr(watch_svc, "should_switch"):
             return watch_svc.should_switch(channel)
@@ -86,8 +82,7 @@ class StreamSelector:
         self,
         settings: Optional[Settings] = None,
         campaigns: Optional[list[DropsCampaign]] = None,
-    ) -> list[Game]:
-        """Přebuduje seznam požadovaných her podle aktuálního nastavení a inventáře."""
+    ) -> list[Any]:
         if settings is None and self._twitch:
             settings = getattr(self._twitch, "settings", None)
 
@@ -102,7 +97,7 @@ class StreamSelector:
             logger.warning("Cannot build wanted games: missing settings or campaigns.")
             return []
 
-        self.wanted_games = self.get_wanted_games(settings, campaigns)
+        self.wanted_games = self.get_wanted_game_tree(settings, campaigns)
         return self.wanted_games
 
     def handle_prioritize_badge_games(
@@ -121,34 +116,23 @@ class StreamSelector:
             if not getattr(campaign, "active", True):
                 continue
 
-            game_obj = getattr(campaign, "game", None)
-            game_name = (
-                game_obj.name
-                if hasattr(game_obj, "name")
-                else str(game_obj or "").strip()
-            )
+            game_name = campaign.game.name if campaign.game else ""
 
-            for drop in getattr(campaign, "drops", []):
+            for drop in campaign.drops:
                 is_badge = (
                     getattr(drop, "is_badge", False)
                     or "badge" in getattr(drop, "name", "").lower()
                 )
-                is_claimed = (
-                    getattr(drop, "is_claimed", False)
-                    or getattr(drop, "claimed", False)
-                    or getattr(drop, "completed", False)
-                )
-
-                if is_badge and not is_claimed and game_name:
-                    badge_games.add(game_name)
+                if is_badge and not drop.is_claimed and game_name:
+                    badge_games.add(game_name.lower())
                     break
 
         if not badge_games:
             return False
 
-        current_games = getattr(settings, "games_to_watch", []) or []
-        with_badges = [g for g in current_games if g in badge_games]
-        without_badges = [g for g in current_games if g not in badge_games]
+        current_games = settings.games_to_watch or []
+        with_badges = [g for g in current_games if g.lower() in badge_games]
+        without_badges = [g for g in current_games if g.lower() not in badge_games]
 
         new_queue = with_badges + without_badges
 
@@ -178,12 +162,7 @@ class StreamSelector:
             newly_added = False
 
             for c in filtered:
-                game_obj = getattr(c, "game", None)
-                game_name = (
-                    game_obj.name.strip()
-                    if hasattr(game_obj, "name")
-                    else str(game_obj or "").strip()
-                )
+                game_name = c.game.name.strip() if c.game else ""
                 if (
                     game_name
                     and game_name.lower() not in ignored
@@ -209,7 +188,7 @@ class StreamSelector:
         logger.info("Auto-sorting games by pending badges and ending time")
 
         settings = getattr(client, "settings", None)
-        if not settings or not getattr(settings, "games_to_watch", None):
+        if not settings or not settings.games_to_watch:
             logger.debug("Skip auto-sorting: games_to_watch is empty.")
             return
 
@@ -221,12 +200,11 @@ class StreamSelector:
     def get_filtered_queue(
         self, queue: list[DropsCampaign]
     ) -> list[DropsCampaign]:
-        """Vrátí pouze nehotové kampaně z queue, které mají sledovatelné dropy."""
+        """Vrátí pouze nehotové kampaně z queue, které jsou těžitelné."""
         return [
             c
             for c in queue
-            if getattr(c, "progress", 0) < 100
-            and getattr(c, "has_watchable_drops", False)
+            if getattr(c, "progress", 0) < 100 and c.is_campaign_earnable
         ]
 
     def _sort_games_by_ending_time(
@@ -238,21 +216,20 @@ class StreamSelector:
 
         campaign_map: dict[str, list[DropsCampaign]] = {}
         for c in filtered_queue:
-            if not getattr(c, "has_watchable_drops", False):
+            if not c.is_campaign_earnable:
                 continue
-            c_game = getattr(c, "game", "")
-            c_name = c_game.name if hasattr(c_game, "name") else str(c_game)
+            c_name = c.game.name if c.game else ""
             if c_name:
                 campaign_map.setdefault(c_name.strip().lower(), []).append(c)
 
         def sort_key(game_name: str) -> tuple[int, datetime]:
             campaigns = campaign_map.get(game_name.strip().lower(), [])
             if not campaigns:
-                return (0, datetime.max.replace(tzinfo=timezone.utc))
+                return (1, datetime.max.replace(tzinfo=timezone.utc))
 
             dates: list[datetime] = []
             for c in campaigns:
-                dt = getattr(c, "end_time", getattr(c, "ends_at", None))
+                dt = c.ends_at
                 if isinstance(dt, datetime):
                     if dt.tzinfo is None:
                         dt = dt.replace(tzinfo=timezone.utc)
@@ -261,7 +238,7 @@ class StreamSelector:
             earliest_end = (
                 min(dates) if dates else datetime.max.replace(tzinfo=timezone.utc)
             )
-            return (1, earliest_end)
+            return (0, earliest_end)
 
         old_queue = list(settings.games_to_watch)
         settings.games_to_watch.sort(key=sort_key)
@@ -279,14 +256,11 @@ class StreamSelector:
             }
             target_game_names = []
             for campaign in campaigns:
-                g_name = (
-                    campaign.game.name
-                    if hasattr(campaign.game, "name")
-                    else str(campaign.game)
-                )
+                g_name = campaign.game.name if campaign.game else ""
                 if (
-                    g_name.lower() not in ignored_games_lower
-                    and g_name not in target_game_names
+                    g_name
+                    and g_name.lower() not in ignored_games_lower
+                    and g_name.lower() not in {t.lower() for t in target_game_names}
                 ):
                     target_game_names.append(g_name)
             return target_game_names
@@ -306,22 +280,32 @@ class StreamSelector:
         """Sestaví, seřadí a vyčistí strom požadovaných her a kampaní v jediném kroku."""
         now = datetime.now(timezone.utc)
         watch_service = self._get_watch_service()
-        target_game_names = self._get_target_game_names(settings, campaigns)
 
-        logger.debug(
-            "🎮 [Tree] Sestavuji strom her (%d cílů, %d kampaní v inventáři)",
-            len(target_game_names),
+        if isinstance(campaigns, dict):
+            campaigns = list(campaigns.values())
+        elif not campaigns:
+            campaigns = []
+
+        valid_campaigns = [c for c in campaigns if c.is_campaign_earnable]
+        target_game_names = self._get_target_game_names(settings, valid_campaigns)
+
+        logger.info(
+            "🎮 [Tree Diagnostic] Vstupní kampaně: %d | Těžitelné (can_earn): %d | Cílové hry (%d): %s",
             len(campaigns),
+            len(valid_campaigns),
+            len(target_game_names),
+            ", ".join(target_game_names[:5]) if target_game_names else "Žádné",
         )
+
+        campaigns_by_game: dict[str, list[DropsCampaign]] = defaultdict(list)
+        for campaign in valid_campaigns:
+            if campaign.game and campaign.game.name:
+                campaigns_by_game[campaign.game.name.lower()].append(campaign)
 
         wanted_games: list[GameTreeItem] = []
 
         for game_name in target_game_names:
-            game_name_lower = game_name.lower()
-            matching_campaigns = [
-                c for c in campaigns if c.game.name.lower() == game_name_lower
-            ]
-
+            matching_campaigns = campaigns_by_game.get(game_name.lower())
             if not matching_campaigns:
                 continue
 
@@ -343,7 +327,7 @@ class StreamSelector:
                 )
                 wanted_games.append(
                     GameTreeItem(
-                        id=getattr(game_obj, "id", None),
+                        id=game_obj.id if hasattr(game_obj, "id") else None,
                         name=game_obj.name,
                         icon_url=icon_url,
                         game_obj=game_obj,
@@ -352,9 +336,8 @@ class StreamSelector:
                 )
 
         auto_sort = getattr(settings, "auto_sort_by_end", True)
-        final_tree = self._sort_and_clean_queue(wanted_games, auto_sort)
+        final_tree = self._sort_and_clean_queue(wanted_games, auto_sort, settings)
 
-        # Formátování přehledného logu (Top 3 + zbývající)
         top_3 = [game.name for game in final_tree[:3]]
         preview = ", ".join(top_3)
         remaining = len(final_tree) - len(top_3)
@@ -380,10 +363,10 @@ class StreamSelector:
         now: datetime,
     ) -> CampaignTreeItem | None:
         """Zkontroluje platnost kampaně a sestaví její dropy."""
-        if not getattr(campaign, "has_watchable_drops", False):
+        if not campaign.is_campaign_earnable:
             return None
 
-        ends_at_dt = getattr(campaign, "ends_at", None)
+        ends_at_dt = campaign.ends_at
         if ends_at_dt and isinstance(ends_at_dt, datetime):
             if ends_at_dt.tzinfo is None:
                 ends_at_dt = ends_at_dt.replace(tzinfo=timezone.utc)
@@ -391,7 +374,7 @@ class StreamSelector:
                 return None
 
         wanted_drops: list[DropTreeItem] = []
-        for drop in getattr(campaign, "drops", []):
+        for drop in campaign.drops:
             drop_item = self._process_drop(drop, mining_benefits, watch_service)
             if drop_item:
                 wanted_drops.append(drop_item)
@@ -399,15 +382,9 @@ class StreamSelector:
         if not wanted_drops:
             return None
 
-        campaign_url = getattr(
-            campaign, "url", getattr(campaign, "campaign_url", "#")
-        )
-        total_drops = len(getattr(campaign, "drops", []))
-        claimed_drops = sum(
-            1
-            for d in getattr(campaign, "drops", [])
-            if getattr(d, "is_claimed", False)
-        )
+        campaign_url = getattr(campaign, "url", getattr(campaign, "campaign_url", "#"))
+        total_drops = len(campaign.drops)
+        claimed_drops = sum(1 for d in campaign.drops if d.is_claimed)
 
         starts_at_val = (
             campaign.starts_at.isoformat()
@@ -437,25 +414,24 @@ class StreamSelector:
         self, drop: Any, mining_benefits: list, watch_service: Any
     ) -> DropTreeItem | None:
         """Zpracuje a vyhodnotí stav jednoho dropu pro strom."""
-        if getattr(drop, "is_claimed", False):
+        if drop.is_claimed:
             return None
 
         filtered_benefits = (
             drop.get_wanted_unclaimed_benefits(mining_benefits)
             if hasattr(drop, "get_wanted_unclaimed_benefits")
-            else []
+            else getattr(drop, "benefits", [drop])
         )
-        if len(filtered_benefits) <= 0:
+        if not filtered_benefits:
             return None
 
-        current_mins = getattr(drop, "current_minutes", 0)
-        req_mins = getattr(drop, "required_minutes", 0)
+        current_mins = drop.current_minutes
+        req_mins = drop.required_minutes
         if req_mins <= 0:
             return None
 
         is_mining = False
         if watch_service:
-            # Volání přesně té metody is_drop_actively_mining ze snímku obrazovky
             if hasattr(watch_service, "is_drop_actively_mining"):
                 is_mining = watch_service.is_drop_actively_mining(drop)
             else:
@@ -482,7 +458,7 @@ class StreamSelector:
             status="mining" if is_mining else getattr(drop, "status", "pending"),
             benefits=filtered_benefits,
             is_mining=is_mining,
-            is_claimed=getattr(drop, "is_claimed", False),
+            is_claimed=drop.is_claimed,
             can_claim=getattr(drop, "can_claim", False),
             is_stuck=getattr(drop, "is_stuck", False),
             is_in_progress=getattr(drop, "status", "") == "in_progress",
@@ -492,14 +468,20 @@ class StreamSelector:
         )
 
     def _sort_and_clean_queue(
-        self, wanted_games: list[GameTreeItem], auto_sort: bool
+        self,
+        wanted_games: list[GameTreeItem],
+        auto_sort: bool,
+        settings: Optional[Settings] = None,
     ) -> list[GameTreeItem]:
-        """Seřadí strom her podle zbývajícího času a konce kampaní a zaloguje stav."""
+        """Seřadí strom her podle konce kampaní a pořadí v nastavení."""
+        order_map: dict[str, int] = {}
+        if settings and settings.games_to_watch:
+            order_map = {
+                game_name.lower(): idx
+                for idx, game_name in enumerate(settings.games_to_watch)
+            }
 
-        def get_game_sort_key(game_item: GameTreeItem) -> tuple[int, datetime]:
-            total_game_remaining = sum(
-                c.remaining_minutes for c in game_item.campaigns
-            )
+        def get_game_sort_key(game_item: GameTreeItem) -> tuple[int, datetime, int]:
             end_times: list[datetime] = []
             for c in game_item.campaigns:
                 raw_end = c.raw_ends_at
@@ -507,40 +489,21 @@ class StreamSelector:
                     if raw_end.tzinfo is None:
                         raw_end = raw_end.replace(tzinfo=timezone.utc)
                     end_times.append(raw_end)
-                elif c.ends_at:
-                    try:
-                        dt = (
-                            c.ends_at
-                            if isinstance(c.ends_at, datetime)
-                            else datetime.fromisoformat(str(c.ends_at))
-                        )
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        end_times.append(dt)
-                    except Exception:
-                        pass
 
             earliest_end = (
                 min(end_times)
                 if end_times
                 else datetime.max.replace(tzinfo=timezone.utc)
             )
-            return (total_game_remaining, earliest_end)
+            total_game_remaining = sum(
+                c.remaining_minutes for c in game_item.campaigns
+            )
+            config_index = order_map.get(game_item.name.lower(), 999)
 
-        if auto_sort:
-            wanted_games.sort(key=get_game_sort_key)
+            if auto_sort:
+                return (0, earliest_end, total_game_remaining)
+            else:
+                return (config_index, earliest_end, total_game_remaining)
 
-            # Detailní výpis fronty generujeme pouze v DEBUG režimu
-            if logger.isEnabledFor(logging.DEBUG):
-                queue_log = []
-                for g in wanted_games:
-                    e_str = "N/A"
-                    if g.campaigns:
-                        e_times = [str(c.ends_at) for c in g.campaigns if c.ends_at]
-                        if e_times:
-                            e_str = min(e_times)
-                    queue_log.append(f"{g.name} (Ends: {e_str})")
-
-                logger.debug("Wanted games queue: %s", " -> ".join(queue_log))
-
+        wanted_games.sort(key=get_game_sort_key)
         return wanted_games

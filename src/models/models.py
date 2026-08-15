@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import inspect
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, SupportsInt
 
@@ -28,7 +28,6 @@ from .helpers import (
     extract_campaign_time_triggers,
     extract_drop_image_url,
     filter_wanted_unclaimed_benefits,
-    is_campaign_earnable_within,
     preprocess_benefit_json,
     resolve_campaign_active,
     resolve_campaign_eligibility,
@@ -44,6 +43,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("TwitchDrops")
 
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Zajístí, že datetime objekt má nastavené časové pásmo UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 # ==============================================================================
 # 1. BENEFIT
@@ -171,6 +176,10 @@ class Channel(BaseModel):
     def __hash__(self) -> int:
         return hash((self.id, self.login, self.name))
 
+    @property
+    def offline(self) -> bool:
+        return not self.online
+    
     @property
     def twitch(self) -> Any:
         return self._twitch
@@ -436,6 +445,79 @@ class Drop(BaseModel):
     @property
     def remaining_minutes(self) -> int:
         return max(0, self.required_minutes - self.current_minutes)
+        
+    @property
+    def is_drop_earnable(self) -> bool:
+        """
+        Určuje, zda lze tento konkrétní drop aktuálně těžit.
+        Drop je těžitelný pokud:
+        1. Ještě není získaný (is_claimed == False)
+        2. Zbývají na něm neodezřené minuty (remaining_minutes > 0)
+        3. Dropu ještě nevypršel jeho časový úsek (ends_at)
+        """
+        if self.is_claimed:
+            return False
+
+        if self.remaining_minutes <= 0:
+            return False
+
+        if self.ends_at:
+            now = datetime.now(timezone.utc)
+            # Pokud je čas v ends_at bez timezone, přizpůsobíme porovnání
+            ends_at_utc = (
+                self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
+            )
+            if now > ends_at_utc:
+                return False
+
+        return True
+        
+    @property
+    def is_completable(self) -> bool:
+        """
+        Ověří, zda je tento drop fyzicky možné dokončit v jeho zbývajícím časovém okně.
+        Propojuje základní stavový filtr (is_drop_earnable) s časovou kalkulací.
+        """
+        # 1. ZMĚNA: Přidáno self. před název funkce
+        return self.check_drop_can_earn_within(
+            starts_at=self.starts_at,
+            ends_at=self.ends_at,
+            required_minutes=self.required_minutes,
+            current_minutes=self.current_minutes,
+            base_conditions_met=self.is_drop_earnable,
+        )
+
+    # 2. ZMĚNA: Přidán dekorátor @staticmethod
+    @staticmethod
+    def check_drop_can_earn_within(
+        starts_at: datetime,
+        ends_at: datetime,
+        required_minutes: int,
+        current_minutes: int,
+        target_stamp: datetime | None = None,
+        base_conditions_met: bool = True,
+    ) -> bool:
+        """Ověří, zda je fyzicky možné drop dokončit v daném časovém okně."""
+        now = datetime.now(timezone.utc)
+        starts_at_utc = _ensure_utc(starts_at)
+        ends_at_utc = _ensure_utc(ends_at)
+
+        # Pokud target_stamp není předán, dynamicky nastavit výchozí okno +1 hodina od teď
+        if target_stamp is None:
+            target_stamp_utc = now + timedelta(hours=1)
+        else:
+            target_stamp_utc = _ensure_utc(target_stamp)
+
+        if not (starts_at_utc < target_stamp_utc and ends_at_utc > now):
+            return False
+
+        time_left_minutes = (ends_at_utc - now).total_seconds() / 60
+        remaining_needed = max(0, required_minutes - current_minutes)
+
+        if time_left_minutes < remaining_needed:
+            return False
+
+        return base_conditions_met
 
     @property
     def current_minutes(self) -> int:
@@ -472,6 +554,7 @@ class Campaign(BaseModel):
     game: Game
     link_url: str = Field(default="", validation_alias=AliasChoices("link_url", "accountLinkURL"))
     linked: bool = True
+    allow_unlinked: bool = False  # Příznak pro vědomou těžbu nepropojených účtů
     starts_at: datetime = Field(validation_alias=AliasChoices("starts_at", "startAt"))
     ends_at: datetime = Field(validation_alias=AliasChoices("ends_at", "endAt"))
     valid: bool = True
@@ -523,9 +606,13 @@ class Campaign(BaseModel):
         cls,
         twitch: Any,
         data: dict[str, Any],
-        claimed_benefits: dict[str, datetime],
+        claimed_benefits: dict[str, datetime] | set[str] | None = None,
         desync_log: list[dict] | None = None,
-    ) -> Campaign:
+        *,
+        all_claimed_ids: set[str] | None = None,
+        claimed_map: dict[str, datetime] | None = None,
+        **kwargs: Any,
+    ) -> "Campaign":
         """Konstruktor pro načtení kampaně ze surového JSONu s automatickou sanitací desynchronizace."""
         allowed: dict[str, Any] = data.get("allow", {})
         allowed_channels = (
@@ -547,11 +634,18 @@ class Campaign(BaseModel):
         )
         campaign._twitch = twitch
 
-        claimed_tokens = (
-            {token.lower().strip() for token in claimed_benefits.keys() if token}
-            if claimed_benefits
-            else set()
-        )
+        raw_source = all_claimed_ids or claimed_map or claimed_benefits
+
+        if isinstance(raw_source, dict):
+            claimed_tokens = {
+                str(token).lower().strip() for token in raw_source.keys() if token
+            }
+        elif isinstance(raw_source, (set, list, tuple)):
+            claimed_tokens = {
+                str(token).lower().strip() for token in raw_source if token
+            }
+        else:
+            claimed_tokens = set()
 
         timed_drops_dict = {}
         for drop_data in data.get("timeBasedDrops", []):
@@ -583,32 +677,9 @@ class Campaign(BaseModel):
             if drop_id in self.timed_drops:
                 self.timed_drops[drop_id].update_progress(inc_drop)
 
-    def can_earn_on(self, channel: Any) -> bool:
-        if self.allowed_channels:
-            ch_id = getattr(channel, "id", None)
-            ch_name = getattr(channel, "name", None)
-            return any(
-                (getattr(c, "id", None) == ch_id) or (getattr(c, "name", None) == ch_name)
-                for c in self.allowed_channels
-            )
-
-        ch_game = getattr(channel, "game", None)
-        if self.game and ch_game:
-            cg_id = getattr(self.game, "id", None)
-            chg_id = getattr(ch_game, "id", None)
-            if cg_id and chg_id:
-                return cg_id == chg_id
-            return getattr(self.game, "name", None) == getattr(ch_game, "name", None)
-
-        return True
-
-    def can_earn(self, channel: Any) -> bool:
-        return self.can_earn_on(channel)
-
-    def can_earn_within(self, timestamp: datetime | None = None) -> bool:
-        return is_campaign_earnable_within(
-            self.starts_at, self.ends_at, self.eligibility, timestamp
-        )
+    # =========================================================================
+    #  PROPERTIES A POMOCNÉ STAVY
+    # =========================================================================
 
     @property
     def drops(self) -> list[Drop]:
@@ -640,48 +711,106 @@ class Campaign(BaseModel):
         return calculate_campaign_remaining_minutes(self)
 
     @property
-    def eligible(self) -> bool:
-        return self.linked and self.valid
+    def is_account_connected(self) -> bool:
+        """Vrací True, pokud je kampaň propojena nebo je zapnut režim allow_unlinked."""
+        return self.linked or self.allow_unlinked
 
     @property
-    def eligibility(self) -> bool:
-        linked = getattr(self, "linked", True)
-        valid = getattr(self, "valid", True)
-        return resolve_campaign_eligibility(linked, valid)
+    def eligible(self) -> bool:
+        return self.is_account_connected and self.valid
 
     @property
     def active(self) -> bool:
-        return resolve_campaign_active(self.starts_at, self.ends_at)
+        now = datetime.now(timezone.utc)
+        start = self.starts_at if self.starts_at.tzinfo else self.starts_at.replace(tzinfo=timezone.utc)
+        end = self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
+        return start <= now <= end
 
     @property
     def upcoming(self) -> bool:
         now = datetime.now(timezone.utc)
-        start = (
-            self.starts_at
-            if self.starts_at.tzinfo
-            else self.starts_at.replace(tzinfo=timezone.utc)
-        )
+        start = self.starts_at if self.starts_at.tzinfo else self.starts_at.replace(tzinfo=timezone.utc)
         return now < start
 
     @property
     def expired(self) -> bool:
         now = datetime.now(timezone.utc)
-        end = (
-            self.ends_at
-            if self.ends_at.tzinfo
-            else self.ends_at.replace(tzinfo=timezone.utc)
-        )
+        end = self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
         return now > end
 
     @property
-    def has_watchable_drops(self) -> bool:
-        return check_watchable_drops(self.drops)
+    def is_completed(self) -> bool:
+        """Vrátí True, pokud jsou všechny dropy v kampani již vyzvednuty."""
+        return bool(self.drops) and all(d.is_claimed for d in self.drops)
+
+    # =========================================================================
+    #  HLAVNÍ LOGIKA TĚŽITELNOSTI
+    # =========================================================================
+
+    @property
+    def is_campaign_earnable(self) -> bool:
+        """
+        Kampaň je těžitelná, pokud:
+        1. Je účet propojen (nebo je povolen unlinked režim).
+        2. Kampaň je platná a aktivní.
+        3. Obsahuje alespoň jeden těžitelný/dokončitelný drop.
+        """
+        if not self.eligible or not self.active:
+            return False
+
+        return any(drop.is_completable for drop in self.drops)
 
     @property
     def time_triggers(self) -> set[datetime]:
-        return extract_campaign_time_triggers(self.starts_at, self.ends_at)
+        """Vrací množinu časových razítek pro časovač údržby."""
+        triggers: set[datetime] = set()
+        if self.starts_at:
+            triggers.add(self.starts_at)
+        if self.ends_at:
+            triggers.add(self.ends_at)
 
+        for drop in self.drops:
+            if drop.starts_at:
+                triggers.add(drop.starts_at)
+            if drop.ends_at:
+                triggers.add(drop.ends_at)
 
+        return triggers
+
+    def supports_channel(self, channel: Any = None) -> bool:
+        """Ověří, zda zadaný kanál a jeho hra vyhovují pravidlům kampaně."""
+        if channel is None:
+            return True
+
+        # A. Kontrola povolených kanálů
+        if self.allowed_channels:
+            ch_id = str(channel.id) if getattr(channel, "id", None) else ""
+            ch_name = channel.name.lower() if getattr(channel, "name", None) else ""
+
+            match_found = any(
+                (str(c.id) == ch_id and ch_id != "")
+                or (c.name.lower() == ch_name and ch_name != "")
+                for c in self.allowed_channels
+            )
+            if not match_found:
+                return False
+
+        # B. Kontrola shody her
+        ch_game = getattr(channel, "game", None)
+        if self.game and ch_game:
+            if getattr(self.game, "id", None) and getattr(ch_game, "id", None):
+                if str(self.game.id) != str(ch_game.id):
+                    return False
+            elif getattr(self.game, "name", None) and getattr(ch_game, "name", None):
+                if self.game.name.lower() != ch_game.name.lower():
+                    return False
+
+        return True
+
+    def can_earn_on_this_channel(self, channel: Any = None) -> bool:
+        """Běží kampaň, je těžitelná (včetně kontroly linked) A ZÁROVEŇ podporuje zadaný kanál."""
+        return self.is_campaign_earnable and self.supports_channel(channel)
+        
 # ==============================================================================
 # 6. STREAM
 # ==============================================================================
@@ -812,17 +941,15 @@ class CampaignTreeItem(BaseModel):
 
 
 class GameTreeItem(BaseModel):
-    """Reprezentace herního uzlu v hierarchii."""
-
-    id: Optional[str | int] = None
+    id: str | None = None
     name: str
-    icon_url: Optional[str] = None
-    campaigns: list[CampaignTreeItem] = Field(default_factory=list)
+    icon_url: str | None = None
+    campaigns: list[CampaignTreeItem]
 
-    game_obj: Optional[Game] = Field(default=None, exclude=True)
+    # Interní reference na objekt hry - Pydantic ji automaticky vynechá při model_dump() / JSON serializaci
+    game_obj: Any = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-
 
 # Aliasy pro zpětnou kompatibilitu
 DropsCampaign = Campaign

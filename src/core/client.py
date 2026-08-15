@@ -382,7 +382,7 @@ async def handle_state_channels_cleanup(client: Twitch) -> None:
     else:
         to_remove_channels = [
             channel for channel in channels.values()
-            if not channel.acl_based and (channel.offline or (channel.game is None or channel.game not in client.wanted_games))
+             if not channel.acl_based and (not channel.online or (channel.game is None or channel.game not in client.wanted_games))
         ]
 
     client._full_cleanup = False
@@ -413,7 +413,7 @@ async def handle_state_channels_fetch(client: Twitch) -> None:
     all_acl_channels: set[Channel] = set()
 
     for campaign in client.inventory:
-        if campaign.game in client.wanted_games and campaign.can_earn_within():
+        if campaign.game in client.wanted_games and campaign.is_campaign_earnable:
             if campaign.allowed_channels:
                 for channel in campaign.allowed_channels:
                     if channel.game is None:
@@ -481,7 +481,7 @@ def handle_manual_mode_priority(client: Twitch) -> None:
         target_name = getattr(manual_target_game, "name", str(manual_target_game))
 
         manual_has_drops = any(
-            campaign.can_earn_within() and (
+            campaign.is_campaign_earnable() and (
                 getattr(campaign.game, "id", None) == target_id if target_id else getattr(campaign.game, "name", str(campaign.game)) == target_name
             )
             for campaign in client.inventory
@@ -512,7 +512,7 @@ def output_campaign_mapping(client: Twitch) -> None:
     for campaign in client.inventory:
         if not campaign.has_watchable_drops or not campaign.game:
             continue
-        if campaign.can_earn_within():
+        if campaign.is_campaign_earnable():
             channel_names = [ch.name for ch in campaign.allowed_channels] if campaign.allowed_channels else ["<directory>"]
             game_campaign_map[campaign.game.name].append((campaign, channel_names))
 

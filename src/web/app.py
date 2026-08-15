@@ -118,11 +118,18 @@ async def get_status():
     if not gui_manager or not twitch_client:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
+    watch_service = getattr(twitch_client, "_watch_service", None)
+    manual_mode = (
+        watch_service.get_manual_mode_info()
+        if watch_service and hasattr(watch_service, "get_manual_mode_info")
+        else {"active": False, "channel": None}
+    )
+
     state_dict = gui_manager.state.to_dict()
     return {
         "status": state_dict.get("status"),
         "login": state_dict.get("login"),
-        "manual_mode": twitch_client.get_manual_mode_info(),
+        "manual_mode": manual_mode,
     }
 
 
@@ -352,13 +359,24 @@ async def state(sid, data=None):
             ],
             "console": getattr(gui_manager, "console_logs", []),
             "settings": twitch_client.settings.get_settings() if hasattr(twitch_client, "settings") else {},
-            "manual_mode": twitch_client.get_manual_mode_info(),
+            
+            # --- ZMĚNA ZDE: volání z watch_service ---
+            "manual_mode": (
+                watch_service.get_manual_mode_info()
+                if watch_service and hasattr(watch_service, "get_manual_mode_info")
+                else {"active": False, "channel": None}
+            ),
+            
             "current_drop": (
                 drop_info.model_dump(mode="json")
                 if (watch_service and (drop_info := watch_service.get_current_drop_info()))
                 else None
             ),
-            "wanted_items": gui_manager.get_wanted_game_tree() if hasattr(gui_manager, "get_wanted_game_tree") else [],
+            "wanted_items": (
+                gui_manager.get_wanted_items_tree()
+                if hasattr(gui_manager, "get_wanted_items_tree")
+                else []
+            ),
         }
 
         await sio.emit("state", payload, room=sid)

@@ -202,74 +202,115 @@ class StatusHandler:
 class InventoryHandler:
     """Kompletní třída pro správu a uchování inventáře dropů a kampaní."""
 
-    def __init__(self, gui_manager: WebGUIManager):
+    def __init__(self, gui_manager: Any):
         self.gui_manager = gui_manager
         self._items: List[Any] = []
 
+    def _unwrap_value(self, val: Any) -> Any:
+        """Bezpečně zavolá metodu/funkci, pokud se nejedná o async korutinu."""
+        if callable(val):
+            try:
+                if inspect.iscoroutinefunction(val):
+                    return None
+                return val()
+            except Exception as e:
+                logger.debug(f"[InventoryHandler] Chyba při volání {val}: {e}")
+                return None
+        return val
+
     def _extract_items(self, raw_input: Any) -> List[Any]:
         """Rozbalí kampaně z předaného objektu, z CampaignService nebo z Twitch bota."""
-        if raw_input is not None:
-            if hasattr(raw_input, "campaigns"):
-                raw_input = getattr(raw_input, "campaigns")
-                if callable(raw_input):
-                    raw_input = raw_input()
 
-        if not raw_input:
-            twitch = getattr(self.gui_manager, "_twitch", None)
+        # 1. Pokud nebyl vstup předán, pokusíme se jej vytáhnout z GUI Managera / Twitch bota
+        if raw_input is None:
+            twitch = getattr(self.gui_manager, "_twitch", None) or getattr(
+                self.gui_manager, "twitch", None
+            )
             if twitch:
-                campaign_service = getattr(
-                    twitch,
-                    "campaign_service",
-                    getattr(twitch, "_campaign_service", None),
+                raw_input = (
+                    getattr(
+                        twitch,
+                        "campaign_service",
+                        getattr(twitch, "_campaign_service", None),
+                    )
+                    or twitch
                 )
-                if campaign_service:
-                    for attr in (
-                        "campaigns",
-                        "_campaigns",
-                        "inventory",
-                        "_inventory",
-                    ):
-                        if hasattr(campaign_service, attr):
-                            val = getattr(campaign_service, attr)
-                            if val:
-                                raw_input = val
-                                break
-                    if not raw_input and hasattr(
-                        campaign_service, "get_campaigns"
-                    ):
-                        raw_input = campaign_service.get_campaigns()
 
-                if not raw_input and hasattr(twitch, "campaigns"):
-                    raw_input = twitch.campaigns
-                if not raw_input and hasattr(twitch, "inventory"):
-                    raw_input = twitch.inventory
+        # 2. Pokud je raw_input objekt služby (např. CampaignService), zkusíme z něj vytáhnout atributy kampaní
+        if raw_input is not None and not isinstance(
+            raw_input, (list, tuple, set, dict)
+        ):
+            for attr in (
+                "campaigns",
+                "_campaigns",
+                "inventory",
+                "_inventory",
+                "items",
+                "_items",
+            ):
+                if hasattr(raw_input, attr):
+                    val = self._unwrap_value(getattr(raw_input, attr))
+                    if val:
+                        raw_input = val
+                        break
 
-        if callable(raw_input):
-            raw_input = raw_input()
+        # 3. Znovu ošetříme volatelné objekty (např. get_campaigns())
+        raw_input = self._unwrap_value(raw_input)
 
+        if raw_input is None:
+            return []
+
+        # 4. Převod získané kolekce na čistý Python List
         if isinstance(raw_input, dict):
             return list(raw_input.values())
         elif hasattr(raw_input, "values") and callable(raw_input.values):
-            return list(raw_input.values())
-        elif isinstance(raw_input, (list, tuple, set)):
+            try:
+                return list(raw_input.values())
+            except Exception:
+                pass
+
+        if isinstance(raw_input, (list, tuple, set)):
             return list(raw_input)
-        elif raw_input is not None:
+
+        # Ošetření pro generátory a iterovatelné objekty (mimo řetězce)
+        if hasattr(raw_input, "__iter__") and not isinstance(
+            raw_input, (str, bytes)
+        ):
+            try:
+                return list(raw_input)
+            except Exception:
+                pass
+
+        # Uložíme jako 1 položku pouze v případě, že jde o reálný objekt kampaně (ne o servisní třídu)
+        if not hasattr(raw_input, "campaign_service") and not hasattr(
+            raw_input, "_twitch"
+        ):
             return [raw_input]
 
         return []
 
     def update(self, *args, **kwargs):
         arg_type = type(args[0]).__name__ if args else "None"
-        raw = args[0] if args else kwargs.get("inventory", kwargs.get("campaigns", None))
+        raw = args[0] if args in (args,) and args else kwargs.get(
+            "inventory", kwargs.get("campaigns", None)
+        )
 
         extracted = self._extract_items(raw)
 
-        if extracted or not self._items:
+        # Aktualizujeme seznam, pokud jsme našli data, nebo pokud je náš lokální seznam prázdný
+        if extracted:
             self._items = extracted
-
-        logger.debug(
-            f"[InventoryHandler.update] Called with type={arg_type}, extracted {len(self._items)} items"
-        )
+            logger.debug(
+                f"[InventoryHandler.update] Načteno {len(self._items)} položek (zdroj: {arg_type})"
+            )
+        elif not self._items:
+            # Zkusíme záložní načtení z gui_manager
+            fallback = self._extract_items(None)
+            if fallback:
+                self._items = fallback
+                logger.debug(
+                    f"[InventoryHandler.update] Načteno {len(self._items)} položek ze záložního zdroje"
+                )
 
     def batch_update(self, items=None):
         self.update(items)
@@ -278,8 +319,9 @@ class InventoryHandler:
         if items is not None:
             self.update(items)
         else:
-            if not self._items:
-                self._items = self._extract_items(None)
+            extracted = self._extract_items(None)
+            if extracted:
+                self._items = extracted
 
     def append(self, item):
         self._items.append(item)
@@ -297,7 +339,18 @@ class InventoryHandler:
         return self._items[index]
 
     def to_dict(self) -> List[Any]:
-        return [serialize_item(i) for i in self._items]
+        """Bezpečná serializace položek do JSON dictu."""
+        res = []
+        for i in self._items:
+            if hasattr(i, "model_dump"):
+                res.append(i.model_dump(mode="json"))
+            elif hasattr(i, "to_dict"):
+                res.append(i.to_dict())
+            elif isinstance(i, dict):
+                res.append(i)
+            else:
+                res.append(getattr(i, "__dict__", str(i)))
+        return res
 
 
 class ChannelsHandler:
@@ -655,18 +708,28 @@ class WebGUIManager:
             )
 
     def get_wanted_items_tree(self) -> list[dict]:
-        settings = (
-            getattr(self._twitch, "settings", None) if self._twitch else None
+        if not self._twitch:
+            return []
+
+        settings = getattr(self._twitch, "settings", None)
+        
+        # Načtení sloučených kampaní z inventory (fallback na campaigns)
+        raw_campaigns = getattr(self._twitch, "inventory", None) or getattr(
+            self._twitch, "campaigns", []
         )
-        inventory = (
-            getattr(self._twitch, "inventory", None) if self._twitch else None
+        
+        campaigns = (
+            list(raw_campaigns.values())
+            if isinstance(raw_campaigns, dict)
+            else list(raw_campaigns)
         )
+
         try:
             return self._stream_selector.get_wanted_game_tree(
-                settings, inventory
+                settings, campaigns, as_json=True
             )
         except Exception as e:
-            logger.warning(f"Failed to get wanted game tree: {e}")
+            logger.exception(f"Failed to get wanted game tree: {e}")
             return []
 
     def broadcast_wanted_items(self):

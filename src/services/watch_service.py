@@ -358,17 +358,26 @@ class WatchService:
     # ==========================================================================
 
     @task_wrapper(critical=True)
-    async def watch_loop(self) -> NoReturn:
-        interval: float = WATCH_INTERVAL.total_seconds()
+	async def watch_loop(self) -> NoReturn:
+		interval: float = WATCH_INTERVAL.total_seconds()
 
-        while True:
-            channel: Channel = await self._twitch.watching_channel.get()
+		while True:
+			channel: Channel = await self._twitch.watching_channel.get()
 
-            if not self.can_watch(channel):
-                logger.info("⚠️ [Watch] Kanál %s už není sledovatelný. Ruším sledování.", channel.name)
-                self.stop_watching(notify_state_machine=True)
-                await asyncio.sleep(1)
-                continue
+			# 🔄 1. Osvěžení stavu kanálu přes GQL (Live Check)
+			# Musíš aktivně ověřit, zda je stream stále živý
+			try:
+				is_live = await self._twitch.check_channel_is_live(channel.id)
+				channel.online = is_live
+			except Exception as err:
+				logger.debug("Failed to refresh online status for %s: %s", channel.name, err)
+
+			# 2. Kontrola sledovatelnosti
+			if not self.can_watch(channel):
+				logger.info("⚠️ [Watch] Kanál %s už není sledovatelný. Ruším sledování.", channel.name)
+				self.stop_watching(notify_state_machine=True)
+				await asyncio.sleep(1)
+				continue
 
             active_campaign = self._twitch.inventory_service.get_active_campaign(channel)
             logger.debug("Checking channel %s | Active campaign found: %s", channel.name, active_campaign is not None)
@@ -389,10 +398,11 @@ class WatchService:
                 self.stop_watching(notify_state_machine=True)
                 continue
 
-            if not channel.online:
-                logger.info("📴 [Watch] Ukončuji sledování %s: Kanál přešel do offline stavu.", channel.name)
-                self.stop_watching(notify_state_machine=True)
-                continue
+            # 📴 3. Teď už channel.online obsahuje aktuální pravdivý stav z GQL!
+			if not channel.online:
+				logger.info("📴 [Watch] Ukončuji sledování %s: Kanál přešel do offline stavu.", channel.name)
+				self.stop_watching(notify_state_machine=True)
+				continue
 
             # Odeslání watch payloadu (PubSub / Spade)
             logger.info("📡 [Watch] Odesílám watch payload pro kanál: %s", channel.name)

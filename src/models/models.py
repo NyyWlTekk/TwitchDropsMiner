@@ -902,6 +902,10 @@ class CurrentDropSession(BaseModel):
     )
 
 
+from typing import Any, Optional
+from pydantic import BaseModel, ConfigDict, Field
+
+
 class DropTreeItem(BaseModel):
     """Reprezentace jednoho dropu v hierarchii."""
 
@@ -920,6 +924,61 @@ class DropTreeItem(BaseModel):
     progress: int = 0
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @classmethod
+    def create(
+        cls,
+        drop_id: str | int,
+        name: str,
+        image_url: Optional[str] = None,
+        benefits: list[Any] | None = None,
+        is_claimed: bool = False,
+        can_claim: bool = False,
+        is_mining: bool = False,
+        is_stuck: bool = False,
+        current_minutes: int = 0,
+        required_minutes: int = 0,
+    ) -> "DropTreeItem":
+        """Tovární metoda, která sama odvodí `is_in_progress`, `progress` a `status`."""
+        # 1. Výpočet rozpracovanosti (má minuty, ale netěží se ani není dokončen)
+        is_in_progress = (
+            current_minutes > 0
+            and not is_claimed
+            and not can_claim
+            and not is_mining
+        )
+
+        # 2. Výpočet procentuálního průběhu
+        progress = 0
+        if required_minutes > 0:
+            progress = min(100, int((current_minutes / required_minutes) * 100))
+        if is_claimed or can_claim:
+            progress = 100
+
+        # 3. Vyhodnocení finálního statusu pro JS
+        status = resolve_drop_status(
+            is_claimed=is_claimed,
+            can_claim=can_claim,
+            is_mining=is_mining,
+            is_stuck=is_stuck,
+            current_minutes=current_minutes,
+        )
+
+        return cls(
+            id=drop_id,
+            name=name,
+            image_url=image_url,
+            status=status,
+            benefits=benefits or [],
+            is_mining=is_mining,
+            is_claimed=is_claimed,
+            can_claim=can_claim,
+            is_stuck=is_stuck,
+            is_in_progress=is_in_progress,
+            current_minutes=current_minutes,
+            required_minutes=required_minutes,
+            progress=progress,
+        )
 
 
 class CampaignTreeItem(BaseModel):

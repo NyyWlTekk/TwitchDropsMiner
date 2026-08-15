@@ -15,6 +15,18 @@ from src.models.models import (
 logger = logging.getLogger("TwitchDrops")
 
 
+def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Zajistí, že datetime objekt má nastavenou UTC časovou zónu."""
+    if not isinstance(dt, datetime):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _norm_game_name(name: Optional[str]) -> str:
+    """Normalizuje název hry pro konzistentní porovnávání."""
+    return name.strip().lower() if name else ""
+
+
 class StreamSelector:
     def __init__(
         self,
@@ -25,7 +37,7 @@ class StreamSelector:
         self._channel_service = channel_service
         self._watch_service = watch_service
         self._twitch = twitch
-        self.wanted_games: list[Any] = []
+        self.wanted_games: list[GameTreeItem] = []
 
     def _get_watch_service(self) -> Any:
         return self._watch_service or getattr(self._twitch, "watch_service", None)
@@ -43,7 +55,7 @@ class StreamSelector:
             earnable_count = sum(
                 1
                 for campaign in getattr(channel, "campaigns", [])
-                if campaign.is_campaign_earnable
+                if getattr(campaign, "is_campaign_earnable", False)
             )
 
             base_priority = 999_999
@@ -65,7 +77,7 @@ class StreamSelector:
         if watch_svc and hasattr(watch_svc, "can_watch"):
             return watch_svc.can_watch(channel)
 
-        return channel.online and channel.drops_enabled
+        return bool(getattr(channel, "online", False) and getattr(channel, "drops_enabled", False))
 
     def should_switch(self, channel: Any) -> bool:
         watch_svc = self._get_watch_service()
@@ -97,7 +109,7 @@ class StreamSelector:
             logger.warning("Cannot build wanted games: missing settings or campaigns.")
             return []
 
-        self.wanted_games = self.get_wanted_game_tree(settings, campaigns)
+        self.wanted_games = self.get_wanted_game_tree(settings, campaigns)  # type: ignore
         return self.wanted_games
 
     def handle_prioritize_badge_games(
@@ -116,7 +128,7 @@ class StreamSelector:
             if not getattr(campaign, "active", True):
                 continue
 
-            game_name = campaign.game.name if campaign.game else ""
+            game_name = _norm_game_name(campaign.game.name if campaign.game else "")
 
             for drop in campaign.drops:
                 is_badge = (
@@ -124,15 +136,15 @@ class StreamSelector:
                     or "badge" in getattr(drop, "name", "").lower()
                 )
                 if is_badge and not drop.is_claimed and game_name:
-                    badge_games.add(game_name.lower())
+                    badge_games.add(game_name)
                     break
 
         if not badge_games:
             return False
 
         current_games = settings.games_to_watch or []
-        with_badges = [g for g in current_games if g.lower() in badge_games]
-        without_badges = [g for g in current_games if g.lower() not in badge_games]
+        with_badges = [g for g in current_games if _norm_game_name(g) in badge_games]
+        without_badges = [g for g in current_games if _norm_game_name(g) not in badge_games]
 
         new_queue = with_badges + without_badges
 
@@ -155,21 +167,16 @@ class StreamSelector:
         filtered = self.get_filtered_queue(queue)
 
         if getattr(settings, "auto_add_all_games", False) and queue:
-            ignored = {
-                g.strip().lower() for g in getattr(settings, "ignored_games", [])
-            }
-            existing = {g.strip().lower() for g in settings.games_to_watch}
+            ignored = {_norm_game_name(g) for g in getattr(settings, "ignored_games", [])}
+            existing = {_norm_game_name(g) for g in settings.games_to_watch}
             newly_added = False
 
             for c in filtered:
-                game_name = c.game.name.strip() if c.game else ""
-                if (
-                    game_name
-                    and game_name.lower() not in ignored
-                    and game_name.lower() not in existing
-                ):
-                    settings.games_to_watch.append(game_name)
-                    existing.add(game_name.lower())
+                game_raw = c.game.name if c.game else ""
+                game_norm = _norm_game_name(game_raw)
+                if game_norm and game_norm not in ignored and game_norm not in existing:
+                    settings.games_to_watch.append(game_raw.strip())
+                    existing.add(game_norm)
                     newly_added = True
 
             if newly_added:
@@ -204,7 +211,7 @@ class StreamSelector:
         return [
             c
             for c in queue
-            if getattr(c, "progress", 0) < 100 and c.is_campaign_earnable
+            if getattr(c, "progress", 0) < 100 and getattr(c, "is_campaign_earnable", False)
         ]
 
     def _sort_games_by_ending_time(
@@ -214,30 +221,26 @@ class StreamSelector:
         if not settings.games_to_watch:
             return False
 
-        campaign_map: dict[str, list[DropsCampaign]] = {}
+        campaign_map: dict[str, list[DropsCampaign]] = defaultdict(list)
         for c in filtered_queue:
-            if not c.is_campaign_earnable:
+            if not getattr(c, "is_campaign_earnable", False):
                 continue
-            c_name = c.game.name if c.game else ""
-            if c_name:
-                campaign_map.setdefault(c_name.strip().lower(), []).append(c)
+            c_norm = _norm_game_name(c.game.name if c.game else "")
+            if c_norm:
+                campaign_map[c_norm].append(c)
 
         def sort_key(game_name: str) -> tuple[int, datetime]:
-            campaigns = campaign_map.get(game_name.strip().lower(), [])
+            campaigns = campaign_map.get(_norm_game_name(game_name), [])
             if not campaigns:
                 return (1, datetime.max.replace(tzinfo=timezone.utc))
 
             dates: list[datetime] = []
             for c in campaigns:
-                dt = c.ends_at
-                if isinstance(dt, datetime):
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
+                dt = _ensure_utc(c.ends_at)
+                if dt:
                     dates.append(dt)
 
-            earliest_end = (
-                min(dates) if dates else datetime.max.replace(tzinfo=timezone.utc)
-            )
+            earliest_end = min(dates) if dates else datetime.max.replace(tzinfo=timezone.utc)
             return (0, earliest_end)
 
         old_queue = list(settings.games_to_watch)
@@ -251,18 +254,16 @@ class StreamSelector:
         """Určí seznam her, které se mají sledovat podle nastavení."""
         auto_add = getattr(settings, "auto_add_all_games", False)
         if auto_add or not settings.games_to_watch:
-            ignored_games_lower = {
-                g.lower() for g in getattr(settings, "ignored_games", [])
-            }
-            target_game_names = []
+            ignored_lower = {_norm_game_name(g) for g in getattr(settings, "ignored_games", [])}
+            target_game_names: list[str] = []
+            seen_lower: set[str] = set()
+
             for campaign in campaigns:
                 g_name = campaign.game.name if campaign.game else ""
-                if (
-                    g_name
-                    and g_name.lower() not in ignored_games_lower
-                    and g_name.lower() not in {t.lower() for t in target_game_names}
-                ):
+                g_norm = _norm_game_name(g_name)
+                if g_norm and g_norm not in ignored_lower and g_norm not in seen_lower:
                     target_game_names.append(g_name)
+                    seen_lower.add(g_norm)
             return target_game_names
 
         return settings.games_to_watch
@@ -282,16 +283,18 @@ class StreamSelector:
         watch_service = self._get_watch_service()
 
         if isinstance(campaigns, dict):
-            campaigns = list(campaigns.values())
-        elif not campaigns:
-            campaigns = []
+            campaigns_list = list(campaigns.values())
+        elif isinstance(campaigns, list):
+            campaigns_list = campaigns
+        else:
+            campaigns_list = []
 
-        valid_campaigns = [c for c in campaigns if c.is_campaign_earnable]
+        valid_campaigns = [c for c in campaigns_list if getattr(c, "is_campaign_earnable", False)]
         target_game_names = self._get_target_game_names(settings, valid_campaigns)
 
         logger.info(
             "🎮 [Tree Diagnostic] Vstupní kampaně: %d | Těžitelné (can_earn): %d | Cílové hry (%d): %s",
-            len(campaigns),
+            len(campaigns_list),
             len(valid_campaigns),
             len(target_game_names),
             ", ".join(target_game_names[:5]) if target_game_names else "Žádné",
@@ -300,12 +303,12 @@ class StreamSelector:
         campaigns_by_game: dict[str, list[DropsCampaign]] = defaultdict(list)
         for campaign in valid_campaigns:
             if campaign.game and campaign.game.name:
-                campaigns_by_game[campaign.game.name.lower()].append(campaign)
+                campaigns_by_game[_norm_game_name(campaign.game.name)].append(campaign)
 
         wanted_games: list[GameTreeItem] = []
 
         for game_name in target_game_names:
-            matching_campaigns = campaigns_by_game.get(game_name.lower())
+            matching_campaigns = campaigns_by_game.get(_norm_game_name(game_name))
             if not matching_campaigns:
                 continue
 
@@ -327,7 +330,7 @@ class StreamSelector:
                 )
                 wanted_games.append(
                     GameTreeItem(
-                        id=game_obj.id if hasattr(game_obj, "id") else None,
+                        id=getattr(game_obj, "id", None),
                         name=game_obj.name,
                         icon_url=icon_url,
                         game_obj=game_obj,
@@ -363,15 +366,12 @@ class StreamSelector:
         now: datetime,
     ) -> CampaignTreeItem | None:
         """Zkontroluje platnost kampaně a sestaví její dropy."""
-        if not campaign.is_campaign_earnable:
+        if not getattr(campaign, "is_campaign_earnable", False):
             return None
 
-        ends_at_dt = campaign.ends_at
-        if ends_at_dt and isinstance(ends_at_dt, datetime):
-            if ends_at_dt.tzinfo is None:
-                ends_at_dt = ends_at_dt.replace(tzinfo=timezone.utc)
-            if ends_at_dt <= now:
-                return None
+        ends_at_dt = _ensure_utc(campaign.ends_at)
+        if ends_at_dt and ends_at_dt <= now:
+            return None
 
         wanted_drops: list[DropTreeItem] = []
         for drop in campaign.drops:
@@ -446,10 +446,8 @@ class StreamSelector:
                 if raw_progress <= 1.0
                 else round(raw_progress)
             )
-        elif req_mins > 0:
-            progress_val = int((current_mins / req_mins) * 100)
         else:
-            progress_val = 0
+            progress_val = int((current_mins / req_mins) * 100)
 
         return DropTreeItem(
             id=drop.id,
@@ -477,17 +475,15 @@ class StreamSelector:
         order_map: dict[str, int] = {}
         if settings and settings.games_to_watch:
             order_map = {
-                game_name.lower(): idx
+                _norm_game_name(game_name): idx
                 for idx, game_name in enumerate(settings.games_to_watch)
             }
 
         def get_game_sort_key(game_item: GameTreeItem) -> tuple[int, datetime, int]:
             end_times: list[datetime] = []
             for c in game_item.campaigns:
-                raw_end = c.raw_ends_at
-                if raw_end and isinstance(raw_end, datetime):
-                    if raw_end.tzinfo is None:
-                        raw_end = raw_end.replace(tzinfo=timezone.utc)
+                raw_end = _ensure_utc(c.raw_ends_at)
+                if raw_end:
                     end_times.append(raw_end)
 
             earliest_end = (
@@ -498,12 +494,11 @@ class StreamSelector:
             total_game_remaining = sum(
                 c.remaining_minutes for c in game_item.campaigns
             )
-            config_index = order_map.get(game_item.name.lower(), 999)
+            config_index = order_map.get(_norm_game_name(game_item.name), 999)
 
             if auto_sort:
                 return (0, earliest_end, total_game_remaining)
-            else:
-                return (config_index, earliest_end, total_game_remaining)
+            return (config_index, earliest_end, total_game_remaining)
 
         wanted_games.sort(key=get_game_sort_key)
         return wanted_games

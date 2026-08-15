@@ -206,20 +206,20 @@ def resolve_drop_status(
     is_claimed: bool,
     can_claim: bool,
     is_mining: bool = False,
-    is_stuck: bool = False,
     current_minutes: int = 0,
+    is_stuck: bool = False,
 ) -> str:
-    """Čistá funkce pro unifikované vyhodnocení stavu dropu."""
+    """Vrátí status řetězec přesně podle potřeb frontendu."""
     if is_claimed:
         return "claimed"
     if can_claim:
-        return "ready_to_claim"
-    if is_stuck:
-        return "stuck"
+        return "ready"  # Matchuje JS klíčové slovo 'ready'
     if is_mining:
         return "mining"
+    if is_stuck:
+        return "stuck"
     if current_minutes > 0:
-        return "in_progress"
+        return "in_progress"  # Matchuje JS d.is_in_progress
     return "queued"
 
 

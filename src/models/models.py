@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import inspect
+import json
+from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, SupportsInt
@@ -19,8 +21,6 @@ from pydantic import (
 
 # Importy pomocných funkcí z helpers.py
 from .helpers import (
-    build_channel_stream_gql,
-    build_spade_payload,
     calculate_campaign_remaining_minutes,
     calculate_remaining_minutes,
     check_drop_can_claim,
@@ -144,21 +144,37 @@ class Game(BaseModel):
 # 3. CHANNEL
 # ==============================================================================
 
-class Channel(BaseModel):
-    """Represents a Twitch Channel."""
+JsonType = dict[str, Any]
 
+# Pomocné funkce pro Spade payload
+def isonow() -> str:
+    """Vrátí aktuální UTC čas přesně ve formátu ISO 8601 s 'Z' na konci."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def json_minify(data: Any) -> str:
+    """Minimalizuje JSON (odstraní zbytečné mezery pro Base64)."""
+    return json.dumps(data, separators=(",", ":"))
+
+class Channel(BaseModel):
+    """Sjednocená třída reprezentující Twitch kanál včetně stavu jeho živého streamu."""
+
+    # 🔹 Základní identita kanálu
     id: int | str = 0
     name: str = ""
     login: str = ""
-    viewers: int = 0
     acl_based: bool = False
     drops_enabled: bool = True
-    game: Any | None = None
-    
-    # 🔹 Připojené relace pro StreamSelector
-    stream: Any | None = None  # Instance třídy Stream, pokud je online
-    campaigns: list[Any] = Field(default_factory=list)  # Seznam dostupných kampaní
-    
+
+    # 🔹 Data živého streamu
+    broadcast_id: int | str = 0
+    viewers: int = 0
+    title: str = ""
+    game: Any | dict[str, Any] | None = Field(default=None)
+    hls_url: str | None = Field(default=None, exclude=True)
+
+    # 🔹 Vnitřní relace a kampaně (vyjmuté ze serializace)
+    campaigns: list[Any] = Field(default_factory=list, exclude=True)
+
     # 🔹 Privátní atributy
     _is_online: bool = PrivateAttr(default=True)
     _twitch: Any = PrivateAttr(default=None)
@@ -167,6 +183,15 @@ class Channel(BaseModel):
         arbitrary_types_allowed=True,
         populate_by_name=True,
     )
+
+    @model_validator(mode="after")
+    def _ensure_identity_fields(self) -> Self:
+        """Zajistí, že login nikdy nezůstane prázdný, pokud máme k dispozici název kanálu."""
+        if not self.login and self.name:
+            self.login = self.name.lower()
+        elif self.login:
+            self.login = self.login.lower()
+        return self
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Channel):
@@ -177,9 +202,26 @@ class Channel(BaseModel):
         return hash((self.id, self.login, self.name))
 
     @property
+    def online(self) -> bool:
+        return self._is_online
+
+    @online.setter
+    def online(self, value: bool) -> None:
+        self._is_online = value
+
+    @property
+    def is_live(self) -> bool:
+        """Alias pro self.online pro zpětnou kompatibilitu."""
+        return self._is_online
+
+    @is_live.setter
+    def is_live(self, value: bool) -> None:
+        self._is_online = value
+
+    @property
     def offline(self) -> bool:
-        return not self.online
-    
+        return not self._is_online
+
     @property
     def twitch(self) -> Any:
         return self._twitch
@@ -189,33 +231,172 @@ class Channel(BaseModel):
         self._twitch = value
 
     @property
-    def stream_gql(self) -> Any:
-        """Vrátí GQL request pro ověření stavu streamu kanálu."""
-        target = self.login or self.name
-        return build_channel_stream_gql(target, self.id)
+    def spade_url(self) -> str:
+        return "https://video-edge-sess.twitch.tv/v1/pay"
 
     @property
-    def online(self) -> bool:
-        """Vrátí stav, zda je kanál online."""
-        return self._is_online
+    def spade_payload(self) -> JsonType:
+        """Vrátí plně zakódovaný spade payload přesně podle funkčního schéma."""
+        auth_state = getattr(self._twitch, "_auth_state", None)
+        raw_user_id = getattr(auth_state, "user_id", 0) if auth_state else 0
 
-    @online.setter
-    def online(self, value: bool) -> None:
-        self._is_online = value
+        try:
+            user_id = int(raw_user_id)
+        except (ValueError, TypeError):
+            user_id = 0
+
+        game_name = ""
+        game_id = ""
+        if self.game:
+            if isinstance(self.game, dict):
+                game_name = str(self.game.get("name", ""))
+                game_id = str(self.game.get("id", ""))
+            else:
+                game_name = str(getattr(self.game, "name", ""))
+                game_id = str(getattr(self.game, "id", ""))
+
+        login = self.login or (self.name.lower() if self.name else "")
+        broadcast_id = str(self.broadcast_id) if self.broadcast_id else "0"
+
+        properties: dict[str, Any] = {
+            "broadcast_id": broadcast_id,
+            "channel_id": str(self.id),
+            "channel": login,
+            "client_time": isonow(),
+            "game": game_name,
+            "game_id": game_id,
+            "hidden": False,
+            "is_live": True,
+            "live": True,
+            "location": "channel",
+            "logged_in": True,
+            "minutes_logged": 1,
+            "muted": False,
+            "player": "site",
+            "user_id": user_id,
+        }
+
+        payload = [
+            {
+                "event": "minute-watched",
+                "properties": properties,
+            }
+        ]
+
+        encoded_data = b64encode(json_minify(payload).encode("utf-8")).decode("utf-8")
+        return {"data": encoded_data}
+
+    @property
+    def can_watch_channel(self) -> bool:
+        """Vrátí True, pokud je kanál online, má zapnuté drops a běží na něm hra."""
+        return self.online and self.drops_enabled and self.game is not None
+
+    @property
+    def stream_gql(self) -> dict[str, Any]:
+        """Vytvoří GQL payload pro zjištění živého vysílání daného kanálu."""
+        query = """
+            query UserQuery($login: String!) {
+                user(login: $login) {
+                    id
+                    displayName
+                    stream {
+                        id
+                        viewersCount
+                        type
+                        createdAt
+                        game {
+                            id
+                            name
+                        }
+                    }
+                }
+            }
+        """
+        return {
+            "operationName": "UserQuery",
+            "query": query,
+            "variables": {
+                "login": self.login or self.name.lower(),
+            },
+        }
 
     def check_online(self) -> bool:
         return self.online
 
+    def _reset_stream_state(self) -> None:
+        """Vyčistí proměnné živého streamu při offline stavu."""
+        self._is_online = False
+        self.broadcast_id = 0
+        self.viewers = 0
+        self.title = ""
+        self.game = None
+        self.hls_url = None
+
+    def external_update(self, user_data: dict[str, Any], campaigns: list[Any] | None = None) -> None:
+        """Aktualizuje stav kanálu a jeho streamu přímo z GQL dat."""
+        if not isinstance(user_data, dict):
+            self._reset_stream_state()
+            return
+
+        # 1. Základní identifikátory
+        if uid := user_data.get("id"):
+            try:
+                self.id = int(uid)
+            except (ValueError, TypeError):
+                self.id = uid
+
+        if name := (user_data.get("displayName") or user_data.get("name")):
+            self.name = name
+
+        # Vždy udržuje login synchronizovaný s názvem kanálu
+        if login := user_data.get("login"):
+            self.login = login.lower()
+        elif self.name:
+            self.login = self.name.lower()
+
+        # 2. Zpracování živého streamu a broadcast settings
+        stream_data = user_data.get("stream")
+        settings = user_data.get("broadcastSettings", {}) or {}
+
+        if isinstance(stream_data, dict) and stream_data:
+            self._is_online = True
+            raw_bid = stream_data.get("id", 0)
+            try:
+                self.broadcast_id = int(raw_bid)
+            except (ValueError, TypeError):
+                self.broadcast_id = raw_bid
+
+            self.viewers = stream_data.get("viewersCount", 0)
+            self.title = settings.get("title") or stream_data.get("title", "")
+
+            game_data = settings.get("game") or stream_data.get("game")
+            if game_data:
+                if hasattr(Game, "model_validate"):
+                    self.game = Game.model_validate(game_data)
+                elif isinstance(game_data, dict):
+                    self.game = Game(**game_data)
+                else:
+                    self.game = game_data
+            else:
+                self.game = None
+        else:
+            self._reset_stream_state()
+
+        if campaigns is not None:
+            self.campaigns = campaigns
+
     @classmethod
-    def from_acl(cls, twitch: Any, data: dict[str, Any]) -> Channel:
-        """Vytvoří instanci Channel z ACL dat kampaně."""
+    def from_acl(cls, twitch: Any, data: dict[str, Any]) -> "Channel":
         if not isinstance(data, dict):
             return cls()
 
+        name = data.get("displayName") or data.get("name", "")
+        login = data.get("login") or name.lower()
+
         channel = cls(
             id=data.get("id", 0),
-            name=data.get("displayName") or data.get("name", ""),
-            login=data.get("login", ""),
+            name=name,
+            login=login,
             acl_based=True,
             drops_enabled=True,
         )
@@ -229,23 +410,23 @@ class Channel(BaseModel):
         data: dict[str, Any],
         drops_enabled: bool = True,
         **kwargs: Any,
-    ) -> Channel:
-        """Vytvoří instanci Channel z dat z adresáře / vyhledávání streamů."""
+    ) -> "Channel":
         if not isinstance(data, dict):
             return cls()
 
         target_data = data.get("broadcaster") or data.get("channel") or data
+        name = target_data.get("displayName") or target_data.get("name", "")
+        login = target_data.get("login") or name.lower()
 
         channel = cls(
             id=target_data.get("id", 0),
-            name=target_data.get("displayName") or target_data.get("name", ""),
-            login=target_data.get("login", ""),
+            name=name,
+            login=login,
             acl_based=False,
             drops_enabled=drops_enabled,
         )
         channel._twitch = twitch
         return channel
-
 
 # ==============================================================================
 # 4. TIMED DROP
@@ -432,7 +613,11 @@ class Drop(BaseModel):
         )
         if self.real_current_minutes >= self.required_minutes and self.required_minutes > 0:
             self.is_claimed = True
-
+            
+    def update_minutes(self, minutes: int) -> None:
+        """Alias/Metoda pro aktualizaci napozorovaných minut."""
+        self.sync_minutes(minutes)
+          
     @property
     def status(self) -> str:
         return resolve_drop_status(
@@ -518,6 +703,21 @@ class Drop(BaseModel):
             return False
 
         return base_conditions_met
+        
+    @property
+    def is_badge(self) -> bool:
+        """Vrátí True, pokud drop obsahuje badge nebo má příznak v názvu."""
+        # Pokud nemáte explicitní atribut is_badge v datech, zkontrolujeme názvy benefitů nebo názvu dropu
+        if "badge" in self.name.lower():
+            return True
+        return any("badge" in getattr(b, "name", "").lower() for b in self.benefits)
+
+    @property
+    def progress(self) -> float:
+        """Vrátí číselný pokrok dropu jako desetinné číslo (0.0 až 1.0)."""
+        if self.required_minutes <= 0:
+            return 1.0 if self.is_claimed else 0.0
+        return min(1.0, self.real_current_minutes / self.required_minutes)
 
     @property
     def current_minutes(self) -> int:
@@ -806,74 +1006,13 @@ class Campaign(BaseModel):
                     return False
 
         return True
+        
+    
 
     def can_earn_on_this_channel(self, channel: Any = None) -> bool:
         """Běží kampaň, je těžitelná (včetně kontroly linked) A ZÁROVEŇ podporuje zadaný kanál."""
         return self.is_campaign_earnable and self.supports_channel(channel)
         
-# ==============================================================================
-# 6. STREAM
-# ==============================================================================
-
-class Stream(BaseModel):
-    channel: Channel = Field(exclude=True)
-    broadcast_id: int
-    viewers: int = 0
-    drops_enabled: bool = True
-    game: Game | None = None
-    title: str = ""
-    _stream_url: URLType | None = PrivateAttr(default=None)
-
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        populate_by_name=True,
-        extra="allow",
-    )
-
-    def __init__(
-        self,
-        channel: Channel,
-        *,
-        id: SupportsInt,
-        game: JsonType | None,
-        viewers: int,
-        title: str,
-        **kwargs,
-    ):
-        super().__init__(
-            channel=channel,
-            broadcast_id=int(id),
-            viewers=viewers,
-            game=Game.model_validate(game) if isinstance(game, dict) else game,
-            title=title,
-            **kwargs,
-        )
-
-    @property
-    def _spade_payload(self) -> JsonType:
-        user_id = getattr(getattr(self.channel, "_twitch", None), "_auth_state", None)
-        return build_spade_payload(
-            broadcast_id=self.broadcast_id,
-            channel_id=self.channel.id,
-            channel_login=getattr(self.channel, "login", ""),
-            game_name=self.game.name if self.game else "",
-            game_id=self.game.id if self.game else "",
-            user_id=getattr(user_id, "user_id", 0) if user_id else 0,
-        )
-
-    @classmethod
-    def from_get_stream(cls, channel: Channel, channel_data: JsonType) -> Stream:
-        stream = channel_data["stream"]
-        settings = channel_data["broadcastSettings"]
-        return cls(
-            channel,
-            id=stream["id"],
-            game=settings["game"],
-            viewers=stream["viewersCount"],
-            title=settings["title"],
-        )
-
-
 # ==============================================================================
 # 7. GUI / TREE STRUCTURES
 # ==============================================================================
@@ -901,18 +1040,13 @@ class CurrentDropSession(BaseModel):
         validation_alias=AliasChoices("currentMinutesWatched", "current_minutes_watched"),
     )
 
-
-from typing import Any, Optional
-from pydantic import BaseModel, ConfigDict, Field
-
-
 class DropTreeItem(BaseModel):
     """Reprezentace jednoho dropu v hierarchii."""
 
     id: str | int
     name: str
     image_url: Optional[str] = None
-    status: str
+    status: str = ""
     benefits: list[Any] = Field(default_factory=list)
     is_mining: bool = False
     is_claimed: bool = False
@@ -925,60 +1059,37 @@ class DropTreeItem(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    @classmethod
-    def create(
-        cls,
-        drop_id: str | int,
-        name: str,
-        image_url: Optional[str] = None,
-        benefits: list[Any] | None = None,
-        is_claimed: bool = False,
-        can_claim: bool = False,
-        is_mining: bool = False,
-        is_stuck: bool = False,
-        current_minutes: int = 0,
-        required_minutes: int = 0,
-    ) -> "DropTreeItem":
-        """Tovární metoda, která sama odvodí `is_in_progress`, `progress` a `status`."""
-        # 1. Výpočet rozpracovanosti (má minuty, ale netěží se ani není dokončen)
-        is_in_progress = (
-            current_minutes > 0
-            and not is_claimed
-            and not can_claim
-            and not is_mining
-        )
+    @model_validator(mode="after")
+    def _compute_fields(self) -> "DropTreeItem":
+        """Automaticky dopočítá status, progress a is_in_progress při jakékoliv tvorbě objektu."""
+        not_completed = not self.is_claimed and not self.can_claim
+
+        # 1. Rozpracovanost = těží se NEBO už má nějaké minuty (a není dokončen)
+        self.is_in_progress = not_completed and (self.is_mining or self.current_minutes > 0)
 
         # 2. Výpočet procentuálního průběhu
-        progress = 0
-        if required_minutes > 0:
-            progress = min(100, int((current_minutes / required_minutes) * 100))
-        if is_claimed or can_claim:
-            progress = 100
+        if self.is_claimed or self.can_claim:
+            self.progress = 100
+        elif self.required_minutes > 0:
+            self.progress = min(100, int((self.current_minutes / self.required_minutes) * 100))
+        else:
+            self.progress = 0
 
         # 3. Vyhodnocení finálního statusu pro JS
-        status = resolve_drop_status(
-            is_claimed=is_claimed,
-            can_claim=can_claim,
-            is_mining=is_mining,
-            is_stuck=is_stuck,
-            current_minutes=current_minutes,
+        self.status = resolve_drop_status(
+            is_claimed=self.is_claimed,
+            can_claim=self.can_claim,
+            is_mining=self.is_mining,
+            is_stuck=self.is_stuck,
+            current_minutes=self.current_minutes,
         )
 
-        return cls(
-            id=drop_id,
-            name=name,
-            image_url=image_url,
-            status=status,
-            benefits=benefits or [],
-            is_mining=is_mining,
-            is_claimed=is_claimed,
-            can_claim=can_claim,
-            is_stuck=is_stuck,
-            is_in_progress=is_in_progress,
-            current_minutes=current_minutes,
-            required_minutes=required_minutes,
-            progress=progress,
-        )
+        return self
+
+    @classmethod
+    def create(cls, drop_id: str | int, **kwargs) -> "DropTreeItem":
+        """Zpětně kompatibilní tovární metoda."""
+        return cls(id=drop_id, **kwargs)
 
 
 class CampaignTreeItem(BaseModel):
@@ -1009,6 +1120,14 @@ class GameTreeItem(BaseModel):
     game_obj: Any = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @computed_field
+    @property
+    def slug(self) -> str:
+        """Vrátí slug z objektu hry game_obj, případně vygeneruje fallback z name."""
+        if self.game_obj and hasattr(self.game_obj, "slug"):
+            return self.game_obj.slug
+        return slugify_game_name(self.name)
 
 # Aliasy pro zpětnou kompatibilitu
 DropsCampaign = Campaign

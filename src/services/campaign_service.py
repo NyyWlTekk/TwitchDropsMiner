@@ -166,6 +166,38 @@ class InventoryFetcher:
                 fetched_data[campaign_data["id"]] = campaign_data
 
         return GQLClient.merge_data(campaign_ids, fetched_data)
+        
+    async def execute_gql_claim(
+        twitch_client: Any,
+        claim_id: str,
+        gql_operations: Dict[str, Any],
+    ) -> bool:
+        """Odesle požadavek na vyzvednutí (Claim) dropu přes GQL API."""
+        if not claim_id:
+            return False
+
+        try:
+            gql_op = gql_operations["ClaimDrop"].with_variables(
+                {"input": {"dropInstanceID": claim_id}}
+            )
+            response = await twitch_client.gql_request(gql_op)
+            logger.debug(f"Twitch claim response: {response}")
+        except Exception as e:
+            logger.error(f"GQL Exception during claim: {e}")
+            return False
+
+        if isinstance(response, dict) and response.get("errors"):
+            logger.error(f"Twitch API error during claim: {response['errors']}")
+            return False
+
+        data = response.get("data") if isinstance(response, dict) else {}
+        if data and "claimDropRewards" in data and data["claimDropRewards"]:
+            status = data["claimDropRewards"].get("status")
+            if status in ("ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"):
+                return True
+            logger.warning(f"Unsuccessful claim status: {status}")
+
+        return False
 
 
 # ============================================================================

@@ -340,10 +340,10 @@ class Websocket:
 
         payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
 
-        if asyncio.iscoroutinefunction(handler):
-            asyncio.create_task(handler(payload))
-        else:
-            handler(payload)
+        # Zavoláme handler a prověříme, zda vrátil korutinu
+        res = handler(payload)
+        if asyncio.iscoroutine(res):
+            asyncio.create_task(res)
 
     async def _handle_recv(self):
         """Handle receiving and processing messages from the websocket."""

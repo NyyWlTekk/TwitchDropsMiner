@@ -181,7 +181,6 @@ class MessageHandlerService:
             campaign = drop.campaign
             await drop.claim()
             
-            # OPRAVA: Opraven chybějící odkaz 'gui' -> 'self._twitch.gui'
             if hasattr(self._twitch, "gui") and hasattr(self._twitch.gui, "display_drop"):
                 self._twitch.gui.display_drop(drop)
 
@@ -202,12 +201,15 @@ class MessageHandlerService:
                         break
                     await asyncio.sleep(2)
 
-            if campaign.can_earn(watching_channel):
+            # OPRAVA: Místo campaign.can_earn() zkontrolujeme, zda kampaň obsahuje další těžitelný drop
+            has_more_earnable = False
+            if campaign and hasattr(campaign, "drops"):
+                has_more_earnable = any(d.is_drop_earnable for d in campaign.drops)
+
+            if has_more_earnable:
                 self._twitch.restart_watching()
             else:
-                logger.info(f"Campaign completed for {campaign.game}. Resetting active watching state.")
-                # OPRAVA: Voláme stop_watching bez vyvolání automatického stream selectu,
-                # protože hned ručně měníme stav na INVENTORY_FETCH
+                logger.info(f"Campaign completed for {getattr(campaign, 'game', 'unknown')}. Resetting active watching state.")
                 if hasattr(self._twitch, "_watch_service"):
                     self._twitch._watch_service.stop_watching(notify_state_machine=False)
                 else:
@@ -221,7 +223,7 @@ class MessageHandlerService:
         assert msg_type == "drop-progress"
         if drop is not None:
             drop_text = (
-                f"{drop.name} ({drop.campaign.game}, "
+                f"{drop.name} ({getattr(drop.campaign, 'game', 'Unknown')}, "
                 f"{message['data']['current_progress_min']}/"
                 f"{message['data']['required_progress_min']})"
             )
@@ -230,8 +232,8 @@ class MessageHandlerService:
 
         logger.log(CALL, f"Drop update from websocket: {drop_text}")
 
-        if drop is not None and drop.can_earn(self._twitch.watching_channel.get_with_default(None)):
-            # the received payload is for the drop we expected
+        # OPRAVA: Použití property `is_drop_earnable` z modelu Drop místo neexistující metody `can_earn`
+        if drop is not None and drop.is_drop_earnable:
             drop.update_minutes(message["data"]["current_progress_min"])
 
     @task_wrapper

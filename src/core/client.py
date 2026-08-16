@@ -17,7 +17,6 @@ from src.exceptions import ExitRequest, RequestException
 from src.i18n import _
 from src.models.models import Channel, DropsCampaign
 from src.services.campaign_service import InventoryCoordinator
-from src.services.channel_service import ChannelService
 from src.services.maintenance import MaintenanceService
 from src.services.message_handlers import MessageHandlerService
 from src.services.stream_selector import StreamSelector
@@ -79,7 +78,6 @@ class Twitch:
         # --- Domain Services ---
         self._stream_selector: StreamSelector = StreamSelector()
         self._maintenance_service: MaintenanceService = MaintenanceService(self)
-        self._channel_service: ChannelService = ChannelService(self)
         self._message_handler_service: MessageHandlerService = MessageHandlerService(self)
         self._inventory_service: InventoryCoordinator = InventoryCoordinator(self)
         self._watch_service: WatchService = WatchService(self)
@@ -238,12 +236,6 @@ class Twitch:
     async def fetch_inventory(self) -> None:
         await self._inventory_service.fetch_inventory()
 
-    async def bulk_check_online(self, channels: abc.Iterable[Channel]) -> None:
-        await self._channel_service.bulk_check_online(channels)
-
-    async def get_live_streams(self, game: Game, *, drops_enabled: bool = False) -> list[Channel]:
-        return await self._channel_service.get_live_streams(game, drops_enabled=drops_enabled)
-
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
         return self._inventory_service.get_active_campaign(channel)
 
@@ -291,7 +283,6 @@ class Twitch:
 # ==============================================================================
 # 2. STATE MACHINE CORE LOOP
 # ==============================================================================
-
 async def run_state_machine_loop(client: Twitch) -> None:
     """Hlavní smyčka spravující přechody stavů a spouštění odpovídajících handlerů."""
     state_handlers = {
@@ -299,20 +290,18 @@ async def run_state_machine_loop(client: Twitch) -> None:
         State.INVENTORY_FETCH: lambda c: c.inventory_service.process_inventory_fetch(),
         State.GAMES_UPDATE: handle_state_games_update,
         State.CHANNELS_CLEANUP: handle_state_channels_cleanup,
-        State.CHANNELS_FETCH: handle_state_channels_fetch,
+        State.CHANNELS_FETCH: lambda c: c.watch_service.handle_state_channels_fetch(),
         State.CHANNEL_SWITCH: lambda c: c.watch_service.process_channel_switch(),
+        State.WATCHING: handle_state_watching,
     }
-
     while True:
         current_state = client._state
 
+        # Při ukončení aktualizujeme GUI a korektně ukončíme smyčku
         if current_state is State.EXIT:
-            if client.gui and hasattr(client.gui, "status"):
+            if client.gui:
                 client.gui.status.update(_.t["gui"]["status"]["exiting"])
             break
-
-        # Pročištění eventu až těsně před vykonáním stavu
-        client._state_change.clear()
 
         try:
             handler = state_handlers.get(current_state)
@@ -327,18 +316,20 @@ async def run_state_machine_loop(client: Twitch) -> None:
             raise
         except Exception as exc:
             logger.exception("Unhandled error in state machine loop (current state: %s): %s", current_state, exc)
-            if client.gui and hasattr(client.gui, "status"):
+            if client.gui:
                 client.gui.status.update(f"Error in state {current_state.name}. Recovering...")
             client.change_state(State.IDLE)
             await asyncio.sleep(5)
 
-        # Čekání na další signál
+        # Čekání na další signál – přeskočí se, pokud už handler změnil stav
         if client._state is not State.EXIT:
-            if not client._state_change.is_set():
+            if client._state == current_state and not client._state_change.is_set():
                 try:
                     await client._state_change.wait()
                 except asyncio.CancelledError:
                     break
+            
+            client._state_change.clear()
 
 # ==============================================================================
 # 3. MODULAR STATE HANDLERS
@@ -348,7 +339,11 @@ async def handle_state_idle(client: Twitch) -> None:
     if client.gui and hasattr(client.gui, "status"):
         client.gui.status.update(_.t["gui"]["status"]["idle"])
     client.stop_watching()
-
+    
+async def handle_state_watching(client: Twitch) -> None:
+    """Handler pro stav WATCHING: udržuje stav sledování a čeká na přechodový signál."""
+    logger.debug("Aplikace je ve stavu WATCHING.")
+    await client._state_change.wait()
 
 async def handle_state_games_update(client: Twitch) -> None:
     # 1. Claiming hotových dropů
@@ -397,51 +392,6 @@ async def handle_state_channels_cleanup(client: Twitch) -> None:
     else:
         client.print(_.t["status"]["no_campaign"])
         client.change_state(State.IDLE)
-
-
-async def handle_state_channels_fetch(client: Twitch) -> None:
-    if client.gui and hasattr(client.gui, "status"):
-        client.gui.status.update(_.t["gui"]["status"]["gathering"])
-
-    logger.info("Fetching channels for wanted games...")
-
-    channels = client.channels
-    old_channels = set(channels.values())
-    channels.clear()
-
-    no_acl: set[Game] = set()
-    all_acl_channels: set[Channel] = set()
-
-    for campaign in client.inventory:
-        if campaign.game in client.wanted_games and campaign.is_campaign_earnable:
-            if campaign.allowed_channels:
-                for channel in campaign.allowed_channels:
-                    if channel.game is None:
-                        channel.game = campaign.game
-                all_acl_channels.update(campaign.allowed_channels)
-            else:
-                if campaign.game:
-                    no_acl.add(campaign.game)
-
-    logger.info("Found %d ACL channels and %d games without ACL to fetch.", len(all_acl_channels), len(no_acl))
-
-    # Online stav zjišťujeme pouze pro NOVĚ objevené ACL kanály
-    new_acl_channels = all_acl_channels - old_channels
-    if new_acl_channels:
-        await client.bulk_check_online(new_acl_channels)
-
-    gathered_channels: set[Channel] = old_channels | all_acl_channels
-
-    for game in no_acl:
-        logger.debug("Fetching live streams for game: %s", game.name)
-        gathered_channels.update(await client.get_live_streams(game, drops_enabled=True))
-
-    for channel in gathered_channels:
-        if getattr(channel, "online", False):
-            channels[channel.id] = channel
-
-    logger.info("Total gathered live channels saved to cache: %d", len(channels))
-    client.change_state(State.CHANNEL_SWITCH)
 
 
 # ==============================================================================

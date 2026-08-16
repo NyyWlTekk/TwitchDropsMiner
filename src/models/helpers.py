@@ -51,19 +51,6 @@ def slugify_game_name(name: str, override: Optional[str] = None) -> str:
     slug_text = re.sub(r"\W+", "-", slug_text)
     return re.sub(r"-{2,}", "-", slug_text.strip("-"))
 
-
-def extract_spade_url_from_text(html_or_js: str) -> Optional[str]:
-    """Extrahuje Spade beacon URL z obsahu HTML nebo JS pomocí regexu."""
-    match = re.search(SPADE_PATTERN, html_or_js, re.I)
-    return match.group(1) if match else None
-
-
-def extract_settings_js_url(html_text: str) -> Optional[str]:
-    """Extrahuje URL JS konfigurace ze stránky streamera."""
-    match = re.search(SETTINGS_PATTERN, html_text, re.I)
-    return match.group(1) if match else None
-
-
 # ==============================================================================
 # 2. JSON & DATA PARSING HELPERS
 # ==============================================================================
@@ -131,47 +118,6 @@ def extract_drop_image_url(edges: list[Dict[str, Any]], benefits: list[Any]) -> 
 
     return ""
 
-
-def build_spade_payload(
-    broadcast_id: Any,
-    channel_id: Any,
-    channel_login: str,
-    game_name: str,
-    game_id: Any,
-    user_id: Any,
-) -> Dict[str, str]:
-    """Sestaví a zakóduje Base64 payload pro Spade tracking beacon (1 minuta sledování)."""
-    try:
-        parsed_user_id = int(user_id) if user_id else 0
-    except (ValueError, TypeError):
-        parsed_user_id = 0
-
-    payload = [
-        {
-            "event": "minute-watched",
-            "properties": {
-                "broadcast_id": str(broadcast_id),
-                "channel_id": str(channel_id),
-                "channel": channel_login,
-                "client_time": datetime.now(timezone.utc).isoformat(),
-                "game": game_name,
-                "game_id": str(game_id),
-                "hidden": False,
-                "is_live": True,
-                "live": True,
-                "location": "channel",
-                "logged_in": True,
-                "minutes_logged": 1,
-                "muted": False,
-                "player": "site",
-                "user_id": parsed_user_id,
-            },
-        }
-    ]
-    minified_json = json.dumps(payload, separators=(",", ":"))
-    return {"data": b64encode(minified_json.encode("utf8")).decode("utf8")}
-
-
 # ==============================================================================
 # 3. VÝPOČTY & STAVY
 # ==============================================================================
@@ -203,147 +149,31 @@ def calculate_availability(ends_at: datetime, remaining_minutes: int, required_m
 
 
 def resolve_drop_status(
-    is_claimed: bool,
-    can_claim: bool,
+    *,
+    is_claimed: bool = False,
+    can_claim: bool = False,
     is_mining: bool = False,
-    current_minutes: int = 0,
     is_stuck: bool = False,
+    current_minutes: int = 0,
 ) -> str:
     """Vrátí status řetězec přesně podle potřeb frontendu."""
     if is_claimed:
         return "claimed"
     if can_claim:
         return "ready"  # Matchuje JS klíčové slovo 'ready'
+    if is_stuck:
+        return "stuck"  # Vyšší priorita než mining (pokud se těžba zasekla)
     if is_mining:
         return "mining"
-    if is_stuck:
-        return "stuck"
     if current_minutes > 0:
         return "in_progress"  # Matchuje JS d.is_in_progress
+
     return "queued"
 
 
 # ==============================================================================
 # 4. SÍŤOVÉ A API POMOCNÉ FUNKCE
 # ==============================================================================
-
-async def fetch_spade_url(twitch_client: Any, channel_url: URL | str) -> URL:
-    """Dvoukroková extrakce Spade URL ze stránek kanálu přes HTTP klient."""
-    async with twitch_client.request("GET", channel_url) as response1:
-        streamer_html: str = await response1.text(encoding="utf8")
-
-    spade_url = extract_spade_url_from_text(streamer_html)
-    if not spade_url:
-        settings_url = extract_settings_js_url(streamer_html)
-        if not settings_url:
-            raise RuntimeError("Error while spade_url extraction: step #1")
-
-        async with twitch_client.request("GET", settings_url) as response2:
-            settings_js: str = await response2.text(encoding="utf8")
-
-        spade_url = extract_spade_url_from_text(settings_js)
-        if not spade_url:
-            raise RuntimeError("Error while spade_url extraction: step #2")
-
-    return URL(spade_url)
-
-
-async def fetch_stream_hls_url(
-    twitch_client: Any,
-    channel_login: str,
-    gql_operations: Dict[str, Any],
-    on_offline_callback: Optional[Callable[[], None]] = None,
-) -> Optional[URL]:
-    """Získá M3U8 HLS URL adresu streamu přes GQL AccessToken a Usher API."""
-    gql_op = gql_operations["PlaybackAccessToken"].with_variables({"login": channel_login})
-    playback_token_response = await twitch_client.gql_request(gql_op)
-
-    token_data = (
-        playback_token_response.get("data", {}).get("streamPlaybackAccessToken")
-        if isinstance(playback_token_response, dict)
-        else None
-    )
-    if not token_data or not isinstance(token_data, dict):
-        if on_offline_callback:
-            on_offline_callback()
-        return None
-
-    token_value = token_data.get("value")
-    token_signature = token_data.get("signature")
-
-    if not token_value or not token_signature:
-        if on_offline_callback:
-            on_offline_callback()
-        return None
-
-    available_qualities = ""
-    usher_url = URL("https://usher.ttvnw.net/api/channel/hls").with_path(
-        f"/api/channel/hls/{channel_login}.m3u8"
-    ).with_query({"sig": token_signature, "token": token_value})
-
-    try:
-        async with twitch_client.request("GET", usher_url) as response:
-            available_qualities = await response.text()
-            try:
-                available_json = json.loads(available_qualities)
-            except json.JSONDecodeError:
-                pass
-            else:
-                if isinstance(available_json, list) and available_json:
-                    available_json = available_json[0]
-                if isinstance(available_json, dict) and "error" in available_json:
-                    logger.error(f'Stream URL get error: "{available_json["error"]}"')
-                    if on_offline_callback:
-                        on_offline_callback()
-                    return None
-
-            # Extrakce poslední platné URL z M3U8 playlistu (přeskočí prázdné řádky a M3U8 tagy #)
-            m3u8_lines = [
-                line.strip()
-                for line in available_qualities.splitlines()
-                if line.strip() and not line.strip().startswith("#")
-            ]
-            if m3u8_lines:
-                return URL(m3u8_lines[-1])
-
-            return None
-    except (aiohttp.InvalidURL, ValueError):
-        if hasattr(twitch_client, "print"):
-            twitch_client.print(available_qualities)
-        raise
-
-
-async def execute_gql_claim(
-    twitch_client: Any,
-    claim_id: str,
-    gql_operations: Dict[str, Any],
-) -> bool:
-    """Odesle požadavek na vyzvednutí (Claim) dropu přes GQL API."""
-    if not claim_id:
-        return False
-
-    try:
-        gql_op = gql_operations["ClaimDrop"].with_variables(
-            {"input": {"dropInstanceID": claim_id}}
-        )
-        response = await twitch_client.gql_request(gql_op)
-        logger.debug(f"Twitch claim response: {response}")
-    except Exception as e:
-        logger.error(f"GQL Exception during claim: {e}")
-        return False
-
-    if isinstance(response, dict) and response.get("errors"):
-        logger.error(f"Twitch API error during claim: {response['errors']}")
-        return False
-
-    data = response.get("data") if isinstance(response, dict) else {}
-    if data and "claimDropRewards" in data and data["claimDropRewards"]:
-        status = data["claimDropRewards"].get("status")
-        if status in ("ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"):
-            return True
-        logger.warning(f"Unsuccessful claim status: {status}")
-
-    return False
 
 def update_drop_minutes(current_minutes: int, required_minutes: int, new_minutes: int) -> int:
     """Synchronizuje odehrané minuty a omezí je do rozmezí 0 až required_minutes."""
@@ -417,30 +247,4 @@ def calculate_campaign_remaining_minutes(campaign) -> int:
         
     return max(remaining_drop_times)
 
-def build_channel_stream_gql(channel_name: str | None, channel_id: int | str | None) -> dict:
-    """Vytvoří GQL dotaz/payload pro zjištění živého vysílání daného kanálu pomocí inline dotazu (obejití PersistedQueryNotFound)."""
-    query = """
-        query UserQuery($login: String!) {
-            user(login: $login) {
-                id
-                displayName
-                stream {
-                    id
-                    viewersCount
-                    type
-                    createdAt
-                    game {
-                        id
-                        name
-                    }
-                }
-            }
-        }
-    """
-    return {
-        "operationName": "UserQuery",
-        "query": query,
-        "variables": {
-            "login": channel_name or "",
-        }
-    }
+

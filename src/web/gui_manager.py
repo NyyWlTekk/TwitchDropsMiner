@@ -643,7 +643,7 @@ class WebGUIManager:
                     )
 
                     # Nativní export z Pydanticu do JSON-ready dictu
-                    payload = state_model.model_dump(mode="json")
+                    payload = state_model.model_dump(mode="json", exclude_none=True)
                     await self._sio.emit("state", payload)
                 except Exception as e:
                     logger.error(f"Failed to broadcast state update: {e}", exc_info=True)

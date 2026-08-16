@@ -417,7 +417,7 @@ class WatchService:
         return None
 
     async def send_watch_payload(self, channel: Channel) -> bool:
-        """Odeslání spade pingu s využitím vlastní čisté HTTP relace."""
+        """Odeslání spade pingu s využitím hlavní HTTP relace klienta."""
         if not channel.is_live:
             logger.info("⚠️ [Spade] Kanál %s není live, přeskočeno.", channel.name)
             return False
@@ -426,29 +426,34 @@ class WatchService:
 
         game_name = channel.game.name if channel.game else "Neznámá hra"
 
-        # Filtrování kampaní pro přehledný log
+        # Zjištění konkrétní aktivní kampaně/dropu a počtu položek
         camp_info = ""
         if channel.campaigns:
-            relevant_camps = [
-                c for c in channel.campaigns 
-                if (getattr(c, "game", None) and getattr(c.game, "name", "") == game_name)
-                or (hasattr(c, "progress") and 0 < c.progress < 100)
-            ]
-            display_camps = relevant_camps or [c for c in channel.campaigns if getattr(c, "progress", 0) < 100][:3]
-            
-            camp_details = []
-            for camp in display_camps:
-                info = f"{camp.name}"
-                if hasattr(camp, "progress"):
-                    info += f" ({camp.progress:.1f}%)"
-                if getattr(camp, "active_drop", None):
-                    drop = camp.active_drop
+            total_wanted = len(channel.campaigns)
+
+            # Najdeme kampaň, která má aktivní drop, případně vezmeme první kampaň
+            active_camp = None
+            for c in channel.campaigns:
+                if getattr(c, "active_drop", None):
+                    active_camp = c
+                    break
+
+            if not active_camp and channel.campaigns:
+                active_camp = channel.campaigns[0]
+
+            if active_camp:
+                info = f"Kampaň: {active_camp.name}"
+                if hasattr(active_camp, "progress"):
+                    info += f" ({active_camp.progress:.1f}%)"
+
+                drop = getattr(active_camp, "active_drop", None) or getattr(channel, "active_drop", None)
+                if drop:
                     drop_pct = getattr(drop, "progress", getattr(drop, "percentage", 0))
                     info += f" | Drop: {drop.name} ({drop_pct:.1f}%)"
-                camp_details.append(info)
 
-            if camp_details:
-                camp_info = f" [{', '.join(camp_details)}]"
+                camp_info = f" [{info}] [Wanted: {total_wanted}]"
+            else:
+                camp_info = f" [Wanted: {total_wanted}]"
 
         logger.info(
             "📡 [Spade] Povoluji sledování pro kanál: %s (hra: %s)%s",
@@ -478,21 +483,28 @@ class WatchService:
 
         logger.info("🔗 [Spade] Odesílám POST na URL: %s", spade_url)
 
-        # 2. Inicializace / opnové použití vlastní čisté HTTP relace pro Spade
-        if not hasattr(self, "_spade_session") or self._spade_session is None or self._spade_session.closed:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-                ),
-                "Content-Type": "text/plain;charset=UTF-8",
-            }
-            self._spade_session = aiohttp.ClientSession(headers=headers)
+        # 2. Odeslání pingu přes existující HTTP session (nevyžaduje ruční zavírání)
+        spade_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            ),
+            "Content-Type": "text/plain;charset=UTF-8",
+        }
+
+        # Získání session z hlavního Twitch klienta
+        session = getattr(self._twitch, "session", None) or getattr(self, "_session", None)
 
         async def _do_post() -> int:
-            async with self._spade_session.post(spade_url, data=channel.spade_payload) as resp:
-                await resp.read()
-                return resp.status
+            if session:
+                async with session.post(spade_url, data=channel.spade_payload, headers=spade_headers) as resp:
+                    await resp.read()
+                    return resp.status
+            else:
+                async with aiohttp.ClientSession(headers=spade_headers) as tmp_session:
+                    async with tmp_session.post(spade_url, data=channel.spade_payload) as resp:
+                        await resp.read()
+                        return resp.status
 
         try:
             status = await asyncio.wait_for(_do_post(), timeout=8.0)
@@ -668,10 +680,23 @@ class WatchService:
 
         self._twitch._watching_restart.set()
 
-    async def watch_sleep(self, delay: float) -> None:
-        self._twitch._watching_restart.clear()
+    async def watch_sleep(self, delay: float) -> bool:
+        """
+        Čeká zadaný čas, nebo dokud není vyvolán restart sledování.
+        Vrací True, pokud byl spánek přerušen (vyžadován restart), jinak False.
+        """
+        if self._twitch._watching_restart.is_set():
+            self._twitch._watching_restart.clear()
+            return True
+
         with suppress(asyncio.TimeoutError):
             await asyncio.wait_for(self._twitch._watching_restart.wait(), timeout=delay)
+
+        if self._twitch._watching_restart.is_set():
+            self._twitch._watching_restart.clear()
+            return True
+
+        return False
 
     # ==========================================================================
     # BACKGROUND WATCH WORKER LOOP
@@ -681,10 +706,18 @@ class WatchService:
     async def watch_loop(self) -> NoReturn:
         interval: float = WATCH_INTERVAL.total_seconds()
 
-        # Vnější smyčka udržuje úlohu aktivní a čeká na nové kanály z fronty
         while True:
             channel: Channel = await self._twitch.watching_channel.get()
+            
+            # Vynulování přerušovacího eventu před startem nového kanálu
+            self._twitch._watching_restart.clear()
+            
             logger.info("▶️ [WatchLoop] Zahajuji sledovací smyčku pro kanál: %s", channel.name)
+
+            # Příznak pro první cyklus – zabrání duplicitnímu Spade pingu, 
+            # pokud již byl odeslán během inicializace kanálu
+            first_run: bool = True
+            last_sent: float = time()
 
             # Vnitřní smyčka provádí minutové cykly sledování vybraného kanálu
             while True:
@@ -700,7 +733,12 @@ class WatchService:
                 except Exception as err:
                     logger.info("Failed to refresh online status for %s: %s", channel.name, err)
 
-                # 2. Kontrola, zda lze kanál dále sledovat
+                # 2. Včasné kontroly před odesláním payloadu
+                if not channel.online:
+                    logger.info("📴 [Watch] Ukončuji sledování %s: Kanál přešel do offline stavu.", channel.name)
+                    self.stop_watching(notify_state_machine=True)
+                    break
+
                 if not self.can_watch(channel):
                     logger.info("⚠️ [Watch] Kanál %s už není sledovatelný. Ruším sledování.", channel.name)
                     self.stop_watching(notify_state_machine=True)
@@ -725,27 +763,24 @@ class WatchService:
                     self.stop_watching(notify_state_machine=True)
                     break
 
-                if not channel.online:
-                    logger.info("📴 [Watch] Ukončuji sledování %s: Kanál přešel do offline stavu.", channel.name)
-                    self.stop_watching(notify_state_machine=True)
+                # 3. Odeslání Watch Payloadu (přeskočí se pouze v prvním cyklu, pokud už ping proběhl při přepnutí)
+                if not first_run:
+                    logger.info("📡 [Watch] Odesílám watch payload pro kanál: %s", channel.name)
+                    succeeded: bool = await self.send_watch_payload(channel)
+                    last_sent = time()
+
+                    if not succeeded:
+                        logger.warning("❌ [Watch] Požadavek na watch payload selhal pro kanál: %s", channel.name)
+                else:
+                    first_run = False
+                    logger.info("⏳ [Watch] První Spade ping již proběhl při startu. Čekám na první interval...")
+
+                # 4. Čekání 20 sekund pro zapsání sledování na straně Twitche
+                if await self.watch_sleep(20):
+                    logger.info("🔄 [Watch] Spánek přerušen požadavkem na restart / změnu kanálu.")
                     break
 
-                # 3. Odeslání Watch Payloadu
-                logger.info("📡 [Watch] Odesílám watch payload pro kanál: %s", channel.name)
-                succeeded: bool = await self.send_watch_payload(channel)
-                last_sent: float = time()
-
-                if not succeeded:
-                    logger.warning("❌ [Watch] Požadavek na watch payload selhal pro kanál: %s", channel.name)
-
-                await self.watch_sleep(20)
-
-                if not self.can_watch(channel):
-                    logger.info("⚠️ [Watch] Kanál %s se během intervalu stal nesledovatelným.", channel.name)
-                    self.stop_watching(notify_state_machine=True)
-                    break
-
-                # 4. Aktualizace progresu z reálných dat Twitche (GQL s fallbackem na Inventory)
+                # 5. Aktualizace progresu z reálných dat Twitche (GQL s fallbackem na Inventory)
                 handled: bool = False
 
                 try:
@@ -762,12 +797,11 @@ class WatchService:
                     try:
                         session = CurrentDropSession.model_validate(drop_data)
                         gql_drop: Drop | None = self._twitch._drops.get(session.drop_id)
-                        
+
                         if gql_drop is not None and gql_drop.is_drop_earnable:
                             gql_drop.update_minutes(session.current_minutes_watched)
                             self.current_drop = gql_drop
 
-                            # Výpočet procent sjednocen na 0-100%
                             pct = int(gql_drop.progress * 100) if gql_drop.progress <= 1.0 else int(gql_drop.progress)
 
                             logger.info(
@@ -806,8 +840,12 @@ class WatchService:
                     else:
                         logger.info("No active drop could be determined for channel %s", channel.name)
 
-                # 5. Čekání do konce minutového intervalu
-                await self.watch_sleep(interval - min(time() - last_sent, interval))
+                # 6. Čekání do konce zbývající části minutového intervalu (~40s)
+                remaining_sleep = interval - min(time() - last_sent, interval)
+                if remaining_sleep > 0:
+                    if await self.watch_sleep(remaining_sleep):
+                        logger.info("🔄 [Watch] Spánek přerušen požadavkem na restart / změnu kanálu.")
+                        break
             
     async def bulk_check_online(
         self,
@@ -815,9 +853,9 @@ class WatchService:
         batch_size: int = 30,
         max_concurrent: int = 6,
     ) -> None:
-        """
-        Vysoce efektivní a stabilní kontrola stavu kanálů.
-        Sdružuje `batch_size` GQL dotazů do 1 HTTP požadavku a omezuje 
+        """ Vysoce efektivní a stabilní kontrola stavu kanálů.
+
+        Sdružuje `batch_size` GQL dotazů do 1 HTTP požadavku a omezuje
         počet souběžných HTTP spojení na `max_concurrent`.
         """
         channel_list = [c for c in channels if c is not None]
@@ -837,7 +875,7 @@ class WatchService:
             max_concurrent,
         )
 
-        acl_streams_map: dict[int, JsonType] = {}
+        acl_streams_map: dict[str, JsonType] = {}
         semaphore = asyncio.Semaphore(max_concurrent)
         processed_chunks = 0
 
@@ -866,7 +904,7 @@ class WatchService:
         # 3. Paralelní spuštění dávek
         results = await asyncio.gather(*[_process_chunk(b) for b in channel_chunks])
 
-        # 4. Sestavení mapy s explicitním převodem ID na int
+        # 4. Sestavení mapy (ID ukládána striktně jako string)
         for batch_results in results:
             for response_json in batch_results:
                 if not isinstance(response_json, dict):
@@ -875,11 +913,8 @@ class WatchService:
                 data = response_json.get("data")
                 if isinstance(data, dict):
                     user_data = data.get("user")
-                    if isinstance(user_data, dict) and "id" in user_data:
-                        try:
-                            acl_streams_map[int(user_data["id"])] = user_data
-                        except (ValueError, TypeError):
-                            pass
+                    if isinstance(user_data, dict) and "id" in user_data and user_data["id"] is not None:
+                        acl_streams_map[str(user_data["id"])] = user_data
 
         logger.info(
             "📊 [BulkCheck] Vráceno %d odpovědí ze %d testovaných kanálů.",
@@ -887,20 +922,17 @@ class WatchService:
             total_channels,
         )
 
-        # 5. Aktualizace stavu kanálů s předáním inventáře a ošetřením chyb
+        # 5. Aktualizace stavu kanálů
         online_count = 0
         for channel in channel_list:
-            try:
-                cid = int(channel.id)
-            except (ValueError, TypeError):
-                cid = channel.id
+            cid_str = str(channel.id)
 
-            if cid in acl_streams_map:
-                channel_data = acl_streams_map[cid]
+            if cid_str in acl_streams_map:
+                channel_data = acl_streams_map[cid_str]
                 try:
                     channel.external_update(channel_data, self._twitch.inventory)
                 except Exception as exc:
-                    logger.error("❌ [Error] Selhalo zpracování kanálu %s: %s", getattr(channel, "name", cid), exc)
+                    logger.error("❌ [Error] Selhalo zpracování kanálu %s: %s", getattr(channel, "name", cid_str), exc)
                     channel.online = False
             else:
                 channel.online = False

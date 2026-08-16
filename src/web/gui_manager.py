@@ -725,6 +725,7 @@ class WebGUIManager:
         )
 
         try:
+            # Bezpečné zavolání get_wanted_game_tree s podporou as_json
             return self._stream_selector.get_wanted_game_tree(
                 settings, campaigns, as_json=True
             )

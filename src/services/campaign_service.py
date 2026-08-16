@@ -207,13 +207,6 @@ class InventoryFetcher:
 class InventoryCoordinator:
     """
     Hlavní koordinátor inventáře a správy kampaní.
-
-    Řídí celý životní cyklus:
-    1. Koordinace stahování přes InventoryFetcher
-    2. Synchronizace uživatelských assetů (emotikony, odznaky)
-    3. Sloučení a sanitace GQL dat do Pydantic modelů
-    4. Aktualizace vnitřního stavu Twitch klienta a GUI
-    5. Řízení událostí a přechodů mezi stavy (State Machine)
     """
 
     def __init__(self, twitch: Twitch) -> None:
@@ -221,11 +214,13 @@ class InventoryCoordinator:
         self._fetcher = InventoryFetcher(twitch)
         self.user_emotes: set[str] = set()
         self.user_badges: set[str] = set()
+        self.is_ready: bool = False  # 👈 Příznak načtení kompletního stavu
 
     # --- KOORDINACE ÚLOH A WORKFLOW ---
 
     async def fetch_inventory(self) -> None:
         """Kompletní synchronizační workflow inventáře, odznaků a kampaní."""
+        self.is_ready = False  # Reset při zahájení obnovy
         self._update_status(_.t["gui"]["status"]["fetching_inventory"])
 
         # 1. Stažení a synchronizace assetů (emoty & badges)
@@ -246,8 +241,20 @@ class InventoryCoordinator:
             inventory_data, claimed_map, all_claimed_ids
         )
 
-        # 5. Aplikace stavu do klienta a naplánování údržby
+        # 5. Aplikace stavu do klienta
         await self._apply_inventory_to_state(campaigns)
+
+        # 6. Zapnutí příznaku a zaručený prvotní přepočet stromu
+        self.is_ready = True
+        logger.info("✅ [InventoryCoordinator] Inventář je kompletní. Aktivuji StreamSelector.")
+
+        if hasattr(self._twitch, "stream_selector") and self._twitch.stream_selector:
+            settings = getattr(self._twitch, "settings", None)
+            self._twitch.stream_selector.build_wanted_games(
+                settings=settings,
+                campaigns=campaigns
+            )
+
         self._schedule_maintenance_tasks()
 
     async def process_inventory_fetch(self) -> None:

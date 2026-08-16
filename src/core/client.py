@@ -172,11 +172,6 @@ class Twitch:
         """Callback pro WatchService v případě ztráty/ukončení sledovaného kanálu."""
         self.change_state(State.CHANNEL_SWITCH)
 
-    def build_wanted_games(self) -> list[Game]:
-        """Přebuduje seznam požadovaných her přes StreamSelector."""
-        self.wanted_games = self._stream_selector.get_wanted_games(self.settings, self.inventory)
-        return self.wanted_games
-
     def wait_until_login(self) -> abc.Coroutine[Any, Any, Literal[True]]:
         return self._auth_state._logged_in.wait()
 
@@ -360,7 +355,7 @@ async def handle_state_games_update(client: Twitch) -> None:
     client._stream_selector.process_auto_add_and_sort(client.settings, client.inventory)
     
     # Načtení stromu a přímé vytažení objektů her bez wrapperů
-    tree = client._stream_selector.get_wanted_game_tree(client.settings, client.inventory)
+    tree = client._stream_selector.build_wanted_games()
     client.wanted_games = [item.game_obj for item in tree if item.game_obj is not None]
 
     handle_manual_mode_priority(client)

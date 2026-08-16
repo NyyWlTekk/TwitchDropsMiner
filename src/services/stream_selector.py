@@ -54,19 +54,17 @@ class StreamSelector:
     # ==========================================================================
 
     def select_best_channel(self, channels: list[Channel]) -> list[Channel]:
-        """Vrátí všechny dostupné kandidátské kanály seřazené podle priority her ve frontě
-        a vnitřní priority kanálu (počet těžitelných kampaní + priority ze služby).
+        """Vrátí kandidátské kanály seřazené podle priority her ve frontě,
+        času konce kampaně (nejdříve končící první) a rozpracovaného pokroku.
         """
         if not channels:
             return []
 
-        # 1. Zjistíme aktuální frontu her
         queue = self._current_queue
         if not queue:
             logger.warning("StreamSelector: _current_queue je prázdná, nelze vybrat kanál.")
             return []
 
-        # Pomocná funkce pro bezpečné vytažení názevu hry z libovolného typu (Game model, dict, str)
         def _extract_game_name(game_obj: Any) -> str | None:
             if not game_obj:
                 return None
@@ -76,52 +74,78 @@ class StreamSelector:
                 return game_obj.get("name") or game_obj.get("displayName")
             return getattr(game_obj, "name", None)
 
-        # Rychlý lookup: mapování názvu hry na její pozici ve frontě (index)
+        # Mapování názvu hry na její pozici (index) ve frontě
         game_order = {}
         for idx, item in enumerate(queue):
             if g_name := _extract_game_name(getattr(item, "game", item)):
                 game_order[_norm_game_name(g_name)] = idx
 
-        # 2. Seskupíme si živé kanály podle her, které na nich lze těžit
         games_with_channels: dict[int, list[Channel]] = {}
 
         for ch in channels:
             if not ch.can_watch_channel:
                 continue
 
-            channel_game_names: set[str] = set()
+            # 1. Zjistíme hru, kterou streamer AKTUÁLNĚ vysílá
+            raw_current_game = _extract_game_name(ch.game)
+            if not raw_current_game:
+                continue
+            
+            current_game_norm = _norm_game_name(raw_current_game)
 
-            # Bezpečné získání názevu hry z kanálu
-            if raw_g_name := _extract_game_name(ch.game):
-                channel_game_names.add(_norm_game_name(raw_g_name))
+            # 2. Ověříme, zda aktuálně vysílaná hra je v našem seznamu přání (Queue)
+            if current_game_norm not in game_order:
+                continue
 
-            # Bezpečné získání názevu hry z jednotlivých kampaní
+            # 3. Ověříme, zda pro tuto AKTUÁLNĚ VYSÍLANOU hru existuje těžitelná kampaň
+            has_valid_earnable_campaign = False
             for campaign in ch.campaigns:
-                is_earnable = getattr(campaign, "is_campaign_earnable", False)
-                if is_earnable:
-                    camp_game = getattr(campaign, "game", None)
-                    if raw_c_game_name := _extract_game_name(camp_game):
-                        channel_game_names.add(_norm_game_name(raw_c_game_name))
+                if getattr(campaign, "is_campaign_earnable", False):
+                    camp_game = _extract_game_name(getattr(campaign, "game", None))
+                    if camp_game and _norm_game_name(camp_game) == current_game_norm:
+                        has_valid_earnable_campaign = True
+                        break
 
-            # Párování s pozicí ve frontě
-            for game_name_norm in channel_game_names:
-                if game_name_norm in game_order:
-                    idx = game_order[game_name_norm]
-                    if idx not in games_with_channels:
-                        games_with_channels[idx] = []
-                    if ch not in games_with_channels[idx]:
-                        games_with_channels[idx].append(ch)
+            if not has_valid_earnable_campaign:
+                continue
 
-        def channel_sort_key(channel: Channel) -> tuple[int, int]:
-            earnable_count = sum(
-                1 for c in channel.campaigns if getattr(c, "is_campaign_earnable", False)
+            # Zařadíme kanál pod index jeho aktuálně vysílané hry
+            game_idx = game_order[current_game_norm]
+            if game_idx not in games_with_channels:
+                games_with_channels[game_idx] = []
+            if ch not in games_with_channels[game_idx]:
+                games_with_channels[game_idx].append(ch)
+
+        # Pomocná funkce pro řazení kanálů v rámci stejné hry
+        def channel_sort_key(channel: Channel) -> tuple[datetime, float, int, int]:
+            # Získáme aktivní kampaně pro aktuální hru
+            earnable_campaigns = [
+                c for c in channel.campaigns if getattr(c, "is_campaign_earnable", False)
+            ]
+            
+            # 1. Nejbližší čas konce kampaně (nejdříve končící má přednost)
+            earliest_end = min(
+                (getattr(c, "ends_at", datetime.max) or datetime.max for c in earnable_campaigns),
+                default=datetime.max
             )
+            
+            # 2. Aktuální pokrok (vyšší pokrok má přednost -> záporná hodnota)
+            max_progress = max(
+                (getattr(c, "progress", 0.0) or 0.0 for c in earnable_campaigns),
+                default=0.0
+            )
+
+            # 3. Počet těžitelných kampaní na kanálu
+            earnable_count = len(earnable_campaigns)
+
+            # 4. Vnitřní priority kanálu
             base_priority = 999_999
             if self._channel_service is not None:
                 base_priority = self._channel_service.get_priority(channel)
-            return (-earnable_count, base_priority)
 
-        # 3. Sestavení jednoho prioritizovaného seznamu napříč všemi hrami
+            return (earliest_end, -max_progress, -earnable_count, base_priority)
+
+        # Sestavení finálního seřazeného seznamu
         ordered_candidates: list[Channel] = []
         for game_idx in sorted(games_with_channels.keys()):
             candidates = sorted(games_with_channels[game_idx], key=channel_sort_key)
@@ -139,24 +163,40 @@ class StreamSelector:
         self,
         settings: Optional[Settings] = None,
         campaigns: Optional[list[DropsCampaign]] = None,
-    ) -> list[GameTreeItem]:
-        # Fallback pro settings z instance _twitch
-        if settings is None and self._twitch is not None:
-            settings = self._twitch.settings
+        as_json: bool = False,
+    ) -> list[GameTreeItem] | list[dict[str, Any]]:
+        # 1. Ochrana před předčasným výpočtem — dokud koordinátor není ready, vyčkáváme
+        if self._twitch is not None:
+            coord = getattr(self._twitch, "inventory_coordinator", None)
+            if coord is not None and not getattr(coord, "is_ready", False):
+                logger.debug("⏳ [StreamSelector] Přeskakuji build_wanted_games — inventář ještě není kompletní.")
+                return []
 
-        # Fallback pro campaigns z instance _twitch
+        # 2. Fallback pro settings z instance _twitch
+        if settings is None and self._twitch is not None:
+            settings = getattr(self._twitch, "settings", None)
+
+        # 3. Fallback pro campaigns z instance _twitch
         if campaigns is None and self._twitch is not None:
-            if self._twitch.inventory_service is not None:
+            if getattr(self._twitch, "inventory_service", None) is not None:
                 campaigns = self._twitch.inventory_service.get_inventory()
             else:
-                campaigns = self._twitch.inventory
+                campaigns = getattr(self._twitch, "inventory", [])
 
-        if settings is None or campaigns is None:
-            logger.warning("Cannot build wanted games: missing settings or campaigns.")
+        # 4. Ochrana před chybějícími nastaveními nebo prázdným seznamem kampaní
+        if settings is None or not campaigns:
+            if settings is None:
+                logger.warning("Cannot build wanted games: missing settings.")
             return []
 
-        self.wanted_games = self.get_wanted_game_tree(settings, campaigns)
-        return self.wanted_games
+        # 5. Samotný výpočet a uložení stromu
+        tree_result = self.get_wanted_game_tree(settings, campaigns, as_json=as_json)
+
+        # Do vnitřního stavu instance si ukladáme objektovou strukturu (pokud nebyl vyžadován JSON)
+        if not as_json and isinstance(tree_result, list):
+            self.wanted_games = tree_result
+
+        return tree_result
 
     def handle_prioritize_badge_games(
         self,
@@ -321,8 +361,18 @@ class StreamSelector:
         as_json: bool = False,
     ) -> list[GameTreeItem] | list[dict[str, Any]]:
         """Sestaví, seřadí a vyčistí strom požadovaných her a kampaní v jediném kroku."""
+
+        # Pojistka 1: Ochrana před spuštěním nad prázdnými kampaněmi nebo než je koordinátor ready
+        if self._twitch is not None:
+            coord = getattr(self._twitch, "inventory_coordinator", None)
+            if coord is not None and not getattr(coord, "is_ready", False):
+                return [] if not as_json else []
+
+        if not campaigns:
+            return [] if not as_json else []
+
         now = datetime.now(timezone.utc)
-        
+
         # Uložení pro background/state machine kontext
         self._last_settings = settings
         self._last_campaigns = campaigns
@@ -335,17 +385,18 @@ class StreamSelector:
         valid_campaigns = [c for c in campaigns_list if c.is_campaign_earnable]
         target_game_names = self._get_target_game_names(settings, valid_campaigns)
 
-        # Kontrola a logování diagnostiky pouze při změně dat
-        diag_sig = (len(campaigns_list), len(valid_campaigns), tuple(sorted(target_game_names)))
-        if getattr(self, "_last_diagnostic_sig", None) != diag_sig:
-            self._last_diagnostic_sig = diag_sig
-            logger.info(
-                "🎮 [Tree Diagnostic] Vstupní kampaně: %d | Těžitelné (can_earn): %d | Cílové hry (%d): %s",
-                len(campaigns_list),
-                len(valid_campaigns),
-                len(target_game_names),
-                ", ".join(target_game_names[:5]) if target_game_names else "Žádné",
-            )
+        # Kontrola a logování diagnostiky pouze při interním výpočtu (ne GUI polling) a změně dat
+        if not as_json:
+            diag_sig = (len(campaigns_list), len(valid_campaigns), tuple(sorted(target_game_names)))
+            if getattr(self, "_last_diagnostic_sig", None) != diag_sig:
+                self._last_diagnostic_sig = diag_sig
+                logger.info(
+                    "🎮 [Tree Diagnostic] Vstupní kampaně: %d | Těžitelné (can_earn): %d | Cílové hry (%d): %s",
+                    len(campaigns_list),
+                    len(valid_campaigns),
+                    len(target_game_names),
+                    ", ".join(target_game_names[:5]) if target_game_names else "Žádné",
+                )
 
         campaigns_by_game: dict[str, list[DropsCampaign]] = defaultdict(list)
         for campaign in valid_campaigns:
@@ -371,7 +422,7 @@ class StreamSelector:
                     wanted_campaigns.append(campaign_item)
 
             if wanted_campaigns and game_obj is not None:
-                icon_url = game_obj.box_art_url or getattr(game_obj, "icon_url", None)  # nebo čistě game_obj.icon_url podle definice modelu
+                icon_url = game_obj.box_art_url or getattr(game_obj, "icon_url", None)
                 wanted_games.append(
                     GameTreeItem(
                         id=game_obj.id,
@@ -385,21 +436,22 @@ class StreamSelector:
         # Přímý přístup k nastavení řazení
         final_tree = self._sort_and_clean_queue(wanted_games, settings.auto_sort_by_end, settings)
 
-        top_3 = [game.name for game in final_tree[:3]]
-        preview = ", ".join(top_3)
-        remaining = len(final_tree) - len(top_3)
-        if remaining > 0:
-            preview += f" (+{remaining} dalších)"
+        # Kontrola a logování fronty pouze při interním výpočtu (ne GUI polling) a změně dat
+        if not as_json:
+            top_3 = [game.name for game in final_tree[:3]]
+            preview = ", ".join(top_3)
+            remaining = len(final_tree) - len(top_3)
+            if remaining > 0:
+                preview += f" (+{remaining} dalších)"
 
-        # Kontrola a logování fronty pouze při změně dat
-        queue_sig = (len(final_tree), tuple(top_3))
-        if self._last_queue_sig != queue_sig:
-            self._last_queue_sig = queue_sig
-            logger.info(
-                "🎮 [Queue] Načteno %d požadovaných her | Top 3: %s",
-                len(final_tree),
-                preview if preview else "Žádné",
-            )
+            queue_sig = (len(final_tree), tuple(top_3))
+            if getattr(self, "_last_queue_sig", None) != queue_sig:
+                self._last_queue_sig = queue_sig
+                logger.info(
+                    "🎮 [Queue] Načteno %d požadovaných her | Top 3: %s",
+                    len(final_tree),
+                    preview if preview else "Žádné",
+                )
 
         if as_json:
             return [game.model_dump(mode="json") for game in final_tree]
